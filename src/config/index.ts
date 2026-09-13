@@ -38,8 +38,8 @@ const envSchema = z
     OPENAI_REALTIME_MODEL: z.string().default('gpt-realtime'),
     // VOICE_AI_PROVIDER=openai-live (src/voice/providers/openaiLive.ts): the
     // GPT-Live full-duplex voice front-end, with reasoning and tool calls
-    // delegated to a separate Responses backend model. Ships dark — never
-    // verified on a live call. Reuses OPENAI_API_KEY.
+    // delegated to a separate Responses backend model. Ships dark — tested on
+    // live calls, but not the default. Reuses OPENAI_API_KEY.
     OPENAI_LIVE_MODEL: z.string().default('gpt-live-1'),
     // Unconfirmed default: OpenAI's Live delegation docs use both
     // gpt-5.6-terra and gpt-5.6-luna in different examples (both are valid

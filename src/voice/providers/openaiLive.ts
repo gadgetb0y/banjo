@@ -1,9 +1,9 @@
 /**
  * OpenAI GPT-Live adapter (`gpt-live-1`) — selected by VOICE_AI_PROVIDER=openai-live.
  *
- * SHIPS DARK: never exercised against a live call. `openai` (gpt-realtime,
- * ./openai.ts) stays the default and is the only provider carrying live
- * traffic.
+ * SHIPS DARK: exercised on live test calls (docs/ARCHITECTURE.md, GPT-Live
+ * Open Risks), but `openai` (gpt-realtime, ./openai.ts) stays the default and
+ * is the only provider carrying live traffic.
  *
  * GPT-Live is a full-duplex voice FRONT-END only — it listens and speaks at
  * the same time — and delegates reasoning and tool calls to a separate

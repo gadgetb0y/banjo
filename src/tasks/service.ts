@@ -1,5 +1,6 @@
-import { desc, eq } from 'drizzle-orm';
+import { and, desc, eq, inArray } from 'drizzle-orm';
 import { db } from '../db/index.js';
+import { logger } from '../lib/logger.js';
 import {
   callAttempts,
   tasks,
@@ -53,13 +54,25 @@ export async function transitionTask(
     calendarEventId: string;
   }>,
 ): Promise<Task> {
+  // A task that already reached a terminal status never moves again: a late
+  // end_conversation_call or end-of-call failure must not overwrite a
+  // 'confirmed' booking. Checked in the UPDATE itself rather than read-then-
+  // write, so two outcome tools racing on one call can't both land. Guarded
+  // on NON_TERMINAL_STATUSES (not a terminal list) so a status added to the
+  // enum later is protected by default.
   const [row] = await db
     .update(tasks)
     .set({ status, ...patch, updatedAt: new Date() })
-    .where(eq(tasks.id, id))
+    .where(and(eq(tasks.id, id), inArray(tasks.status, NON_TERMINAL_STATUSES)))
     .returning();
-  if (!row) throw new Error(`Task not found: ${id}`);
-  return row;
+  if (row) return row;
+  const current = await getTask(id);
+  if (!current) throw new Error(`Task not found: ${id}`);
+  logger.warn(
+    { taskId: id, currentStatus: current.status, attemptedStatus: status },
+    'ignored transition: task already has a terminal status',
+  );
+  return current;
 }
 
 /** Used by the schedule-appointment skill to log a synchronous online-booking outcome. */
