@@ -9,17 +9,8 @@ import { pressDigitsTool } from '../telephony/dtmf.js';
 import type { TelephonyProvider } from '../telephony/providers/types.js';
 import { callTools, endConversationCallTool } from '../voice/tools/callTools.js';
 import type { VoiceTool } from '../voice/tools/defineVoiceTool.js';
-import { getTask, transitionTask, updateCallAttempt } from './service.js';
+import { getTask, isTerminalStatus, transitionTask, updateCallAttempt } from './service.js';
 import type { CallAttempt, Task } from './schema.js';
-
-const TERMINAL_TASK_STATUSES: Task['status'][] = [
-  'confirmed',
-  'voicemail_left',
-  'negotiation_failed',
-  'escalated',
-  'conversation_completed',
-  'failed',
-];
 
 /** All live-call tools for an outbound call, keyed by name — check_my_availability/confirm_appointment/etc.
  *  (backend-service tools) plus press_digits (telephony-layer, routed differently — see telephony/dtmf.ts).
@@ -46,8 +37,9 @@ export function buildOutboundCallSessionOptions(params: {
   telephony: TelephonyProvider;
   calendar: CalendarProvider;
   systemPrompt: string;
+  frontendSystemPrompt?: string;
 }): CallSessionOptions<CallContext> {
-  const { task, callAttempt, contact, telephony, calendar, systemPrompt } = params;
+  const { task, callAttempt, contact, telephony, calendar, systemPrompt, frontendSystemPrompt } = params;
 
   // Shared by onFailure and onStatusChange's 'ended' case below: if the call
   // is over and the task never reached a terminal status, nothing else will
@@ -62,9 +54,13 @@ export function buildOutboundCallSessionOptions(params: {
   // status it was last in, with no outcome and no Steve notification
   // (notifyIfTerminal no-ops without an outcome) — caught via a live call
   // that hung up mid-conversation and stayed stuck at 'calling' indefinitely.
+  //
+  // transitionTask would refuse this write on a terminal task by itself; the
+  // read first keeps the normal case (the call ending after an outcome tool
+  // already ran) from logging transitionTask's ignored-transition warning.
   async function failTaskIfStillNonTerminal(reason: string): Promise<void> {
     const current = await getTask(task.id);
-    if (current && !TERMINAL_TASK_STATUSES.includes(current.status)) {
+    if (current && !isTerminalStatus(current.status)) {
       await transitionTask(task.id, 'failed', { outcome: { kind: 'failed', reason } });
     }
   }
@@ -73,6 +69,7 @@ export function buildOutboundCallSessionOptions(params: {
     callId: callAttempt.id,
     telephony,
     systemPrompt,
+    frontendSystemPrompt,
     tools: outboundToolsFor(task),
 
     async beginCall() {
@@ -83,7 +80,7 @@ export function buildOutboundCallSessionOptions(params: {
       });
     },
 
-    async buildToolContext(estimatedAudioDoneAt: number): Promise<CallContext> {
+    async buildToolContext(estimatedAudioDoneAt, verbatimDelivery): Promise<CallContext> {
       return {
         task: (await getTask(task.id)) ?? task, // re-fetch so tool handlers see the latest status
         callAttempt,
@@ -91,6 +88,7 @@ export function buildOutboundCallSessionOptions(params: {
         telephony,
         calendar,
         estimatedAudioDoneAt,
+        verbatimDelivery,
       };
     },
 
@@ -125,7 +123,7 @@ export function buildOutboundCallSessionOptions(params: {
 
     async notifyIfTerminal() {
       const current = await getTask(task.id);
-      if (!current || !current.outcome || !TERMINAL_TASK_STATUSES.includes(current.status)) return;
+      if (!current || !current.outcome || !isTerminalStatus(current.status)) return;
       const c = await getContact(current.contactId);
       if (!c) return;
       const summary = buildOutcomeSummary(c, current.outcome);

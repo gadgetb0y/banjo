@@ -60,6 +60,9 @@ export const tasks = pgTable('tasks', {
   candidateWindows: jsonb('candidate_windows').$type<TimeWindow[]>(), // phone path only
   outcome: jsonb('outcome').$type<TaskOutcome | null>(),
   calendarEventId: text('calendar_event_id'),
+  // Phone path: the orchestrator won't place the call before this instant
+  // (see isTaskDue in ./service.ts). Null means call as soon as possible.
+  scheduledFor: timestamp('scheduled_for', { withTimezone: true }),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
 });

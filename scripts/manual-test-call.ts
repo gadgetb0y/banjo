@@ -31,6 +31,10 @@
  *   --contact-id <uuid>    Reuse an existing contact instead of creating one.
  *   --category <string>    salon|medical|restaurant|home_services|other. Default: other.
  *   --goal <string>        Task description read into the call's system prompt.
+ *   --mode <mode>          booking|conversation. Default: booking. Use conversation for a call
+ *                          with no booking goal — it ends via end_conversation_call.
+ *   --at <datetime>        Place the call no earlier than this local date-time in CALENDAR_TIMEZONE,
+ *                          e.g. "2026-09-14T09:00:00". The script keeps its server running until then.
  *   --notes <string>       Extra context injected into the call system prompt.
  *   --duration <minutes>   Appointment duration to negotiate. Default: 15.
  *   --window-days <n>      How many days out the offerable window extends. Default: 3.
@@ -38,15 +42,16 @@
  */
 import { createInterface } from 'node:readline/promises';
 import { parseArgs } from 'node:util';
+import { eq } from 'drizzle-orm';
 import { config } from '../src/config/index.js';
 import { addContact, findContact } from '../src/contacts/service.js';
+import { db } from '../src/db/index.js';
 import { logger } from '../src/lib/logger.js';
 import { startServer } from '../src/server.js';
-import { getTask } from '../src/tasks/service.js';
+import { callAttempts } from '../src/tasks/schema.js';
+import { getTask, isTerminalStatus } from '../src/tasks/service.js';
 import { startOrchestrationPoller } from '../src/tasks/orchestrator.js';
-import { placeCallHandler } from '../src/mcp/tools/placeCall.js';
-
-const TERMINAL_STATUSES = new Set(['confirmed', 'voicemail_left', 'negotiation_failed', 'escalated', 'failed', 'cancelled']);
+import { parseScheduledFor, placeCallHandler } from '../src/mcp/tools/placeCall.js';
 
 async function main() {
   const { values } = parseArgs({
@@ -67,6 +72,8 @@ async function main() {
         default:
           "This is a manual scaffold test call — please mention it's a test, confirm you can hear the caller, then call end_call to end the call. Do not attempt a real booking.",
       },
+      mode: { type: 'string', default: 'booking' },
+      at: { type: 'string' },
       notes: { type: 'string', default: '' },
       duration: { type: 'string', default: '15' },
       'window-days': { type: 'string', default: '3' },
@@ -79,6 +86,11 @@ async function main() {
     console.error('Usage: npx tsx scripts/manual-test-call.ts --phone "+15551234567" [--goal "..."] [--yes]');
     process.exit(1);
   }
+  if (values.mode !== 'booking' && values.mode !== 'conversation') {
+    console.error(`Error: --mode must be "booking" or "conversation" (got "${values.mode}").`);
+    process.exit(1);
+  }
+  const mode: 'booking' | 'conversation' = values.mode;
 
   console.log('\n--- ea manual test call ---');
   console.log(`Telephony provider: twilio`);
@@ -86,6 +98,7 @@ async function main() {
   console.log(`Public hostname:    ${config.PUBLIC_HOSTNAME ?? '(not set — Twilio will not be able to reach this process!)'}`);
   console.log(`Target:             ${values['contact-id'] ? `existing contact ${values['contact-id']}` : `${values.name} <${values.phone}>`}`);
   console.log(`Goal:                ${values.goal}`);
+  console.log(`Scheduled for:      ${values.at ? `${values.at} (${config.CALENDAR_TIMEZONE})` : '(now)'}`);
   console.log('----------------------------\n');
 
   if (!values.yes) {
@@ -108,15 +121,19 @@ async function main() {
 
   const durationMinutes = Number.parseInt(values.duration ?? '15', 10);
   const windowDays = Number.parseInt(values['window-days'] ?? '3', 10);
-  const now = new Date();
-  const windowEnd = new Date(now.getTime() + windowDays * 24 * 60 * 60 * 1000);
+  // The offerable window starts when the call does, not when this script ran —
+  // for a call scheduled days out, "the next N days from now" is already over.
+  const windowStart = values.at ? new Date(Math.max(Date.now(), parseScheduledFor(values.at).getTime())) : new Date();
+  const windowEnd = new Date(windowStart.getTime() + windowDays * 24 * 60 * 60 * 1000);
 
   const { taskId, ackMessage } = await placeCallHandler({
     contactId,
     taskDescription: values.goal ?? '',
+    mode,
+    ...(values.at ? { scheduledFor: values.at } : {}),
     constraints: {
       durationMinutes,
-      dateWindows: [{ start: now.toISOString(), end: windowEnd.toISOString() }],
+      dateWindows: [{ start: windowStart.toISOString(), end: windowEnd.toISOString() }],
       notes: values.notes || undefined,
     },
   });
@@ -166,13 +183,39 @@ async function pollUntilTerminal(taskId: string): Promise<void> {
       console.log(`[${new Date().toISOString()}] status -> ${task.status}`);
       lastStatus = task.status;
     }
-    if (TERMINAL_STATUSES.has(task.status)) {
+    if (isTerminalStatus(task.status)) {
+      await waitForCallToEnd(taskId);
+      const final = (await getTask(taskId)) ?? task;
       console.log('\n--- final outcome ---');
-      console.log(JSON.stringify({ status: task.status, outcome: task.outcome, calendarEventId: task.calendarEventId }, null, 2));
+      console.log(JSON.stringify({ status: final.status, outcome: final.outcome, calendarEventId: final.calendarEventId }, null, 2));
       process.exit(0);
     }
     await new Promise((resolve) => setTimeout(resolve, 3000));
   }
+}
+
+/**
+ * A task can reach a terminal status while its call is still live — e.g.
+ * confirm_appointment marks it confirmed, and the model still has to read the
+ * booking back and say goodbye. Exiting at that point kills the in-process
+ * server (and the call) mid-sentence, and loses the Voice AI adapter's
+ * end-of-call log lines. Waits for every call attempt on the task to record an
+ * end time first, bounded so a stuck attempt can't hang the script forever.
+ */
+const CALL_END_WAIT_MAX_MS = 10 * 60 * 1000;
+
+async function waitForCallToEnd(taskId: string): Promise<void> {
+  const deadline = Date.now() + CALL_END_WAIT_MAX_MS;
+  while (Date.now() < deadline) {
+    const attempts = await db.select({ endedAt: callAttempts.endedAt }).from(callAttempts).where(eq(callAttempts.taskId, taskId));
+    if (attempts.every((attempt) => attempt.endedAt)) {
+      // A moment for the adapter's end-of-call summary line to flush.
+      await new Promise((resolve) => setTimeout(resolve, 2000));
+      return;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 1000));
+  }
+  console.log('Call still not marked ended after 10 minutes — exiting anyway.');
 }
 
 main().catch((err) => {

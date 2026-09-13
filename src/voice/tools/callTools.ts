@@ -191,7 +191,7 @@ export const confirmAppointmentTool: VoiceTool<{
         summary: ctx.task.goalDescription,
         description: input.details,
       });
-      await transitionTask(ctx.task.id, 'confirmed', {
+      const recorded = await transitionTask(ctx.task.id, 'confirmed', {
         outcome: {
           kind: 'confirmed',
           start: startUtcIso,
@@ -200,6 +200,14 @@ export const confirmAppointmentTool: VoiceTool<{
         },
         calendarEventId: result.eventId,
       });
+      if (recorded.status !== 'confirmed') {
+        // The calendar event exists regardless, so the booking stands and the
+        // model is told so — but Postgres disagrees, which Steve must hear about.
+        log.error(
+          { taskId: ctx.task.id, status: recorded.status, calendarEventId: result.eventId },
+          'calendar event written, but the task could not be marked confirmed',
+        );
+      }
       return { ok: true, confirmedStart: result.confirmedStart };
     });
   },
@@ -212,6 +220,7 @@ export const leaveVoicemailAndEndCallTool: VoiceTool<{ message: string }> = defi
   schema: z.object({
     message: z
       .string()
+      .min(1)
       .describe(
         'The exact voicemail message to deliver — concise and natural, including a callback number if one was given to you. This is spoken to the callee verbatim by the system; do not say it yourself beforehand.',
       ),
@@ -219,12 +228,26 @@ export const leaveVoicemailAndEndCallTool: VoiceTool<{ message: string }> = defi
   endsCall: true,
   // CallSession forces this to be spoken (VoiceAIProvider.sayVerbatim) and
   // waits for it to finish before this handler ever runs — see
-  // VoiceTool.verbatimMessage's doc comment for why. The handler below is
-  // unchanged from before that existed: it only records the outcome and
-  // hangs up, exactly as its own tests (tests/voice/callTools.test.ts) verify.
+  // VoiceTool.verbatimMessage's doc comment for why. On a provider that can't
+  // guarantee verbatim playback (openai-live), ctx.verbatimDelivery says what
+  // was actually spoken: a mismatch is recorded as an escalation, never as a
+  // voicemail left, because Postgres records what the callee heard rather
+  // than what the model was asked to say. With no report (every other
+  // provider), the provider is trusted exactly as before.
   verbatimMessage: (input) => input.message,
   handler: async (input, ctx) => {
     return runToolSafely('leave_voicemail_and_end_call', async () => {
+      const delivery = ctx.verbatimDelivery;
+      if (delivery && !delivery.matched) {
+        await transitionTask(ctx.task.id, 'escalated', {
+          outcome: {
+            kind: 'escalated',
+            reason: `Voicemail delivery could not be verified — what was spoken did not match the intended message. Intended: "${delivery.intended}". Spoken: "${delivery.spoken || '(nothing)'}".`,
+          },
+        });
+        await hangUpAfterSpeaking(ctx);
+        return { ok: false, error: 'voicemail_delivery_unverified' };
+      }
       await transitionTask(ctx.task.id, 'voicemail_left', {
         outcome: { kind: 'voicemail_left', message: input.message },
       });

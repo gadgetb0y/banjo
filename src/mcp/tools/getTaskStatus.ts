@@ -11,6 +11,8 @@ export type GetTaskStatusResult =
       status: string;
       outcome: unknown;
       updatedAt: string;
+      /** ISO instant a scheduled call won't be placed before (place_call's scheduledFor), or null if none. */
+      scheduledFor: string | null;
     }
   | {
       found: false;
@@ -27,5 +29,6 @@ export async function getTaskStatusHandler(input: z.infer<typeof getTaskStatusIn
     status: task.status,
     outcome: task.outcome ?? null,
     updatedAt: task.updatedAt.toISOString(),
+    scheduledFor: task.scheduledFor?.toISOString() ?? null,
   };
 }

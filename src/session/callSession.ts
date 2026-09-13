@@ -4,7 +4,7 @@ import type { TelephonyEvent, TelephonyProvider } from '../telephony/providers/t
 import { createVoiceAIProvider } from '../voice/factory.js';
 import { toToolDefinition, type VoiceTool } from '../voice/tools/defineVoiceTool.js';
 import type { ToolDefinition } from '../voice/types.js';
-import type { VoiceAIEvent, VoiceAIProvider } from '../voice/types.js';
+import type { VerbatimDeliveryReport, VoiceAIEvent, VoiceAIProvider } from '../voice/types.js';
 import { createAudioPlaybackTracker, type AudioPlaybackTracker } from './audioPlaybackTracker.js';
 import { negotiateAudioFormats, resolveAudioPipeline, type AudioPipeline } from './audioPipeline.js';
 import type { CallContext } from './types.js';
@@ -54,6 +54,12 @@ const VERBATIM_TOOL_PENDING_BUDGET_MS = 35_000;
 // toolPendingWatchdog's "don't hang forever" philosophy for a stuck tool.
 const SILENCE_WATCHDOG_MS = 7000;
 
+// Beyond TOOL_TIMEOUT_MS, how long end() keeps waiting for a tool handler
+// that was already running when the call ended (see
+// waitForInFlightToolHandlers) — covers the handler's DB write after its
+// bounded work returns.
+const IN_FLIGHT_TOOL_WAIT_MARGIN_MS = 1000;
+
 type AnsweredBy = Extract<TelephonyEvent, { type: 'answering_machine_detected' }>['answeredBy'];
 
 /**
@@ -84,14 +90,16 @@ export interface CallSessionOptions<TCtx = CallContext> {
   callId: string;
   telephony: TelephonyProvider;
   systemPrompt: string;
+  /** Voice-layer-only prompt, passed through as VoiceAISessionConfig.frontendInstructions — used only by a provider that splits its voice front-end from a reasoning backend (openai-live), which then gets `systemPrompt` as the backend prompt. Ignored by every other provider. */
+  frontendSystemPrompt?: string;
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   tools: VoiceTool<any, TCtx>[];
   /** Whether CallSession should prompt the model to speak first once the call connects, before any caller input. Inbound: true. Outbound: unset/false — the callee naturally speaks first. */
   greetOnConnect?: boolean;
   /** Originates the call (outbound) or resolves the already-connected call's identity (inbound). */
   beginCall(): Promise<{ providerCallId: string }>;
-  /** Built fresh on every tool invocation so handlers see current state, not a snapshot taken at session construction. `estimatedAudioDoneAt` is audioPlaybackTracker.estimatedDoneAt() at the moment of this call — see hangUpAfterSpeaking (voice/tools/callTools.ts) for why a hang-up tool needs it. */
-  buildToolContext(estimatedAudioDoneAt: number): Promise<TCtx>;
+  /** Built fresh on every tool invocation so handlers see current state, not a snapshot taken at session construction. `estimatedAudioDoneAt` is audioPlaybackTracker.estimatedDoneAt() at the moment of this call — see hangUpAfterSpeaking (voice/tools/callTools.ts) for why a hang-up tool needs it. `verbatimDelivery` is VoiceAIProvider.verbatimDeliveryReport()'s result after a tool's forced verbatim speech — undefined for a tool without verbatimMessage, or a provider that doesn't report. */
+  buildToolContext(estimatedAudioDoneAt: number, verbatimDelivery?: VerbatimDeliveryReport): Promise<TCtx>;
   onStatusChange(patch: CallSessionStatusPatch): Promise<void>;
   /** Called after the legs are torn down (voice AI disconnected, telephony hung up) — separate from onStatusChange since a failure may need materially different persistence than a normal status update. */
   onFailure(reason: string): Promise<void>;
@@ -125,6 +133,8 @@ export class CallSession<TCtx = CallContext> {
   // is still awaiting turn_end — sending two collides on the Voice AI side
   // ("already has an active response").
   private responseActive = false;
+  /** Tool handlers still running — end() waits for these (see waitForInFlightToolHandlers). */
+  private readonly inFlightToolHandlers = new Set<Promise<void>>();
 
   constructor(private readonly opts: CallSessionOptions<TCtx>) {
     this.voiceAI = createVoiceAIProvider();
@@ -154,6 +164,7 @@ export class CallSession<TCtx = CallContext> {
     try {
       await this.voiceAI.connect({
         instructions: systemPrompt,
+        ...(this.opts.frontendSystemPrompt !== undefined ? { frontendInstructions: this.opts.frontendSystemPrompt } : {}),
         tools: this.toolDefinitions,
         inputAudioFormat: this.outputFormat.input,
         outputAudioFormat: this.outputFormat.output,
@@ -220,7 +231,7 @@ export class CallSession<TCtx = CallContext> {
         // speaking yet (e.g. check_my_availability before saying anything).
         this.clearSilenceWatchdog();
         this.responseActive = true;
-        void this.handleToolCall(event.call.id, event.call.name, event.call.arguments);
+        this.trackToolHandler(this.handleToolCall(event.call.id, event.call.name, event.call.arguments));
         break;
       case 'transcript':
         // Was previously unhandled entirely — we had zero visibility into
@@ -244,8 +255,10 @@ export class CallSession<TCtx = CallContext> {
         // to start responding (via OpenAI's server-side VAD auto-response,
         // in the OpenAI provider's case) — arm the silence watchdog here,
         // unconditional on LOG_TRANSCRIPTS. Deliberately does NOT re-arm if
-        // already armed — see armSilenceWatchdogIfNeeded's doc comment.
-        if (event.isFinal && event.role === 'user') this.armSilenceWatchdogIfNeeded();
+        // already armed — see armSilenceWatchdogIfNeeded's doc comment. A
+        // transcript the provider marks `answered` was already replied to
+        // before it went final (full duplex), so there's nothing to wait for.
+        if (event.isFinal && event.role === 'user' && !event.answered) this.armSilenceWatchdogIfNeeded();
         break;
       case 'interrupted':
         // Caller barge-in — flush whatever we've already queued on the phone
@@ -335,6 +348,16 @@ export class CallSession<TCtx = CallContext> {
   }
 
   private async handleToolCall(toolCallId: string, name: string, args: Record<string, unknown>): Promise<void> {
+    // The call is already over — end() may still be waiting on an earlier
+    // handler with the voice AI connected. Don't run a new tool against a gone
+    // call, and don't let setState('tool-pending') below overwrite 'ending':
+    // that reopened end()'s guard, so the voice AI's 'disconnected' ended the
+    // call a second time (duplicate end-of-call writes and SMS).
+    if (this.state === 'ending' || this.state === 'ended' || this.state === 'error') {
+      logger.warn({ callId: this.opts.callId, toolCallId, name, state: this.state }, 'Ignoring a tool call that arrived after the call ended');
+      this.voiceAI.sendToolResult(toolCallId, { ok: false, error: 'call_ended' }, true);
+      return;
+    }
     this.setState('tool-pending');
     // Session-level watchdog independent of each tool's own TOOL_TIMEOUT_MS —
     // if a call has been tool-pending unreasonably long, something is wrong
@@ -361,6 +384,7 @@ export class CallSession<TCtx = CallContext> {
 
     try {
       if (tool.endsCall) await this.waitForTurnEnd(TURN_END_WAIT_MS);
+      let verbatimDelivery: VerbatimDeliveryReport | undefined;
       if (tool.verbatimMessage) {
         // This forced turn can legitimately take much longer than a normal
         // tool call (reading an entire voicemail message aloud) — re-arm the
@@ -372,12 +396,19 @@ export class CallSession<TCtx = CallContext> {
           void this.fail('tool_pending_watchdog', new Error(`Tool ${name} did not resolve in time`));
         }, VERBATIM_TOOL_PENDING_BUDGET_MS);
         await this.speakVerbatim(tool.verbatimMessage(parsed.data));
+        // Only a provider that can't guarantee verbatim playback reports what
+        // was actually said (openai-live); undefined leaves the handler on its
+        // original trust-the-provider path.
+        verbatimDelivery = this.voiceAI.verbatimDeliveryReport?.();
+        if (verbatimDelivery && !verbatimDelivery.matched) {
+          logger.warn({ callId: this.opts.callId, toolCallId, name }, 'Verbatim message delivery did not match the intended text');
+        }
       }
       // Built AFTER any forced verbatim speech above so estimatedAudioDoneAt
       // reflects that speech's audio too — audioPlaybackTracker already
       // recorded it via the normal audio_chunk path (handleVoiceAIEvent),
       // regardless of why the model was speaking.
-      const ctx = await this.opts.buildToolContext(this.audioPlaybackTracker.estimatedDoneAt());
+      const ctx = await this.opts.buildToolContext(this.audioPlaybackTracker.estimatedDoneAt(), verbatimDelivery);
       const result = await tool.handler(parsed.data, ctx);
       this.voiceAI.sendToolResult(toolCallId, result, false);
     } catch (err) {
@@ -439,10 +470,35 @@ export class CallSession<TCtx = CallContext> {
     await this.opts.notifyIfTerminal();
   }
 
+  private trackToolHandler(run: Promise<void>): void {
+    this.inFlightToolHandlers.add(run);
+    run.finally(() => this.inFlightToolHandlers.delete(run)).catch(() => {});
+  }
+
+  /**
+   * A tool handler still running when the call ends — the callee hanging up
+   * while confirm_appointment writes the calendar event — must record its
+   * outcome before end() records the call's end. Otherwise onStatusChange's
+   * 'ended' lands the task in 'failed' first and notifyIfTerminal texts a
+   * failure for a booking that went through. Bounded: a handler's own work is
+   * capped at TOOL_TIMEOUT_MS by runToolSafely (voice/tools/callTools.ts), so
+   * this never waits longer than that plus a small margin.
+   */
+  private async waitForInFlightToolHandlers(): Promise<void> {
+    if (this.inFlightToolHandlers.size === 0) return;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const bound = new Promise<void>((resolve) => {
+      timer = setTimeout(resolve, config.TOOL_TIMEOUT_MS + IN_FLIGHT_TOOL_WAIT_MARGIN_MS);
+    });
+    await Promise.race([Promise.allSettled([...this.inFlightToolHandlers]), bound]);
+    clearTimeout(timer);
+  }
+
   private async end(reason: string): Promise<void> {
     if (this.state === 'ended' || this.state === 'error' || this.state === 'ending') return;
     this.clearSilenceWatchdog();
     this.setState('ending');
+    await this.waitForInFlightToolHandlers();
     await this.opts.onStatusChange({ kind: 'ended', reason });
     await this.voiceAI.disconnect().catch(() => {});
     await this.hangUpTelephony();

@@ -4,8 +4,8 @@ import { logger } from '../lib/logger.js';
 import { CallSession } from '../session/callSession.js';
 import { createTelephonyProvider } from '../telephony/factory.js';
 import { buildOutboundCallSessionOptions } from './callSessionAdapter.js';
-import { buildCallSystemPrompt } from './promptBuilder.js';
-import { createCallAttempt, getTask, listNonTerminalTasks, transitionTask } from './service.js';
+import { buildCallFrontendPrompt, buildCallSystemPrompt } from './promptBuilder.js';
+import { createCallAttempt, getTask, isTaskDue, listNonTerminalTasks, transitionTask } from './service.js';
 import type { TimeWindow } from './schema.js';
 
 const calendar = new GoogleCalendarProvider();
@@ -41,6 +41,11 @@ async function runTask(taskId: string): Promise<void> {
     // drive here.
     return;
   }
+  if (!isTaskDue(task)) {
+    // Scheduled for later (place_call's scheduledFor). Left 'pending' — the
+    // poller below starts it once it's due.
+    return;
+  }
 
   const contact = await getContact(task.contactId);
   if (!contact) {
@@ -48,19 +53,58 @@ async function runTask(taskId: string): Promise<void> {
     return;
   }
 
-  await transitionTask(task.id, 'checking_availability');
+  // transitionTask leaves a terminal task unchanged and returns it as-is, so
+  // each step checks it actually moved: a cancel_task landing between the
+  // read above and these writes must stop the run before it dials.
+  //
+  // A pending task is claimed with a compare-and-set (only from 'pending'):
+  // with scheduled calls, every process polling this database finds the same
+  // due task on the same tick, and without an exclusive claim each one would
+  // place the call. A task already in 'checking_availability' is a restart
+  // resume and keeps the plain transition.
+  const checking =
+    task.status === 'pending'
+      ? await transitionTask(task.id, 'checking_availability', undefined, { from: ['pending'] })
+      : await transitionTask(task.id, 'checking_availability');
+  if (checking?.status !== 'checking_availability') {
+    logger.info(
+      { taskId, status: checking?.status ?? 'claimed by another process or cancelled' },
+      'task can no longer be started — not placing the call',
+    );
+    return;
+  }
   const candidateWindows = await calendar.computeCandidateWindows({
-    dateWindows: task.constraints.dateWindows?.length ? task.constraints.dateWindows : defaultLookaheadWindow(),
+    dateWindows: task.constraints.dateWindows?.length ? clipWindowsToFuture(task.constraints.dateWindows) : defaultLookaheadWindow(),
     durationMinutes: task.constraints.durationMinutes ?? 30,
   });
-  await transitionTask(task.id, 'calling', { candidateWindows });
+  const calling = await transitionTask(task.id, 'calling', { candidateWindows });
+  if (calling.status !== 'calling') {
+    logger.info({ taskId, status: calling.status }, 'task can no longer be started — not placing the call');
+    return;
+  }
 
   const callAttempt = await createCallAttempt(task.id);
   const telephony = createTelephonyProvider();
   const systemPrompt = buildCallSystemPrompt(task, contact, candidateWindows);
+  const frontendSystemPrompt = buildCallFrontendPrompt(task, contact);
 
-  const session = new CallSession(buildOutboundCallSessionOptions({ task, callAttempt, contact, telephony, calendar, systemPrompt }));
+  const session = new CallSession(
+    buildOutboundCallSessionOptions({ task, callAttempt, contact, telephony, calendar, systemPrompt, frontendSystemPrompt }),
+  );
   await session.start();
+}
+
+/**
+ * Drops whatever part of each window is already over by the time the call
+ * runs. A scheduled call's windows are usually written relative to when it
+ * was scheduled, and computeCandidateWindows doesn't filter out past
+ * intervals — so without this the model could offer a time that has passed.
+ */
+export function clipWindowsToFuture(windows: TimeWindow[], now: Date = new Date()): TimeWindow[] {
+  const nowMs = now.getTime();
+  return windows
+    .filter((window) => Date.parse(window.end) > nowMs)
+    .map((window) => (Date.parse(window.start) < nowMs ? { start: now.toISOString(), end: window.end } : window));
 }
 
 function defaultLookaheadWindow(): TimeWindow[] {
@@ -79,13 +123,17 @@ const POLL_INTERVAL_MS = 15_000;
  * tasks already 'calling'/'negotiating' at restart time are NOT auto-resumed
  * (their call is already gone; v1 just leaves them for Steve to notice via
  * list_recent_tasks rather than guessing at a retry).
+ *
+ * It's also what starts a scheduled call (place_call's scheduledFor): a task
+ * isn't picked up until isTaskDue, so it starts within POLL_INTERVAL_MS of
+ * its scheduled time.
  */
 export function startOrchestrationPoller(): void {
   setInterval(() => {
     listNonTerminalTasks()
       .then((pending) => {
         for (const t of pending) {
-          if (t.status === 'pending' || t.status === 'checking_availability') {
+          if ((t.status === 'pending' || t.status === 'checking_availability') && isTaskDue(t)) {
             triggerOrchestration(t.id);
           }
         }

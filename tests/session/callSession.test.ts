@@ -83,6 +83,25 @@ beforeEach(() => {
   vi.clearAllMocks();
 });
 
+describe('CallSession: frontendSystemPrompt', () => {
+  it('passes frontendSystemPrompt through to voiceAI.connect as frontendInstructions, alongside the full systemPrompt', async () => {
+    const telephony = makeFakeTelephony();
+    const options = { ...makeFakeCallSessionOptions(telephony.provider), frontendSystemPrompt: 'voice-only prompt' };
+    await new CallSession(options).start();
+
+    expect(fakeVoiceAI.connect).toHaveBeenCalledWith(
+      expect.objectContaining({ instructions: 'irrelevant for this test', frontendInstructions: 'voice-only prompt' }),
+    );
+  });
+
+  it('sends no frontendInstructions when no frontendSystemPrompt is given', async () => {
+    const telephony = makeFakeTelephony();
+    await new CallSession(makeFakeCallSessionOptions(telephony.provider)).start();
+
+    expect(fakeVoiceAI.connect).toHaveBeenCalledWith(expect.not.objectContaining({ frontendInstructions: expect.anything() }));
+  });
+});
+
 describe('CallSession: telephony leg is always explicitly hung up', () => {
   // Regression test for a real bug: a live call cut off abruptly (dead
   // silence, no goodbye) right as the model was heading into
@@ -492,6 +511,91 @@ describe('CallSession: audio-aware hang-up wiring', () => {
     expect(sayVerbatimOrder).toBeLessThan(buildToolContextOrder);
   });
 
+  it("for a tool with verbatimMessage, reads the provider's verbatim delivery report only after the forced speech finishes, and hands it to buildToolContext", async () => {
+    const report = { intended: 'Hi, please call back at 555-1234.', spoken: 'Hi, please call back.', matched: false };
+    const verbatimDeliveryReport = vi.fn(() => report);
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (fakeVoiceAI as any).verbatimDeliveryReport = verbatimDeliveryReport;
+    try {
+      const telephony = makeFakeTelephony();
+      const options = makeFakeCallSessionOptions(telephony.provider);
+      options.tools = [
+        {
+          name: 'leave_voicemail_and_end_call',
+          description: 'test-only voicemail tool',
+          schema: z.object({ message: z.string() }),
+          handler: vi.fn(async () => ({ ok: true })),
+          endsCall: true,
+          verbatimMessage: (input: { message: string }) => input.message,
+        },
+      ];
+      const session = new CallSession(options);
+      await session.start();
+
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const handleToolCallPromise = (session as any).handleToolCall('call-1', 'leave_voicemail_and_end_call', { message: report.intended });
+      voiceAIEmitter.emit('event', { type: 'turn_end' } satisfies VoiceAIEvent); // the pre-existing endsCall wait
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(verbatimDeliveryReport).not.toHaveBeenCalled(); // the forced speech hasn't finished yet
+
+      voiceAIEmitter.emit('event', { type: 'turn_end' } satisfies VoiceAIEvent); // the forced speech itself
+      await handleToolCallPromise;
+
+      expect(verbatimDeliveryReport).toHaveBeenCalledTimes(1);
+      expect(vi.mocked(options.buildToolContext).mock.calls[0]![1]).toBe(report);
+    } finally {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      delete (fakeVoiceAI as any).verbatimDeliveryReport;
+    }
+  });
+
+  it('for a tool with verbatimMessage on a provider without verbatimDeliveryReport, passes no report — the handler keeps its trust-the-provider path', async () => {
+    const telephony = makeFakeTelephony();
+    const options = makeFakeCallSessionOptions(telephony.provider);
+    options.tools = [
+      {
+        name: 'leave_voicemail_and_end_call',
+        description: 'test-only voicemail tool',
+        schema: z.object({ message: z.string() }),
+        handler: vi.fn(async () => ({ ok: true })),
+        endsCall: true,
+        verbatimMessage: (input: { message: string }) => input.message,
+      },
+    ];
+    const session = new CallSession(options);
+    await session.start();
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const handleToolCallPromise = (session as any).handleToolCall('call-1', 'leave_voicemail_and_end_call', { message: 'hi' });
+    voiceAIEmitter.emit('event', { type: 'turn_end' } satisfies VoiceAIEvent);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    voiceAIEmitter.emit('event', { type: 'turn_end' } satisfies VoiceAIEvent);
+    await handleToolCallPromise;
+
+    expect(vi.mocked(options.buildToolContext).mock.calls[0]![1]).toBeUndefined();
+  });
+
+  it('for a tool without verbatimMessage, never reads a verbatim delivery report', async () => {
+    const verbatimDeliveryReport = vi.fn(() => ({ intended: 'stale', spoken: '', matched: false }));
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (fakeVoiceAI as any).verbatimDeliveryReport = verbatimDeliveryReport;
+    try {
+      const telephony = makeFakeTelephony();
+      const options = makeFakeCallSessionOptions(telephony.provider);
+      options.tools = [{ name: 'check_my_availability', description: 'test-only', schema: z.object({}), handler: vi.fn(async () => ({ free: true })) }];
+      const session = new CallSession(options);
+
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      await (session as any).handleToolCall('call-1', 'check_my_availability', {});
+
+      expect(verbatimDeliveryReport).not.toHaveBeenCalled();
+      expect(vi.mocked(options.buildToolContext).mock.calls[0]![1]).toBeUndefined();
+    } finally {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      delete (fakeVoiceAI as any).verbatimDeliveryReport;
+    }
+  });
+
   it('for a tool with verbatimMessage, proceeds anyway after SPEAK_VERBATIM_TIMEOUT_MS if the forced speech never reports turn_end', async () => {
     vi.useFakeTimers();
     try {
@@ -546,6 +650,97 @@ describe('CallSession: audio-aware hang-up wiring', () => {
       await handleToolCallPromise;
 
       expect(options.buildToolContext).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
+describe('CallSession: the call ending while a tool handler is still running', () => {
+  // The hang-up-during-booking race: the callee hangs up while
+  // confirm_appointment is still writing the calendar event. Recording the
+  // call's end first lands the task in 'failed' and texts a failure for a
+  // booking that went through.
+  beforeEach(() => {
+    voiceAIEmitter.removeAllListeners('event');
+  });
+
+  function sessionWithSlowTool() {
+    const telephony = makeFakeTelephony();
+    const options = makeFakeCallSessionOptions(telephony.provider);
+    const order: string[] = [];
+    let finishHandler!: () => void;
+    const handler = vi.fn(
+      () =>
+        new Promise((resolve) => {
+          finishHandler = () => {
+            order.push('handler finished');
+            resolve({ ok: true });
+          };
+        }),
+    );
+    options.tools = [{ name: 'slow_tool', description: 'test-only', schema: z.object({}), handler }];
+    vi.mocked(options.onStatusChange).mockImplementation(async (patch) => {
+      order.push(`status:${patch.kind}`);
+    });
+    return { telephony, options, order, handler, finish: () => finishHandler() };
+  }
+
+  it('records the call end only after the in-flight handler finishes', async () => {
+    const { telephony, options, order, handler, finish } = sessionWithSlowTool();
+    await new CallSession(options).start();
+
+    voiceAIEmitter.emit('event', { type: 'tool_call', call: { id: 'call-1', name: 'slow_tool', arguments: {} } } satisfies VoiceAIEvent);
+    await vi.waitFor(() => expect(handler).toHaveBeenCalled());
+    telephony.emit({ callId: callAttempt.id, type: 'ended', reason: 'callee hung up' });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(order).toEqual(['status:started']);
+
+    finish();
+    await vi.waitFor(() => expect(order).toContain('status:ended'));
+    expect(order).toEqual(['status:started', 'handler finished', 'status:ended']);
+  });
+
+  it('ignores a tool call that arrives while end() is waiting, and still ends the call exactly once', async () => {
+    const { telephony, options, order, handler, finish } = sessionWithSlowTool();
+    await new CallSession(options).start();
+
+    voiceAIEmitter.emit('event', { type: 'tool_call', call: { id: 'call-1', name: 'slow_tool', arguments: {} } } satisfies VoiceAIEvent);
+    await vi.waitFor(() => expect(handler).toHaveBeenCalled());
+    telephony.emit({ callId: callAttempt.id, type: 'ended', reason: 'callee hung up' });
+    await new Promise((resolve) => setTimeout(resolve, 10));
+
+    // The voice AI is still connected while end() waits, so the model can still call a tool.
+    voiceAIEmitter.emit('event', { type: 'tool_call', call: { id: 'call-2', name: 'slow_tool', arguments: {} } } satisfies VoiceAIEvent);
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(handler).toHaveBeenCalledTimes(1);
+    expect(fakeVoiceAI.sendToolResult).toHaveBeenCalledWith('call-2', { ok: false, error: 'call_ended' }, true);
+
+    finish();
+    await vi.waitFor(() => expect(order).toContain('status:ended'));
+    // disconnect() makes a real provider emit 'disconnected', which reaches end() again.
+    voiceAIEmitter.emit('event', { type: 'disconnected', reason: 'client disconnect' } satisfies VoiceAIEvent);
+    await new Promise((resolve) => setTimeout(resolve, 10));
+
+    expect(order.filter((entry) => entry === 'status:ended')).toHaveLength(1);
+    expect(options.notifyIfTerminal).toHaveBeenCalledTimes(1);
+  });
+
+  it('stops waiting after TOOL_TIMEOUT_MS plus a margin if the handler never finishes', async () => {
+    vi.useFakeTimers();
+    try {
+      const { telephony, options, order, handler } = sessionWithSlowTool();
+      await new CallSession(options).start();
+
+      voiceAIEmitter.emit('event', { type: 'tool_call', call: { id: 'call-1', name: 'slow_tool', arguments: {} } } satisfies VoiceAIEvent);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(handler).toHaveBeenCalled();
+      telephony.emit({ callId: callAttempt.id, type: 'ended', reason: 'callee hung up' });
+
+      await vi.advanceTimersByTimeAsync(8000); // TOOL_TIMEOUT_MS
+      expect(order).not.toContain('status:ended');
+      await vi.advanceTimersByTimeAsync(1000); // the margin
+      expect(order).toContain('status:ended');
     } finally {
       vi.useRealTimers();
     }
@@ -657,6 +852,24 @@ describe('CallSession: silence watchdog — the model going quiet after a user t
   // still-attached listener left over from every earlier test in the file.
   beforeEach(() => {
     voiceAIEmitter.removeAllListeners('event');
+  });
+
+  it('does not arm for a final user transcript the provider marks answered — a full-duplex model already replied before it went final', async () => {
+    vi.useFakeTimers();
+    try {
+      const telephony = makeFakeTelephony();
+      const session = new CallSession(makeFakeCallSessionOptions(telephony.provider));
+      await session.start();
+
+      voiceAIEmitter.emit('event', { type: 'transcript', role: 'user', text: 'Sounds good.', isFinal: true, answered: true } satisfies VoiceAIEvent);
+      await vi.advanceTimersByTimeAsync(7000 * 3); // SILENCE_WATCHDOG_MS, then the give-up window
+
+      expect(fakeVoiceAI.triggerResponse).not.toHaveBeenCalled();
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      expect((session as any).silenceWatchdog).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('nudges the model with an explicit response trigger if it stays silent for SILENCE_WATCHDOG_MS after a finalized user turn', async () => {

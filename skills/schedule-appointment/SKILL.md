@@ -86,5 +86,8 @@ with my appointments?"):
 
 - Specific/recent task in context → `get_task_status(taskId)`.
 - General/unclear which task → `list_recent_tasks(limit?)`.
+- The principal wants to call off a scheduled call → `cancel_task(taskId)`. It only works before
+  the call starts; if the result says it wasn't cancelled, tell them the call is already underway
+  or done.
 
 Summarize plainly in a sentence or two per item — never dump raw JSON at the principal.

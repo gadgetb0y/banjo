@@ -7,7 +7,7 @@ import type { CallAttempt, Task } from '../../src/tasks/schema.js';
 // confirm_appointment's handler calls transitionTask on success — stub the
 // whole persistence layer rather than hitting a real DB, matching the
 // pattern already used in tests/session/callSession.test.ts.
-const transitionTask = vi.fn(async () => {});
+const transitionTask = vi.fn(async (id: string, status: string) => ({ id, status }));
 vi.mock('../../src/tasks/service.js', () => ({
   getTask: vi.fn(async () => undefined),
   transitionTask,

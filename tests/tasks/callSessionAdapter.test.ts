@@ -17,6 +17,7 @@ vi.mock('../../src/tasks/service.js', () => ({
   getTask,
   transitionTask,
   updateCallAttempt,
+  isTerminalStatus: (status: string) => !['pending', 'checking_availability', 'calling', 'negotiating'].includes(status),
 }));
 
 const { buildOutboundCallSessionOptions } = await import('../../src/tasks/callSessionAdapter.js');
@@ -131,5 +132,23 @@ describe('buildOutboundCallSessionOptions', () => {
     await options.onStatusChange({ kind: 'ended', reason: 'stop' });
 
     expect(transitionTask).not.toHaveBeenCalled();
+  });
+
+  it('passes frontendSystemPrompt through, and puts a verbatim delivery report on the tool context for the voicemail handler', async () => {
+    const options = buildOutboundCallSessionOptions({
+      task: { ...fakeTask, mode: 'booking' } as Task,
+      callAttempt: fakeCallAttempt,
+      contact: fakeContact,
+      telephony: fakeTelephony,
+      calendar: fakeCalendar,
+      systemPrompt: 'full prompt',
+      frontendSystemPrompt: 'voice prompt',
+    });
+    expect(options.frontendSystemPrompt).toBe('voice prompt');
+
+    const report = { intended: 'call back at 555-1234', spoken: 'call back', matched: false };
+    const ctx = await options.buildToolContext(123, report);
+    expect(ctx.verbatimDelivery).toBe(report);
+    expect(ctx.estimatedAudioDoneAt).toBe(123);
   });
 });

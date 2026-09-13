@@ -1,5 +1,6 @@
-import { desc, eq } from 'drizzle-orm';
+import { and, desc, eq, inArray } from 'drizzle-orm';
 import { db } from '../db/index.js';
+import { logger } from '../lib/logger.js';
 import {
   callAttempts,
   tasks,
@@ -15,12 +16,22 @@ import {
  * from racing on updatedAt, and gives us one place to log every transition.
  */
 
+/** Non-terminal statuses the orchestration poller should pick up (see src/tasks/orchestrator.ts). Every other status is terminal. */
+export const NON_TERMINAL_STATUSES: Task['status'][] = ['pending', 'checking_availability', 'calling', 'negotiating'];
+
+/** The one definition of "terminal": anything not in NON_TERMINAL_STATUSES, so a status added to the enum later is terminal by default. */
+export function isTerminalStatus(status: Task['status']): boolean {
+  return !NON_TERMINAL_STATUSES.includes(status);
+}
+
 export async function createTask(input: {
   contactId: string;
   channel: 'phone' | 'online';
   goalDescription: string;
   constraints: TaskConstraints;
   mode?: 'booking' | 'conversation';
+  /** Phone path: place the call no earlier than this instant. Omit to call as soon as possible. */
+  scheduledFor?: Date;
 }): Promise<Task> {
   const [row] = await db
     .insert(tasks)
@@ -30,6 +41,7 @@ export async function createTask(input: {
       goalDescription: input.goalDescription,
       constraints: input.constraints,
       ...(input.mode ? { mode: input.mode } : {}),
+      ...(input.scheduledFor ? { scheduledFor: input.scheduledFor } : {}),
     })
     .returning();
   if (!row) throw new Error('Failed to insert task');
@@ -41,22 +53,82 @@ export async function getTask(id: string): Promise<Task | undefined> {
   return row;
 }
 
+/**
+ * The statuses a task may move INTO `status` from. Normally only the
+ * non-terminal ones: a late end_conversation_call or end-of-call failure must
+ * not overwrite a 'confirmed' booking. The one exception is 'confirmed' over
+ * 'failed' — confirm_appointment records it only after the calendar event is
+ * written, and a callee hanging up mid-booking can land the end-of-call
+ * 'failed' first (callSessionAdapter.ts's failTaskIfStillNonTerminal).
+ * Postgres has to say what the calendar says.
+ */
+function allowedFromStatuses(status: Task['status']): Task['status'][] {
+  return status === 'confirmed' ? [...NON_TERMINAL_STATUSES, 'failed'] : NON_TERMINAL_STATUSES;
+}
+
+type TransitionPatch = Partial<{
+  candidateWindows: TimeWindow[];
+  outcome: TaskOutcome;
+  calendarEventId: string;
+}>;
+
+/**
+ * Returns the row as it stands afterwards. When the transition isn't allowed
+ * (see allowedFromStatuses) the task is left unchanged and returned as-is —
+ * compare the returned status to the requested one to tell.
+ *
+ * With `options.from`, the transition applies only if the task is currently
+ * in one of those statuses, and resolves undefined when it didn't apply — a
+ * compare-and-set. The orchestrator claims a pending task this way, so two
+ * processes polling the same database can't both place its call (the loser
+ * would otherwise see the winner's 'checking_availability' as its own).
+ */
+export async function transitionTask(id: string, status: Task['status'], patch?: TransitionPatch): Promise<Task>;
 export async function transitionTask(
   id: string,
   status: Task['status'],
-  patch?: Partial<{
-    candidateWindows: TimeWindow[];
-    outcome: TaskOutcome;
-    calendarEventId: string;
-  }>,
-): Promise<Task> {
+  patch: TransitionPatch | undefined,
+  options: { from: Task['status'][] },
+): Promise<Task | undefined>;
+export async function transitionTask(
+  id: string,
+  status: Task['status'],
+  patch?: TransitionPatch,
+  options?: { from: Task['status'][] },
+): Promise<Task | undefined> {
+  // Checked in the UPDATE itself rather than read-then-write, so two outcome
+  // tools racing on one call can't both land.
   const [row] = await db
     .update(tasks)
     .set({ status, ...patch, updatedAt: new Date() })
-    .where(eq(tasks.id, id))
+    .where(and(eq(tasks.id, id), inArray(tasks.status, options?.from ?? allowedFromStatuses(status))))
     .returning();
-  if (!row) throw new Error(`Task not found: ${id}`);
-  return row;
+  if (row) return row;
+  if (options) return undefined;
+  const current = await getTask(id);
+  if (!current) throw new Error(`Task not found: ${id}`);
+  logger.warn(
+    { taskId: id, currentStatus: current.status, attemptedStatus: status },
+    'ignored transition: task already has a terminal status',
+  );
+  return current;
+}
+
+/**
+ * Cancels a phone task whose call hasn't been placed yet — typically one
+ * scheduled for later with place_call's scheduledFor. A task already on a
+ * call (or finished) is left as-is. Returns the task as it stands afterwards
+ * (status 'cancelled' on success), or undefined if it doesn't exist. The
+ * orchestrator re-checks the status its own transitions return, so a cancel
+ * racing a just-starting run still stops it before dialing.
+ */
+export async function cancelPendingTask(id: string): Promise<Task | undefined> {
+  const [row] = await db
+    .update(tasks)
+    .set({ status: 'cancelled', updatedAt: new Date() })
+    .where(and(eq(tasks.id, id), inArray(tasks.status, ['pending', 'checking_availability'])))
+    .returning();
+  return row ?? getTask(id);
 }
 
 /** Used by the schedule-appointment skill to log a synchronous online-booking outcome. */
@@ -87,12 +159,18 @@ export async function listRecentTasks(limit = 20): Promise<Task[]> {
   return db.select().from(tasks).orderBy(desc(tasks.updatedAt)).limit(limit);
 }
 
-/** Non-terminal statuses the orchestration poller should pick up (see src/tasks/orchestrator.ts). */
-export const NON_TERMINAL_STATUSES: Task['status'][] = ['pending', 'checking_availability', 'calling', 'negotiating'];
-
 export async function listNonTerminalTasks(): Promise<Task[]> {
-  const all = await db.select().from(tasks);
-  return all.filter((t) => NON_TERMINAL_STATUSES.includes(t.status));
+  return db.select().from(tasks).where(inArray(tasks.status, NON_TERMINAL_STATUSES));
+}
+
+/**
+ * Whether a task's scheduled time (place_call's scheduledFor), if any, has
+ * arrived. Checked by both the in-process trigger and the orchestration
+ * poller, so a scheduled call starts on the first poller tick at or after its
+ * time — within POLL_INTERVAL_MS (src/tasks/orchestrator.ts) of it.
+ */
+export function isTaskDue(task: Pick<Task, 'scheduledFor'>, now: Date = new Date()): boolean {
+  return !task.scheduledFor || task.scheduledFor.getTime() <= now.getTime();
 }
 
 // --- Call attempts (phone path only) ---
