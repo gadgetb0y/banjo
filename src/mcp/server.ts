@@ -7,6 +7,7 @@ import { config } from '../config/index.js';
 import { logger } from '../lib/logger.js';
 
 import { placeCallInputSchema, placeCallHandler } from './tools/placeCall.js';
+import { cancelTaskInputSchema, cancelTaskHandler } from './tools/cancelTask.js';
 import { getTaskStatusInputSchema, getTaskStatusHandler } from './tools/getTaskStatus.js';
 import { findContactInputSchema, findContactHandler } from './tools/findContact.js';
 import { listContactsInputSchema, listContactsHandler } from './tools/listContacts.js';
@@ -63,7 +64,7 @@ function adapt<TInput>(handler: (input: TInput) => Promise<unknown>) {
 }
 
 /**
- * Builds the MCP server and registers all 8 tools. Deliberately separate
+ * Builds the MCP server and registers all 9 tools. Deliberately separate
  * from the HTTP/SSE wiring below so it can be constructed and exercised
  * (e.g. via an in-memory transport) without spinning up Hono.
  *
@@ -97,6 +98,14 @@ export function createMcpServer(): McpServer {
       'a phone call or a recorded online booking.',
     getTaskStatusInputSchema.shape,
     adapt(getTaskStatusHandler),
+  );
+
+  server.tool(
+    'cancel_task',
+    "Call off a phone call that hasn't been placed yet — typically one scheduled for later with place_call's " +
+      'scheduledFor. A call already in progress or finished is not affected; the result says whether it was cancelled.',
+    cancelTaskInputSchema.shape,
+    adapt(cancelTaskHandler),
   );
 
   server.tool(

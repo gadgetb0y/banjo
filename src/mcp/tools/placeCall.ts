@@ -55,7 +55,11 @@ export interface PlaceCallResult {
  * rule as every other call-facing time (see src/lib/timezone.ts's
  * zonedTimeToUtcIso for the booking that once landed 4 hours off).
  */
-function parseScheduledFor(value: string): Date {
+export function parseScheduledFor(value: string): Date {
+  // A date alone would parse as midnight and place a real call at 12am.
+  if (!/T\d{2}:\d{2}/.test(value)) {
+    throw new Error(`scheduledFor "${value}" must include a time of day, e.g. "2026-09-14T09:00:00"`);
+  }
   let parsed: Date;
   try {
     parsed = new Date(zonedTimeToUtcIso(value, config.CALENDAR_TIMEZONE));

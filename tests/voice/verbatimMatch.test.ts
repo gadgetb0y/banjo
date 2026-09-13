@@ -31,15 +31,24 @@ describe('verbatimMatches: tolerated differences (cannot change what the callee 
     expect(verbatimMatches(MESSAGE, `Oh, hello there. ${MESSAGE} Goodbye.`)).toBe(true);
   });
 
-  it('an empty intended message has nothing to verify', () => {
-    expect(verbatimMatches('', '')).toBe(true);
-    expect(verbatimMatches('   ', 'anything')).toBe(true);
+  it('treats a dotted abbreviation the same as its undotted spelling', () => {
+    expect(verbatimMatches('Call before 5pm.', 'Call before 5 p.m.')).toBe(true);
+    expect(verbatimMatches('Call before 5 p.m. today.', 'Call before 5 PM today.')).toBe(true);
+  });
+
+  it('does not merge a spoken digit word after the message into its trailing number', () => {
+    expect(verbatimMatches('Please call back at 555-1234.', 'Please call back at 555-1234. One more thing, thanks.')).toBe(true);
   });
 });
 
 describe('verbatimMatches: rejected differences (the callee heard something else)', () => {
   it('rejects nothing spoken at all', () => {
     expect(verbatimMatches(MESSAGE, '')).toBe(false);
+  });
+
+  it('never verifies an empty or punctuation-only intended message — nothing to deliver is not a delivery', () => {
+    expect(verbatimMatches('', '')).toBe(false);
+    expect(verbatimMatches('...', 'anything at all')).toBe(false);
   });
 
   it('rejects a truncated message — the exact live failure Open Risks #13 describes', () => {

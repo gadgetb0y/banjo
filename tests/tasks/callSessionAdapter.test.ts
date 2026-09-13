@@ -17,6 +17,7 @@ vi.mock('../../src/tasks/service.js', () => ({
   getTask,
   transitionTask,
   updateCallAttempt,
+  isTerminalStatus: (status: string) => !['pending', 'checking_availability', 'calling', 'negotiating'].includes(status),
 }));
 
 const { buildOutboundCallSessionOptions } = await import('../../src/tasks/callSessionAdapter.js');

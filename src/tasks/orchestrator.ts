@@ -53,12 +53,23 @@ async function runTask(taskId: string): Promise<void> {
     return;
   }
 
-  await transitionTask(task.id, 'checking_availability');
+  // transitionTask leaves a terminal task unchanged and returns it as-is, so
+  // each step checks it actually moved: a cancel_task landing between the
+  // read above and these writes must stop the run before it dials.
+  const checking = await transitionTask(task.id, 'checking_availability');
+  if (checking.status !== 'checking_availability') {
+    logger.info({ taskId, status: checking.status }, 'task can no longer be started — not placing the call');
+    return;
+  }
   const candidateWindows = await calendar.computeCandidateWindows({
-    dateWindows: task.constraints.dateWindows?.length ? task.constraints.dateWindows : defaultLookaheadWindow(),
+    dateWindows: task.constraints.dateWindows?.length ? clipWindowsToFuture(task.constraints.dateWindows) : defaultLookaheadWindow(),
     durationMinutes: task.constraints.durationMinutes ?? 30,
   });
-  await transitionTask(task.id, 'calling', { candidateWindows });
+  const calling = await transitionTask(task.id, 'calling', { candidateWindows });
+  if (calling.status !== 'calling') {
+    logger.info({ taskId, status: calling.status }, 'task can no longer be started — not placing the call');
+    return;
+  }
 
   const callAttempt = await createCallAttempt(task.id);
   const telephony = createTelephonyProvider();
@@ -69,6 +80,19 @@ async function runTask(taskId: string): Promise<void> {
     buildOutboundCallSessionOptions({ task, callAttempt, contact, telephony, calendar, systemPrompt, frontendSystemPrompt }),
   );
   await session.start();
+}
+
+/**
+ * Drops whatever part of each window is already over by the time the call
+ * runs. A scheduled call's windows are usually written relative to when it
+ * was scheduled, and computeCandidateWindows doesn't filter out past
+ * intervals — so without this the model could offer a time that has passed.
+ */
+export function clipWindowsToFuture(windows: TimeWindow[], now: Date = new Date()): TimeWindow[] {
+  const nowMs = now.getTime();
+  return windows
+    .filter((window) => Date.parse(window.end) > nowMs)
+    .map((window) => (Date.parse(window.start) < nowMs ? { start: now.toISOString(), end: window.end } : window));
 }
 
 function defaultLookaheadWindow(): TimeWindow[] {

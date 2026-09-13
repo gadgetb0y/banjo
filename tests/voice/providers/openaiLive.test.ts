@@ -19,6 +19,10 @@ class FakeWs extends EventEmitter {
     this.sent.push(data);
   }
   close() {}
+  terminated = false;
+  terminate() {
+    this.terminated = true;
+  }
 }
 
 const wsInstances: FakeWs[] = [];
@@ -37,7 +41,9 @@ vi.mock('../../../src/config/index.js', () => ({
   config: { OPENAI_API_KEY: 'test-key', OPENAI_LIVE_MODEL: 'gpt-live-1', OPENAI_LIVE_BACKEND_MODEL: 'gpt-5.6-terra' },
 }));
 
-const { OpenAILiveProvider, OUTPUT_IDLE_TURN_END_MS, TRANSCRIPT_IDLE_FINAL_MS } = await import('../../../src/voice/providers/openaiLive.js');
+const { CONNECT_TIMEOUT_MS, OpenAILiveProvider, OUTPUT_IDLE_TURN_END_MS, TRANSCRIPT_IDLE_FINAL_MS } = await import(
+  '../../../src/voice/providers/openaiLive.js'
+);
 
 const availabilityTool = {
   name: 'check_my_availability',
@@ -134,6 +140,7 @@ describe('OpenAILiveProvider: connect / session.start', () => {
               model: 'gpt-5.6-terra',
               instructions: 'FULL backend prompt',
               tools: [{ type: 'function', ...availabilityTool }],
+              parallel_tool_calls: false,
             },
           },
         },
@@ -216,6 +223,26 @@ describe('OpenAILiveProvider: connect / session.start', () => {
 
     await expect(connectPromise).rejects.toThrow(/closed before session.started/);
     expect(ofType(events, 'disconnected')).toHaveLength(0);
+  });
+
+  it('rejects connect() and abandons the socket when session.started never arrives — the phone call is already dialed, so a hang here is dead air', async () => {
+    vi.useFakeTimers();
+    const provider = new OpenAILiveProvider();
+    const connectPromise = provider.connect(sessionConfig);
+    const ws = latestWs();
+    ws.readyState = FakeWs.OPEN;
+    ws.emit('open');
+
+    vi.advanceTimersByTime(CONNECT_TIMEOUT_MS);
+    await expect(connectPromise).rejects.toThrow(/did not start within/);
+    expect(ws.terminated).toBe(true);
+  });
+
+  it('does not time out a session that started', async () => {
+    vi.useFakeTimers();
+    const { ws } = await startSession();
+    vi.advanceTimersByTime(CONNECT_TIMEOUT_MS * 2);
+    expect(ws.terminated).toBe(false);
   });
 });
 
@@ -340,6 +367,45 @@ describe('OpenAILiveProvider: synthesized turn_end', () => {
     // Caller speech alone is not the model's turn ending.
     expect(ofType(events, 'turn_end')).toHaveLength(0);
   });
+
+  it("marks a final user transcript answered when the model replied after the caller's last fragment — CallSession must not arm its silence watchdog for it", async () => {
+    vi.useFakeTimers();
+    const { ws, events } = await startSession();
+    serverSends(ws, { type: 'session.input_transcript.delta', event_id: 'e1', start_ms: 0, end_ms: 300, delta: 'Sounds good.' });
+    vi.advanceTimersByTime(300);
+    serverSends(ws, { type: 'session.output_audio.delta', delta: AUDIO }); // "Great!" before the transcript went final
+    vi.advanceTimersByTime(TRANSCRIPT_IDLE_FINAL_MS);
+
+    expect(ofType(events, 'transcript').filter((t) => t.isFinal && t.role === 'user')).toEqual([
+      { type: 'transcript', role: 'user', text: 'Sounds good.', isFinal: true, answered: true },
+    ]);
+  });
+
+  it('does not mark a caller utterance answered by a backchannel in the middle of it', async () => {
+    vi.useFakeTimers();
+    const { ws, events } = await startSession();
+    serverSends(ws, { type: 'session.input_transcript.delta', event_id: 'e1', start_ms: 0, end_ms: 300, delta: 'So I was thinking ' });
+    serverSends(ws, { type: 'session.output_audio.delta', delta: AUDIO }); // "mm-hm"
+    serverSends(ws, { type: 'session.input_transcript.delta', event_id: 'e2', start_ms: 300, end_ms: 900, delta: 'about Tuesday.' });
+    vi.advanceTimersByTime(TRANSCRIPT_IDLE_FINAL_MS);
+
+    const finals = ofType(events, 'transcript').filter((t) => t.isFinal && t.role === 'user');
+    expect(finals).toHaveLength(1);
+    expect(finals[0]!.answered).toBeUndefined();
+  });
+
+  it('emits pending transcript fragments as final when the session closes instead of dropping them — the goodbye lines are what Open Risk #21 needs', async () => {
+    const { ws, events } = await startSession();
+    serverSends(ws, { type: 'session.input_transcript.delta', event_id: 'e1', start_ms: 0, end_ms: 300, delta: 'Okay, bye.' });
+    serverSends(ws, { type: 'session.output_transcript.delta', event_id: 'e2', start_ms: 0, end_ms: 300, delta: 'Bye!' });
+    serverSends(ws, { type: 'session.closed', event_id: 'evt_c', reason: 'remote_hangup', session: { id: 'sess_1' } });
+
+    const types = events.map((e) => (e.type === 'transcript' && e.isFinal ? `final:${e.role}` : e.type));
+    expect(types.indexOf('final:user')).toBeGreaterThan(-1);
+    expect(types.indexOf('final:assistant')).toBeGreaterThan(-1);
+    expect(types.indexOf('final:user')).toBeLessThan(types.indexOf('disconnected'));
+    expect(types.indexOf('final:assistant')).toBeLessThan(types.indexOf('disconnected'));
+  });
 });
 
 describe('OpenAILiveProvider: speak-then-verify verbatim delivery', () => {
@@ -381,23 +447,48 @@ describe('OpenAILiveProvider: speak-then-verify verbatim delivery', () => {
     expect(provider.verbatimDeliveryReport()).toEqual({ intended: MESSAGE, spoken: '', matched: false });
   });
 
-  it('holds turn_end back after sayVerbatim() until the verbatim speech starts — a leftover preamble turn_end must not end the wait early', async () => {
+  it('holds turn_end back after sayVerbatim() until the message has actually been said — leftover preamble audio and pauses must not end the wait early', async () => {
     vi.useFakeTimers();
     const { provider, ws, events } = await startSession();
     serverSends(ws, { type: 'session.output_audio.delta', delta: AUDIO }); // preamble, arms the debounce
 
     provider.sayVerbatim(MESSAGE);
     serverSends(ws, { type: 'session.output_audio.delta', delta: SILENCE }); // silence isn't the message starting
+    serverSends(ws, { type: 'session.output_audio.delta', delta: AUDIO }); // trailing preamble audio isn't either
+    serverSends(ws, { type: 'session.output_transcript.delta', event_id: 'e0', start_ms: 0, end_ms: 1, delta: 'Oh, a voicemail. ' });
     vi.advanceTimersByTime(OUTPUT_IDLE_TURN_END_MS * 5);
     serverSends(ws, { type: 'response.event', event: { type: 'response.completed' } }); // backend activity doesn't count
     vi.advanceTimersByTime(OUTPUT_IDLE_TURN_END_MS * 5);
     expect(ofType(events, 'turn_end')).toHaveLength(0);
 
     serverSends(ws, { type: 'session.output_audio.delta', delta: AUDIO });
-    serverSends(ws, { type: 'session.output_transcript.delta', event_id: 'e1', start_ms: 0, end_ms: 1, delta: MESSAGE });
+    serverSends(ws, { type: 'session.output_transcript.delta', event_id: 'e1', start_ms: 1, end_ms: 2, delta: 'Please call back ' });
+    vi.advanceTimersByTime(OUTPUT_IDLE_TURN_END_MS * 3); // a pause inside the message
+    expect(ofType(events, 'turn_end')).toHaveLength(0);
+
+    serverSends(ws, { type: 'session.output_transcript.delta', event_id: 'e2', start_ms: 2, end_ms: 3, delta: 'at 555-1234.' });
     vi.advanceTimersByTime(OUTPUT_IDLE_TURN_END_MS);
     expect(ofType(events, 'turn_end')).toHaveLength(1);
     expect(provider.verbatimDeliveryReport()?.matched).toBe(true);
+  });
+
+  it('stops holding turn_end once CallSession reads the report, even if the message was never said', async () => {
+    vi.useFakeTimers();
+    const { provider, ws, events } = await startSession();
+    provider.sayVerbatim(MESSAGE);
+    serverSends(ws, { type: 'session.output_audio.delta', delta: AUDIO });
+    vi.advanceTimersByTime(OUTPUT_IDLE_TURN_END_MS * 5);
+    expect(provider.verbatimDeliveryReport()?.matched).toBe(false);
+
+    serverSends(ws, { type: 'session.output_audio.delta', delta: AUDIO });
+    vi.advanceTimersByTime(OUTPUT_IDLE_TURN_END_MS);
+    expect(ofType(events, 'turn_end')).toHaveLength(1);
+  });
+
+  it('words the verbatim request as a one-time cue, since appended instructions persist for the whole session', async () => {
+    const { provider, ws } = await startSession();
+    provider.sayVerbatim(MESSAGE);
+    expect(sent(ws).at(-1).content).toMatch(/one-time cue/i);
   });
 });
 
@@ -446,6 +537,20 @@ describe('OpenAILiveProvider: triggerResponse / interrupt / disconnect', () => {
     expect(appends[0].delegation_id).toBeNull();
     // response.create would only prompt the delegated backend, not the voice.
     expect(sent(ws).map((m) => m.type)).not.toContain('response.create');
+  });
+
+  it('does not append another response cue while the last one is still unanswered — appended instructions accumulate for the whole session', async () => {
+    const { provider, ws } = await startSession();
+    const appends = () => sent(ws).filter((m) => m.type === 'session.instructions.append');
+
+    provider.triggerResponse();
+    provider.triggerResponse(); // a silence-watchdog nudge before the model reacted
+    expect(appends()).toHaveLength(1);
+    expect(appends()[0].content).toMatch(/one-time cue/i);
+
+    serverSends(ws, { type: 'session.output_audio.delta', delta: AUDIO }); // the model responded
+    provider.triggerResponse();
+    expect(appends()).toHaveLength(2);
   });
 
   it('interrupt() sends nothing — Live has no cancel event', async () => {

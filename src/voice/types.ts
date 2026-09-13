@@ -81,7 +81,14 @@ export class VoiceAIError extends Error {
 export type VoiceAIEvent =
   | { type: 'connected' }
   | { type: 'audio_chunk'; chunk: AudioChunk }
-  | { type: 'transcript'; role: 'user' | 'assistant'; text: string; isFinal: boolean }
+  | {
+      type: 'transcript';
+      role: 'user' | 'assistant';
+      text: string;
+      isFinal: boolean;
+      /** Final user transcript only: the model already started replying before this transcript went final (a full-duplex provider can), so there is no reply left to wait for. */
+      answered?: boolean;
+    }
   | { type: 'tool_call'; call: NormalizedToolCall }
   | { type: 'turn_end' }
   | { type: 'interrupted' } // caller/callee barge-in — telephony must flush its playback buffer

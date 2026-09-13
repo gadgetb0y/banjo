@@ -191,7 +191,7 @@ export const confirmAppointmentTool: VoiceTool<{
         summary: ctx.task.goalDescription,
         description: input.details,
       });
-      await transitionTask(ctx.task.id, 'confirmed', {
+      const recorded = await transitionTask(ctx.task.id, 'confirmed', {
         outcome: {
           kind: 'confirmed',
           start: startUtcIso,
@@ -200,6 +200,14 @@ export const confirmAppointmentTool: VoiceTool<{
         },
         calendarEventId: result.eventId,
       });
+      if (recorded.status !== 'confirmed') {
+        // The calendar event exists regardless, so the booking stands and the
+        // model is told so — but Postgres disagrees, which Steve must hear about.
+        log.error(
+          { taskId: ctx.task.id, status: recorded.status, calendarEventId: result.eventId },
+          'calendar event written, but the task could not be marked confirmed',
+        );
+      }
       return { ok: true, confirmedStart: result.confirmedStart };
     });
   },
@@ -212,6 +220,7 @@ export const leaveVoicemailAndEndCallTool: VoiceTool<{ message: string }> = defi
   schema: z.object({
     message: z
       .string()
+      .min(1)
       .describe(
         'The exact voicemail message to deliver — concise and natural, including a callback number if one was given to you. This is spoken to the callee verbatim by the system; do not say it yourself beforehand.',
       ),

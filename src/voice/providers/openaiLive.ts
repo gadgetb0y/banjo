@@ -91,7 +91,11 @@
  *
  * NEEDS VERIFICATION (live call):
  *   1. Whether `session.instructions.append` gets the voice model to speak
- *      promptly — used by both sayVerbatim() and triggerResponse(). The
+ *      promptly — used by both sayVerbatim() and triggerResponse(). Appended
+ *      instructions accumulate for the rest of the session (openai-node:
+ *      "Append instructions to the Live conversation while it is running"; no
+ *      event removes one), so both cues are worded as one-time and a trigger
+ *      cue is never re-appended while one is outstanding. The
  *      alternative, `session.commentary.append` ("speakable context... for a
  *      result the model should communicate"), invites paraphrase, which is
  *      why it was not the first choice for verbatim delivery.
@@ -145,8 +149,19 @@ export const OUTPUT_IDLE_TURN_END_MS = 600;
  */
 export const TRANSCRIPT_IDLE_FINAL_MS = 1200;
 
+/**
+ * How long connect() waits for session.started. The phone call is already
+ * dialed by then (CallSession.start), so a session that opens but never
+ * starts would otherwise leave the callee on a silent line with nothing to
+ * end it; rejecting routes to CallSession.fail(), which hangs up.
+ */
+export const CONNECT_TIMEOUT_MS = 10_000;
+
+// Both cues are appended to the session's standing instructions and stay
+// there for the rest of the call (see appendTriggerCue), so each says outright
+// that it applies once.
 const TRIGGER_RESPONSE_INSTRUCTION =
-  'It is your turn to speak. Respond to the other party now, following your instructions — if the call has only just connected, greet them.';
+  'One-time cue for this moment only, not a standing rule: it is your turn to speak. Respond to the other party now, following your instructions — if the call has only just connected, greet them. Disregard this cue on every later turn.';
 
 type LiveAudioFormat = { type: 'audio/pcmu'; rate: 8000 } | { type: 'audio/pcm'; rate: 16000 | 24000 };
 
@@ -193,13 +208,26 @@ export class OpenAILiveProvider implements VoiceAIProvider {
   /** The most recent sayVerbatim() request and the output transcript accumulated since it was sent. */
   private verbatim: { intended: string; spoken: string } | undefined;
   /**
-   * True from sayVerbatim() until the first output audio after it. While set,
-   * turn_end is held back: a turn_end left over from the preamble the model
-   * spoke before the tool call would otherwise resolve CallSession's
-   * speakVerbatim() wait before the message was ever spoken, and the empty
-   * transcript would be misreported as a delivery mismatch.
+   * True from sayVerbatim() until the output transcript since then matches
+   * the message (or the report is read). While set, turn_end is held back:
+   * trailing preamble audio, or a pause of more than OUTPUT_IDLE_TURN_END_MS
+   * before or inside the message, would otherwise resolve CallSession's
+   * speakVerbatim() wait before the message was spoken, misreport a delivered
+   * voicemail as a mismatch, and hang up on it. If the model never says it,
+   * CallSession's SPEAK_VERBATIM_TIMEOUT_MS ends the wait instead.
    */
-  private awaitingVerbatimAudio = false;
+  private holdTurnEndForVerbatim = false;
+  private connectTimer: ReturnType<typeof setTimeout> | undefined;
+  /** A trigger cue was appended and the model hasn't spoken or delegated since — see appendTriggerCue. */
+  private triggerCueOutstanding = false;
+  /**
+   * Orders caller transcript fragments against the model's own responses
+   * (speech audio, tool calls), so a final user transcript can say whether it
+   * was already answered — see flushTranscript.
+   */
+  private activitySeq = 0;
+  private lastUserFragmentSeq = 0;
+  private lastResponseActivitySeq = 0;
   private outputFormatType: LiveAudioFormat['type'] = 'audio/pcmu';
   /**
    * Diagnostics, logged once as a single summary line when the session ends
@@ -247,6 +275,10 @@ export class OpenAILiveProvider implements VoiceAIProvider {
           model: config.OPENAI_LIVE_BACKEND_MODEL,
           instructions: sessionConfig.instructions,
           tools: toLiveTools(sessionConfig.tools),
+          // sendToolResult continues the response after each result; with
+          // parallel calls that would continue it while other calls in the
+          // same response still had no output.
+          parallel_tool_calls: false,
         },
       },
     };
@@ -259,6 +291,11 @@ export class OpenAILiveProvider implements VoiceAIProvider {
         },
       });
       this.ws = ws;
+      this.connectTimer = setTimeout(() => {
+        log.error({ timeoutMs: CONNECT_TIMEOUT_MS }, 'openai live session did not start in time — abandoning the connection');
+        this.settleConnect(new Error(`openai live session did not start within ${CONNECT_TIMEOUT_MS}ms`));
+        ws.terminate();
+      }, CONNECT_TIMEOUT_MS);
 
       ws.on('open', () => {
         try {
@@ -280,6 +317,7 @@ export class OpenAILiveProvider implements VoiceAIProvider {
       });
 
       ws.on('close', (code: number, reasonBuf: Buffer) => {
+        if (this.started) this.flushPendingTranscripts();
         this.clearTimers();
         const reason = reasonBuf?.toString() || `ws closed (code ${code})`;
         // Before session.started the session never existed as far as
@@ -334,7 +372,7 @@ export class OpenAILiveProvider implements VoiceAIProvider {
     // response.create would only prompt the delegated BACKEND; the voice
     // front-end has no response trigger, so steer it with an instruction.
     // NEEDS VERIFICATION (file header, item 1).
-    this.appendInstructions(TRIGGER_RESPONSE_INSTRUCTION);
+    this.appendTriggerCue();
   }
 
   sayVerbatim(text: string): void {
@@ -345,16 +383,19 @@ export class OpenAILiveProvider implements VoiceAIProvider {
       log.warn({ textLength: text.length }, 'sayVerbatim called with no started session — message was dropped');
       return;
     }
-    this.awaitingVerbatimAudio = true;
+    this.holdTurnEndForVerbatim = true;
     this.clearTurnEndTimer();
     // No verbatim mechanism exists — this is a request, not a guarantee;
     // verbatimDeliveryReport() checks what was actually said.
     this.appendInstructions(
-      `Say exactly the following, word for word, and nothing else — no preamble, no additions, no acknowledgement: "${text}"`,
+      `One-time cue for this moment only: say exactly the following once, word for word, and nothing else — no preamble, no additions, no acknowledgement — and never repeat it on a later turn: "${text}"`,
     );
   }
 
   verbatimDeliveryReport(): VerbatimDeliveryReport | undefined {
+    // CallSession reads the report once its wait for the message is over, so
+    // stop holding turn_end back for it either way.
+    this.holdTurnEndForVerbatim = false;
     if (!this.verbatim) return undefined;
     const { intended } = this.verbatim;
     const spoken = this.verbatim.spoken.trim();
@@ -362,6 +403,7 @@ export class OpenAILiveProvider implements VoiceAIProvider {
   }
 
   async disconnect(): Promise<void> {
+    if (this.started) this.flushPendingTranscripts();
     this.clearTimers();
     this.logEventSummary();
     if (!this.ws) return;
@@ -400,6 +442,29 @@ export class OpenAILiveProvider implements VoiceAIProvider {
     this.send({ type: 'session.instructions.append', content, delegation_id: null });
   }
 
+  /**
+   * session.instructions.append adds to the session's standing instructions
+   * for the rest of the call — openai-node's Live types document it as
+   * appending to the running conversation, with no event that removes one.
+   * A cue appended again before the model acted on the last one only grows
+   * them (and piles up "respond now" against the turn-taking guidance), so
+   * skip it while one is still outstanding.
+   */
+  private appendTriggerCue(): void {
+    if (this.triggerCueOutstanding) {
+      log.debug('a response cue is already outstanding — not appending another');
+      return;
+    }
+    this.triggerCueOutstanding = true;
+    this.appendInstructions(TRIGGER_RESPONSE_INSTRUCTION);
+  }
+
+  /** The model visibly responded (speech audio or a delegated tool call). */
+  private noteResponseActivity(): void {
+    this.lastResponseActivitySeq = ++this.activitySeq;
+    this.triggerCueOutstanding = false;
+  }
+
   private emitEvent(event: VoiceAIEvent): void {
     this.emitter.emit('event', event);
   }
@@ -411,6 +476,8 @@ export class OpenAILiveProvider implements VoiceAIProvider {
   }
 
   private settleConnect(err?: Error): void {
+    if (this.connectTimer) clearTimeout(this.connectTimer);
+    this.connectTimer = undefined;
     const pending = this.pendingConnect;
     if (!pending) return;
     this.pendingConnect = undefined;
@@ -439,7 +506,7 @@ export class OpenAILiveProvider implements VoiceAIProvider {
         this.settleConnect();
         if (this.pendingTriggerResponse) {
           this.pendingTriggerResponse = false;
-          this.appendInstructions(TRIGGER_RESPONSE_INSTRUCTION);
+          this.appendTriggerCue();
         }
         return;
       }
@@ -459,12 +526,12 @@ export class OpenAILiveProvider implements VoiceAIProvider {
           return;
         }
         this.recordSpeechAudioGap();
-        this.awaitingVerbatimAudio = false;
+        this.noteResponseActivity();
         this.emitEvent({
           type: 'audio_chunk',
           chunk: { data, sampleRate: this.outputSampleRate },
         });
-        this.armTurnEnd();
+        if (!this.holdTurnEndForVerbatim) this.armTurnEnd();
         return;
       }
 
@@ -474,16 +541,20 @@ export class OpenAILiveProvider implements VoiceAIProvider {
         if (this.verbatim) this.verbatim.spoken += msg.delta;
         this.emitEvent({ type: 'transcript', role: 'assistant', text: msg.delta, isFinal: false });
         this.armTranscriptFlush('assistant');
+        if (this.holdTurnEndForVerbatim && this.verbatim && verbatimMatches(this.verbatim.intended, this.verbatim.spoken)) {
+          this.holdTurnEndForVerbatim = false;
+        }
         // Transcript can trail the audio it describes — keep the turn open
         // until it finishes, so a verbatim report taken at turn_end isn't
         // missing its last words.
-        if (!this.awaitingVerbatimAudio) this.armTurnEnd();
+        if (!this.holdTurnEndForVerbatim) this.armTurnEnd();
         return;
       }
 
       case 'session.input_transcript.delta': {
         if (typeof msg.delta !== 'string') return;
         this.userTranscript += msg.delta;
+        this.lastUserFragmentSeq = ++this.activitySeq;
         this.emitEvent({ type: 'transcript', role: 'user', text: msg.delta, isFinal: false });
         this.armTranscriptFlush('user');
         return;
@@ -498,7 +569,7 @@ export class OpenAILiveProvider implements VoiceAIProvider {
         }
         // Backend activity counts as the turn still being in progress — this
         // is also what ends a tool-only turn that never produces audio.
-        if (!this.awaitingVerbatimAudio) this.armTurnEnd();
+        if (!this.holdTurnEndForVerbatim) this.armTurnEnd();
         return;
       }
 
@@ -509,6 +580,7 @@ export class OpenAILiveProvider implements VoiceAIProvider {
 
       case 'session.closed': {
         log.info({ reason: msg.reason, audioSeconds: msg.usage?.seconds }, 'openai live session closed');
+        this.flushPendingTranscripts();
         this.clearTimers();
         this.logEventSummary();
         this.emitDisconnected(`openai live session closed: ${msg.reason ?? 'unknown'}`);
@@ -595,16 +667,37 @@ export class OpenAILiveProvider implements VoiceAIProvider {
     }
   }
 
+  /**
+   * A final user transcript lands TRANSCRIPT_IDLE_FINAL_MS after the caller's
+   * last fragment — often after a full-duplex model has already replied.
+   * `answered` tells CallSession not to arm its silence watchdog for it, or a
+   * caller pausing after the reply would get nudged at. Only a response after
+   * the last fragment counts, so a backchannel mid-sentence doesn't.
+   */
   private flushTranscript(role: 'user' | 'assistant'): void {
     const text = (role === 'user' ? this.userTranscript : this.assistantTranscript).trim();
     if (role === 'user') this.userTranscript = '';
     else this.assistantTranscript = '';
-    if (text) this.emitEvent({ type: 'transcript', role, text, isFinal: true });
+    if (!text) return;
+    const answered = role === 'user' && this.lastResponseActivitySeq > this.lastUserFragmentSeq;
+    this.emitEvent({ type: 'transcript', role, text, isFinal: true, ...(answered ? { answered: true } : {}) });
+  }
+
+  /** Emits whatever fragments are still waiting on their idle timer, so the last words before a hang-up get logged. */
+  private flushPendingTranscripts(): void {
+    for (const role of ['user', 'assistant'] as const) {
+      const timer = this.transcriptTimers[role];
+      if (!timer) continue;
+      clearTimeout(timer);
+      this.transcriptTimers[role] = undefined;
+      this.flushTranscript(role);
+    }
   }
 
   private emitToolCall(callId: string, name: string, argsStr: string, raw: unknown): void {
     if (this.emittedCallIds.has(callId)) return;
     this.emittedCallIds.add(callId);
+    this.noteResponseActivity();
     let args: Record<string, unknown> = {};
     try {
       args = JSON.parse(argsStr);

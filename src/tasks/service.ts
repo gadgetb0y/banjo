@@ -16,6 +16,14 @@ import {
  * from racing on updatedAt, and gives us one place to log every transition.
  */
 
+/** Non-terminal statuses the orchestration poller should pick up (see src/tasks/orchestrator.ts). Every other status is terminal. */
+export const NON_TERMINAL_STATUSES: Task['status'][] = ['pending', 'checking_availability', 'calling', 'negotiating'];
+
+/** The one definition of "terminal": anything not in NON_TERMINAL_STATUSES, so a status added to the enum later is terminal by default. */
+export function isTerminalStatus(status: Task['status']): boolean {
+  return !NON_TERMINAL_STATUSES.includes(status);
+}
+
 export async function createTask(input: {
   contactId: string;
   channel: 'phone' | 'online';
@@ -45,6 +53,24 @@ export async function getTask(id: string): Promise<Task | undefined> {
   return row;
 }
 
+/**
+ * The statuses a task may move INTO `status` from. Normally only the
+ * non-terminal ones: a late end_conversation_call or end-of-call failure must
+ * not overwrite a 'confirmed' booking. The one exception is 'confirmed' over
+ * 'failed' — confirm_appointment records it only after the calendar event is
+ * written, and a callee hanging up mid-booking can land the end-of-call
+ * 'failed' first (callSessionAdapter.ts's failTaskIfStillNonTerminal).
+ * Postgres has to say what the calendar says.
+ */
+function allowedFromStatuses(status: Task['status']): Task['status'][] {
+  return status === 'confirmed' ? [...NON_TERMINAL_STATUSES, 'failed'] : NON_TERMINAL_STATUSES;
+}
+
+/**
+ * Returns the row as it stands afterwards. When the transition isn't allowed
+ * (see allowedFromStatuses) the task is left unchanged and returned as-is —
+ * compare the returned status to the requested one to tell.
+ */
 export async function transitionTask(
   id: string,
   status: Task['status'],
@@ -54,16 +80,12 @@ export async function transitionTask(
     calendarEventId: string;
   }>,
 ): Promise<Task> {
-  // A task that already reached a terminal status never moves again: a late
-  // end_conversation_call or end-of-call failure must not overwrite a
-  // 'confirmed' booking. Checked in the UPDATE itself rather than read-then-
-  // write, so two outcome tools racing on one call can't both land. Guarded
-  // on NON_TERMINAL_STATUSES (not a terminal list) so a status added to the
-  // enum later is protected by default.
+  // Checked in the UPDATE itself rather than read-then-write, so two outcome
+  // tools racing on one call can't both land.
   const [row] = await db
     .update(tasks)
     .set({ status, ...patch, updatedAt: new Date() })
-    .where(and(eq(tasks.id, id), inArray(tasks.status, NON_TERMINAL_STATUSES)))
+    .where(and(eq(tasks.id, id), inArray(tasks.status, allowedFromStatuses(status))))
     .returning();
   if (row) return row;
   const current = await getTask(id);
@@ -73,6 +95,23 @@ export async function transitionTask(
     'ignored transition: task already has a terminal status',
   );
   return current;
+}
+
+/**
+ * Cancels a phone task whose call hasn't been placed yet — typically one
+ * scheduled for later with place_call's scheduledFor. A task already on a
+ * call (or finished) is left as-is. Returns the task as it stands afterwards
+ * (status 'cancelled' on success), or undefined if it doesn't exist. The
+ * orchestrator re-checks the status its own transitions return, so a cancel
+ * racing a just-starting run still stops it before dialing.
+ */
+export async function cancelPendingTask(id: string): Promise<Task | undefined> {
+  const [row] = await db
+    .update(tasks)
+    .set({ status: 'cancelled', updatedAt: new Date() })
+    .where(and(eq(tasks.id, id), inArray(tasks.status, ['pending', 'checking_availability'])))
+    .returning();
+  return row ?? getTask(id);
 }
 
 /** Used by the schedule-appointment skill to log a synchronous online-booking outcome. */
@@ -103,12 +142,8 @@ export async function listRecentTasks(limit = 20): Promise<Task[]> {
   return db.select().from(tasks).orderBy(desc(tasks.updatedAt)).limit(limit);
 }
 
-/** Non-terminal statuses the orchestration poller should pick up (see src/tasks/orchestrator.ts). */
-export const NON_TERMINAL_STATUSES: Task['status'][] = ['pending', 'checking_availability', 'calling', 'negotiating'];
-
 export async function listNonTerminalTasks(): Promise<Task[]> {
-  const all = await db.select().from(tasks);
-  return all.filter((t) => NON_TERMINAL_STATUSES.includes(t.status));
+  return db.select().from(tasks).where(inArray(tasks.status, NON_TERMINAL_STATUSES));
 }
 
 /**

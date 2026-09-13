@@ -10,11 +10,13 @@
  * message as delivered that the callee never heard, which is exactly the bug
  * docs/ARCHITECTURE.md's Open Risks #13 exists for. So normalization only
  * erases differences that cannot change what the callee heard — case,
- * punctuation, spacing, apostrophe style, and how a digit string is grouped or
- * spelled ("555-1234" vs "five five five, one two three four") — and extra
- * words are tolerated only AROUND the message (a lead-in like "Hi there."),
- * never inside it. Known false negatives, accepted on purpose: contractions
- * ("we'll" vs "we will") and spelled-out non-digit numbers ("twenty").
+ * punctuation, spacing, apostrophe style, dotted abbreviations ("p.m." vs
+ * "pm"), and how a digit string is grouped or spelled ("555-1234" vs "five
+ * five five, one two three four") — and extra words are tolerated only AROUND
+ * the message (a lead-in like "Hi there."), never inside it. Known false
+ * negatives, accepted on purpose: contractions ("we'll" vs "we will"),
+ * spelled-out non-digit numbers ("twenty"), and a number whose digits a
+ * transcript splits across sentences ("five five five. one two...").
  */
 
 const DIGIT_WORDS: Record<string, string> = {
@@ -32,27 +34,39 @@ const DIGIT_WORDS: Record<string, string> = {
 
 const ALL_DIGITS = /^\p{N}+$/u;
 
+/** Single letters joined by dots — "p.m.", "a.m", "e.g." — tokenized like their undotted spelling. */
+const DOTTED_ABBREVIATION = /(?<![\p{L}\p{N}])\p{L}(?:\.\p{L})+\.?(?![\p{L}\p{N}])/gu;
+
+/**
+ * Sentence-ending punctuation followed by a space or the end of the text. Digit
+ * runs never collapse across one, so "…555-1234. One more thing" can't merge
+ * the spoken "one" into the phone number. A decimal point ("1.5") isn't one.
+ */
+const SENTENCE_BREAK = /[.!?]+(?=\s|$)/u;
+
 /** Exported for tests only — see verbatimMatches. */
 export function normalizeForVerbatimMatch(text: string): string[] {
-  const words = text
+  const prepared = text
     .normalize('NFKC')
     .toLowerCase()
     .replace(/['‘’]/g, '') // "we’ll" and "we'll" both -> "well", never "we ll" on one side only
     .replace(/(\p{N})(\p{L})/gu, '$1 $2') // "2:30pm" and "2:30 pm" tokenize the same
     .replace(/(\p{L})(\p{N})/gu, '$1 $2')
-    .split(/[^\p{L}\p{N}]+/u)
-    .filter(Boolean)
-    .map((word) => DIGIT_WORDS[word] ?? word);
+    .replace(DOTTED_ABBREVIATION, (abbreviation) => abbreviation.replace(/\./g, ''));
 
-  // Collapse runs of digit tokens so a number's grouping doesn't matter:
-  // "555-1234", "555 1234", and "5 5 5 1 2 3 4" all become "5551234".
+  // Collapse runs of digit tokens within a sentence so a number's grouping
+  // doesn't matter: "555-1234", "555 1234", and "5 5 5 1 2 3 4" all become
+  // "5551234".
   const tokens: string[] = [];
-  for (const word of words) {
-    const last = tokens[tokens.length - 1];
-    if (last !== undefined && ALL_DIGITS.test(word) && ALL_DIGITS.test(last)) {
-      tokens[tokens.length - 1] = last + word;
-    } else {
-      tokens.push(word);
+  for (const sentence of prepared.split(SENTENCE_BREAK)) {
+    let previousWasDigits = false;
+    for (const raw of sentence.split(/[^\p{L}\p{N}]+/u)) {
+      if (!raw) continue;
+      const word = DIGIT_WORDS[raw] ?? raw;
+      const isDigits = ALL_DIGITS.test(word);
+      if (isDigits && previousWasDigits) tokens[tokens.length - 1] += word;
+      else tokens.push(word);
+      previousWasDigits = isDigits;
     }
   }
   return tokens;
@@ -60,12 +74,12 @@ export function normalizeForVerbatimMatch(text: string): string[] {
 
 /**
  * True when `spoken`, normalized, contains `intended`, normalized, as one
- * contiguous run of words. An empty `intended` has nothing to verify and
- * always matches.
+ * contiguous run of words. An empty `intended` never matches: with nothing to
+ * deliver, nothing can be verified as delivered.
  */
 export function verbatimMatches(intended: string, spoken: string): boolean {
   const want = normalizeForVerbatimMatch(intended);
-  if (want.length === 0) return true;
+  if (want.length === 0) return false;
   const got = normalizeForVerbatimMatch(spoken);
   for (let start = 0; start + want.length <= got.length; start++) {
     if (want.every((token, offset) => got[start + offset] === token)) return true;

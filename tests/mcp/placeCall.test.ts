@@ -76,8 +76,16 @@ describe('mcp: place_call scheduling', () => {
     expect(triggerOrchestration).toHaveBeenCalledWith('task-1');
   });
 
+  it('rejects a date-only scheduledFor, which would otherwise place the call at midnight, without creating a task', async () => {
+    await expect(placeCallHandler({ contactId: CONTACT_ID, taskDescription: 'Call tomorrow', scheduledFor: '2026-09-14' })).rejects.toThrow(
+      /must include a time of day/,
+    );
+    expect(createTask).not.toHaveBeenCalled();
+    expect(triggerOrchestration).not.toHaveBeenCalled();
+  });
+
   it('rejects an unparseable scheduledFor without creating a task', async () => {
-    await expect(placeCallHandler({ contactId: CONTACT_ID, taskDescription: 'Call later', scheduledFor: 'tomorrow-ish' })).rejects.toThrow(
+    await expect(placeCallHandler({ contactId: CONTACT_ID, taskDescription: 'Call later', scheduledFor: '2026-02-30Tnoon:00' })).rejects.toThrow(
       /scheduledFor/,
     );
     expect(createTask).not.toHaveBeenCalled();

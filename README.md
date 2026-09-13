@@ -73,6 +73,21 @@ docker compose exec postgres createdb -U banjo banjo_test
 DATABASE_URL=postgresql://banjo:banjo@localhost:5432/banjo_test npm run db:migrate
 ```
 
+### Upgrading an existing database
+
+`drizzle/` is gitignored, so schema changes arrive without migration files. After pulling a change to any
+`src/**/schema.ts`, run `npm run db:generate && npm run db:migrate` against both `banjo` and `banjo_test`
+before restarting — until then, every query on the changed table fails with `column "..." does not exist`
+(for `tasks`, that includes the orchestration poller and `place_call` on every voice provider).
+
+If your local `drizzle/` history no longer matches the database, apply the change directly instead. For
+`tasks.scheduled_for` (added for scheduled calls):
+
+```bash
+docker compose exec postgres psql -U banjo -d banjo -c 'ALTER TABLE tasks ADD COLUMN IF NOT EXISTS scheduled_for timestamptz'
+docker compose exec postgres psql -U banjo -d banjo_test -c 'ALTER TABLE tasks ADD COLUMN IF NOT EXISTS scheduled_for timestamptz'
+```
+
 ## Companion Claude Code skill
 
 Banjo only handles the phone-calling half of "get this errand done." The other half — deciding

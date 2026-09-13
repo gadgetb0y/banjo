@@ -656,6 +656,72 @@ describe('CallSession: audio-aware hang-up wiring', () => {
   });
 });
 
+describe('CallSession: the call ending while a tool handler is still running', () => {
+  // The hang-up-during-booking race: the callee hangs up while
+  // confirm_appointment is still writing the calendar event. Recording the
+  // call's end first lands the task in 'failed' and texts a failure for a
+  // booking that went through.
+  beforeEach(() => {
+    voiceAIEmitter.removeAllListeners('event');
+  });
+
+  function sessionWithSlowTool() {
+    const telephony = makeFakeTelephony();
+    const options = makeFakeCallSessionOptions(telephony.provider);
+    const order: string[] = [];
+    let finishHandler!: () => void;
+    const handler = vi.fn(
+      () =>
+        new Promise((resolve) => {
+          finishHandler = () => {
+            order.push('handler finished');
+            resolve({ ok: true });
+          };
+        }),
+    );
+    options.tools = [{ name: 'slow_tool', description: 'test-only', schema: z.object({}), handler }];
+    vi.mocked(options.onStatusChange).mockImplementation(async (patch) => {
+      order.push(`status:${patch.kind}`);
+    });
+    return { telephony, options, order, handler, finish: () => finishHandler() };
+  }
+
+  it('records the call end only after the in-flight handler finishes', async () => {
+    const { telephony, options, order, handler, finish } = sessionWithSlowTool();
+    await new CallSession(options).start();
+
+    voiceAIEmitter.emit('event', { type: 'tool_call', call: { id: 'call-1', name: 'slow_tool', arguments: {} } } satisfies VoiceAIEvent);
+    await vi.waitFor(() => expect(handler).toHaveBeenCalled());
+    telephony.emit({ callId: callAttempt.id, type: 'ended', reason: 'callee hung up' });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(order).toEqual(['status:started']);
+
+    finish();
+    await vi.waitFor(() => expect(order).toContain('status:ended'));
+    expect(order).toEqual(['status:started', 'handler finished', 'status:ended']);
+  });
+
+  it('stops waiting after TOOL_TIMEOUT_MS plus a margin if the handler never finishes', async () => {
+    vi.useFakeTimers();
+    try {
+      const { telephony, options, order, handler } = sessionWithSlowTool();
+      await new CallSession(options).start();
+
+      voiceAIEmitter.emit('event', { type: 'tool_call', call: { id: 'call-1', name: 'slow_tool', arguments: {} } } satisfies VoiceAIEvent);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(handler).toHaveBeenCalled();
+      telephony.emit({ callId: callAttempt.id, type: 'ended', reason: 'callee hung up' });
+
+      await vi.advanceTimersByTimeAsync(8000); // TOOL_TIMEOUT_MS
+      expect(order).not.toContain('status:ended');
+      await vi.advanceTimersByTimeAsync(1000); // the margin
+      expect(order).toContain('status:ended');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
 describe('CallSession: a retryable Voice AI error is tolerated instead of killing the call', () => {
   // Regression coverage for a real live call (2026-09-01, callId d38b79ab):
   // the silence watchdog's nudge (voiceAI.triggerResponse()) collided with a
@@ -761,6 +827,24 @@ describe('CallSession: silence watchdog — the model going quiet after a user t
   // still-attached listener left over from every earlier test in the file.
   beforeEach(() => {
     voiceAIEmitter.removeAllListeners('event');
+  });
+
+  it('does not arm for a final user transcript the provider marks answered — a full-duplex model already replied before it went final', async () => {
+    vi.useFakeTimers();
+    try {
+      const telephony = makeFakeTelephony();
+      const session = new CallSession(makeFakeCallSessionOptions(telephony.provider));
+      await session.start();
+
+      voiceAIEmitter.emit('event', { type: 'transcript', role: 'user', text: 'Sounds good.', isFinal: true, answered: true } satisfies VoiceAIEvent);
+      await vi.advanceTimersByTimeAsync(7000 * 3); // SILENCE_WATCHDOG_MS, then the give-up window
+
+      expect(fakeVoiceAI.triggerResponse).not.toHaveBeenCalled();
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      expect((session as any).silenceWatchdog).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('nudges the model with an explicit response trigger if it stays silent for SILENCE_WATCHDOG_MS after a finalized user turn', async () => {

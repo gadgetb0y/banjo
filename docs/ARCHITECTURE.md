@@ -206,6 +206,7 @@ Exposed over **HTTP/SSE (remote MCP)**, since Banjo runs as a persistent AWS ser
 
 - **`place_call(contactId, taskDescription, constraints, mode?, scheduledFor?)`** → creates a phone-channel `Task`, fires off orchestration asynchronously — or, with `scheduledFor` (a local date-time interpreted in `CALENDAR_TIMEZONE`), leaves it `pending` until the orchestration poller finds it due, within 15 seconds of that time (a periodic poller also picks up any non-terminal task, so this is self-healing across a container restart), returns `{ taskId, ackMessage }` immediately.
 - **`get_task_status(taskId)`**, **`list_recent_tasks(limit?)`** — status/history lookups.
+- **`cancel_task(taskId)`** — calls off a phone task that hasn't dialed yet (`pending` or `checking_availability`, typically a scheduled call); a call already underway or finished is left alone, and the orchestrator re-checks the status its own transitions return so a cancel racing a starting run still stops it before dialing.
 - **`find_contact(query)`**, **`list_contacts(category?)`**, **`add_contact(...)`**, **`update_contact(id, { preferredChannel?, bookingUrl?, notes? })`** — contact directory management.
 - **`record_task_outcome(contactId, goalDescription, outcome)`** — lets the skill log a completed online booking into the same task history as phone-based tasks.
 

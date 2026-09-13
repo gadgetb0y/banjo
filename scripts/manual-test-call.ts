@@ -49,11 +49,9 @@ import { db } from '../src/db/index.js';
 import { logger } from '../src/lib/logger.js';
 import { startServer } from '../src/server.js';
 import { callAttempts } from '../src/tasks/schema.js';
-import { getTask } from '../src/tasks/service.js';
+import { getTask, isTerminalStatus } from '../src/tasks/service.js';
 import { startOrchestrationPoller } from '../src/tasks/orchestrator.js';
-import { placeCallHandler } from '../src/mcp/tools/placeCall.js';
-
-const TERMINAL_STATUSES = new Set(['confirmed', 'voicemail_left', 'negotiation_failed', 'escalated', 'conversation_completed', 'failed', 'cancelled']);
+import { parseScheduledFor, placeCallHandler } from '../src/mcp/tools/placeCall.js';
 
 async function main() {
   const { values } = parseArgs({
@@ -123,8 +121,10 @@ async function main() {
 
   const durationMinutes = Number.parseInt(values.duration ?? '15', 10);
   const windowDays = Number.parseInt(values['window-days'] ?? '3', 10);
-  const now = new Date();
-  const windowEnd = new Date(now.getTime() + windowDays * 24 * 60 * 60 * 1000);
+  // The offerable window starts when the call does, not when this script ran —
+  // for a call scheduled days out, "the next N days from now" is already over.
+  const windowStart = values.at ? new Date(Math.max(Date.now(), parseScheduledFor(values.at).getTime())) : new Date();
+  const windowEnd = new Date(windowStart.getTime() + windowDays * 24 * 60 * 60 * 1000);
 
   const { taskId, ackMessage } = await placeCallHandler({
     contactId,
@@ -133,7 +133,7 @@ async function main() {
     ...(values.at ? { scheduledFor: values.at } : {}),
     constraints: {
       durationMinutes,
-      dateWindows: [{ start: now.toISOString(), end: windowEnd.toISOString() }],
+      dateWindows: [{ start: windowStart.toISOString(), end: windowEnd.toISOString() }],
       notes: values.notes || undefined,
     },
   });
@@ -183,7 +183,7 @@ async function pollUntilTerminal(taskId: string): Promise<void> {
       console.log(`[${new Date().toISOString()}] status -> ${task.status}`);
       lastStatus = task.status;
     }
-    if (TERMINAL_STATUSES.has(task.status)) {
+    if (isTerminalStatus(task.status)) {
       await waitForCallToEnd(taskId);
       const final = (await getTask(taskId)) ?? task;
       console.log('\n--- final outcome ---');

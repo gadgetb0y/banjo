@@ -12,7 +12,7 @@ import { pressDigitsTool, pressDigitsToolDefinition } from '../../src/telephony/
 // (rather than a bare top-level const) because these mock fns are referenced
 // inside vi.mock's factory below, which vitest hoists above every import.
 const { transitionTask, getTask } = vi.hoisted(() => ({
-  transitionTask: vi.fn(async () => {}),
+  transitionTask: vi.fn(async (id: string, status: string) => ({ id, status }) as unknown as Task),
   getTask: vi.fn(async () => undefined as Task | undefined),
 }));
 vi.mock('../../src/tasks/service.js', () => ({
