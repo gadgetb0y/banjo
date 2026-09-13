@@ -5,7 +5,7 @@ import { CallSession } from '../session/callSession.js';
 import { createTelephonyProvider } from '../telephony/factory.js';
 import { buildOutboundCallSessionOptions } from './callSessionAdapter.js';
 import { buildCallFrontendPrompt, buildCallSystemPrompt } from './promptBuilder.js';
-import { createCallAttempt, getTask, listNonTerminalTasks, transitionTask } from './service.js';
+import { createCallAttempt, getTask, isTaskDue, listNonTerminalTasks, transitionTask } from './service.js';
 import type { TimeWindow } from './schema.js';
 
 const calendar = new GoogleCalendarProvider();
@@ -39,6 +39,11 @@ async function runTask(taskId: string): Promise<void> {
     // Online-path tasks are handled entirely by the schedule-appointment
     // skill and logged via record_task_outcome — nothing for the backend to
     // drive here.
+    return;
+  }
+  if (!isTaskDue(task)) {
+    // Scheduled for later (place_call's scheduledFor). Left 'pending' — the
+    // poller below starts it once it's due.
     return;
   }
 
@@ -82,13 +87,17 @@ const POLL_INTERVAL_MS = 15_000;
  * tasks already 'calling'/'negotiating' at restart time are NOT auto-resumed
  * (their call is already gone; v1 just leaves them for Steve to notice via
  * list_recent_tasks rather than guessing at a retry).
+ *
+ * It's also what starts a scheduled call (place_call's scheduledFor): a task
+ * isn't picked up until isTaskDue, so it starts within POLL_INTERVAL_MS of
+ * its scheduled time.
  */
 export function startOrchestrationPoller(): void {
   setInterval(() => {
     listNonTerminalTasks()
       .then((pending) => {
         for (const t of pending) {
-          if (t.status === 'pending' || t.status === 'checking_availability') {
+          if ((t.status === 'pending' || t.status === 'checking_availability') && isTaskDue(t)) {
             triggerOrchestration(t.id);
           }
         }

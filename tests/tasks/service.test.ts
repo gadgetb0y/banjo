@@ -9,7 +9,35 @@ vi.mock('../../src/db/index.js', () => ({
   db: { insert: insertMock },
 }));
 
-const { createTask } = await import('../../src/tasks/service.js');
+const { createTask, isTaskDue } = await import('../../src/tasks/service.js');
+
+describe('isTaskDue', () => {
+  const now = new Date('2026-09-13T13:00:00.000Z');
+
+  it('is due when the task has no scheduled time', () => {
+    expect(isTaskDue({ scheduledFor: null }, now)).toBe(true);
+  });
+
+  it('is not due before its scheduled time', () => {
+    expect(isTaskDue({ scheduledFor: new Date('2026-09-13T13:00:01.000Z') }, now)).toBe(false);
+  });
+
+  it('is due at and after its scheduled time', () => {
+    expect(isTaskDue({ scheduledFor: new Date('2026-09-13T13:00:00.000Z') }, now)).toBe(true);
+    expect(isTaskDue({ scheduledFor: new Date('2026-09-13T12:00:00.000Z') }, now)).toBe(true);
+  });
+});
+
+describe('createTask: scheduledFor', () => {
+  it('passes scheduledFor through to the insert when given', async () => {
+    insertReturning.mockResolvedValue([{ id: 'task-3' }]);
+    const scheduledFor = new Date('2026-09-13T13:00:00.000Z');
+
+    await createTask({ contactId: 'contact-1', channel: 'phone', goalDescription: 'Call later', constraints: {}, scheduledFor });
+
+    expect(insertValues).toHaveBeenLastCalledWith(expect.objectContaining({ scheduledFor }));
+  });
+});
 
 describe('createTask', () => {
   it('defaults mode to "booking" when omitted', async () => {

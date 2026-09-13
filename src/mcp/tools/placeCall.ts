@@ -1,4 +1,6 @@
 import { z } from 'zod';
+import { config } from '../../config/index.js';
+import { zonedTimeToUtcIso } from '../../lib/timezone.js';
 import { createTask } from '../../tasks/service.js';
 import { triggerOrchestration } from '../../tasks/orchestrator.js';
 import type { TaskConstraints } from '../../tasks/schema.js';
@@ -22,6 +24,14 @@ export const placeCallInputSchema = z.object({
         "'conversation' is for calls with no booking/negotiation goal — deliver a message, discuss something, " +
         "react to what's said — ending naturally rather than at a specific negotiated outcome.",
     ),
+  scheduledFor: z
+    .string()
+    .optional()
+    .describe(
+      `Place the call no earlier than this time instead of right away, as a local date-time WITHOUT a UTC offset ` +
+        `(e.g. "2026-09-14T09:00:00"), interpreted in ${config.CALENDAR_TIMEZONE}. Omit to call immediately. ` +
+        `The task stays "pending" until then; a time already in the past calls immediately.`,
+    ),
   constraints: z
     .object({
       dateWindows: z
@@ -41,13 +51,38 @@ export interface PlaceCallResult {
 }
 
 /**
+ * Interpreted in CALENDAR_TIMEZONE, never the server's own zone — the same
+ * rule as every other call-facing time (see src/lib/timezone.ts's
+ * zonedTimeToUtcIso for the booking that once landed 4 hours off).
+ */
+function parseScheduledFor(value: string): Date {
+  let parsed: Date;
+  try {
+    parsed = new Date(zonedTimeToUtcIso(value, config.CALENDAR_TIMEZONE));
+  } catch (err) {
+    throw new Error(`Could not parse scheduledFor "${value}" as a date-time (${err instanceof Error ? err.message : String(err)})`);
+  }
+  if (Number.isNaN(parsed.getTime())) {
+    throw new Error(`Could not parse scheduledFor "${value}" as a date-time`);
+  }
+  return parsed;
+}
+
+function formatInCalendarTimezone(date: Date): string {
+  return date.toLocaleString('en-US', { timeZone: config.CALENDAR_TIMEZONE, dateStyle: 'medium', timeStyle: 'short' });
+}
+
+/**
  * Creates the Task row and hands off to async call orchestration WITHOUT
  * awaiting it — a phone call can run for minutes, far longer than an MCP
  * tool call should block. The caller (the schedule-appointment skill) is
- * expected to poll get_task_status for the eventual outcome.
+ * expected to poll get_task_status for the eventual outcome. With a future
+ * scheduledFor, nothing is triggered now: the orchestration poller starts the
+ * call once it's due.
  */
 export async function placeCallHandler(input: z.infer<typeof placeCallInputSchema>): Promise<PlaceCallResult> {
   const constraints: TaskConstraints = input.constraints ?? {};
+  const scheduledFor = input.scheduledFor ? parseScheduledFor(input.scheduledFor) : undefined;
 
   const task = await createTask({
     contactId: input.contactId,
@@ -55,7 +90,15 @@ export async function placeCallHandler(input: z.infer<typeof placeCallInputSchem
     goalDescription: input.taskDescription,
     constraints,
     mode: input.mode,
+    scheduledFor,
   });
+
+  if (scheduledFor && scheduledFor.getTime() > Date.now()) {
+    return {
+      taskId: task.id,
+      ackMessage: `Scheduled a call about "${input.taskDescription}" for ${formatInCalendarTimezone(scheduledFor)} (${config.CALENDAR_TIMEZONE}). I'll let you know how it goes.`,
+    };
+  }
 
   // Fire-and-forget. Deliberately not awaited — see module comment above.
   triggerOrchestration(task.id);

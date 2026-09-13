@@ -85,7 +85,8 @@ export function createMcpServer(): McpServer {
     'place_call',
     'Place an outbound phone call to a contact to accomplish a task (e.g. book an appointment). ' +
       'Returns immediately with a taskId — the call itself runs asynchronously over the following ' +
-      'minutes. Poll get_task_status with the returned taskId to learn the outcome.',
+      'minutes (or at scheduledFor, if given, to call later instead of now). Poll get_task_status with the ' +
+      'returned taskId to learn the outcome.',
     placeCallInputSchema.shape,
     adapt(placeCallHandler),
   );

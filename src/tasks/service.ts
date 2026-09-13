@@ -21,6 +21,8 @@ export async function createTask(input: {
   goalDescription: string;
   constraints: TaskConstraints;
   mode?: 'booking' | 'conversation';
+  /** Phone path: place the call no earlier than this instant. Omit to call as soon as possible. */
+  scheduledFor?: Date;
 }): Promise<Task> {
   const [row] = await db
     .insert(tasks)
@@ -30,6 +32,7 @@ export async function createTask(input: {
       goalDescription: input.goalDescription,
       constraints: input.constraints,
       ...(input.mode ? { mode: input.mode } : {}),
+      ...(input.scheduledFor ? { scheduledFor: input.scheduledFor } : {}),
     })
     .returning();
   if (!row) throw new Error('Failed to insert task');
@@ -93,6 +96,16 @@ export const NON_TERMINAL_STATUSES: Task['status'][] = ['pending', 'checking_ava
 export async function listNonTerminalTasks(): Promise<Task[]> {
   const all = await db.select().from(tasks);
   return all.filter((t) => NON_TERMINAL_STATUSES.includes(t.status));
+}
+
+/**
+ * Whether a task's scheduled time (place_call's scheduledFor), if any, has
+ * arrived. Checked by both the in-process trigger and the orchestration
+ * poller, so a scheduled call starts on the first poller tick at or after its
+ * time — within POLL_INTERVAL_MS (src/tasks/orchestrator.ts) of it.
+ */
+export function isTaskDue(task: Pick<Task, 'scheduledFor'>, now: Date = new Date()): boolean {
+  return !task.scheduledFor || task.scheduledFor.getTime() <= now.getTime();
 }
 
 // --- Call attempts (phone path only) ---
