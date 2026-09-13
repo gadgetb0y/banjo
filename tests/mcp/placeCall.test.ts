@@ -70,10 +70,22 @@ describe('mcp: place_call scheduling', () => {
     expect(result.ackMessage).toContain('9:00');
   });
 
-  it('calls right away when scheduledFor is already in the past', async () => {
-    await placeCallHandler({ contactId: CONTACT_ID, taskDescription: 'Call now', scheduledFor: '2026-09-12T20:00:00' });
+  it('calls right away when scheduledFor is only a few minutes in the past', async () => {
+    // 12:27am America/New_York — 3 minutes before the fake "now" of 12:30am.
+    await placeCallHandler({ contactId: CONTACT_ID, taskDescription: 'Call now', scheduledFor: '2026-09-13T00:27:00' });
 
     expect(triggerOrchestration).toHaveBeenCalledWith('task-1');
+  });
+
+  it('rejects a scheduledFor well in the past — a wrong date or year must not dial immediately', async () => {
+    await expect(placeCallHandler({ contactId: CONTACT_ID, taskDescription: 'Call later', scheduledFor: '2025-09-13T09:00:00' })).rejects.toThrow(
+      /already in the past/,
+    );
+    await expect(placeCallHandler({ contactId: CONTACT_ID, taskDescription: 'Call later', scheduledFor: '2026-09-12T20:00:00' })).rejects.toThrow(
+      /already in the past/,
+    );
+    expect(createTask).not.toHaveBeenCalled();
+    expect(triggerOrchestration).not.toHaveBeenCalled();
   });
 
   it('rejects a date-only scheduledFor, which would otherwise place the call at midnight, without creating a task', async () => {

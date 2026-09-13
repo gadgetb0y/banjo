@@ -66,28 +66,45 @@ function allowedFromStatuses(status: Task['status']): Task['status'][] {
   return status === 'confirmed' ? [...NON_TERMINAL_STATUSES, 'failed'] : NON_TERMINAL_STATUSES;
 }
 
+type TransitionPatch = Partial<{
+  candidateWindows: TimeWindow[];
+  outcome: TaskOutcome;
+  calendarEventId: string;
+}>;
+
 /**
  * Returns the row as it stands afterwards. When the transition isn't allowed
  * (see allowedFromStatuses) the task is left unchanged and returned as-is —
  * compare the returned status to the requested one to tell.
+ *
+ * With `options.from`, the transition applies only if the task is currently
+ * in one of those statuses, and resolves undefined when it didn't apply — a
+ * compare-and-set. The orchestrator claims a pending task this way, so two
+ * processes polling the same database can't both place its call (the loser
+ * would otherwise see the winner's 'checking_availability' as its own).
  */
+export async function transitionTask(id: string, status: Task['status'], patch?: TransitionPatch): Promise<Task>;
 export async function transitionTask(
   id: string,
   status: Task['status'],
-  patch?: Partial<{
-    candidateWindows: TimeWindow[];
-    outcome: TaskOutcome;
-    calendarEventId: string;
-  }>,
-): Promise<Task> {
+  patch: TransitionPatch | undefined,
+  options: { from: Task['status'][] },
+): Promise<Task | undefined>;
+export async function transitionTask(
+  id: string,
+  status: Task['status'],
+  patch?: TransitionPatch,
+  options?: { from: Task['status'][] },
+): Promise<Task | undefined> {
   // Checked in the UPDATE itself rather than read-then-write, so two outcome
   // tools racing on one call can't both land.
   const [row] = await db
     .update(tasks)
     .set({ status, ...patch, updatedAt: new Date() })
-    .where(and(eq(tasks.id, id), inArray(tasks.status, allowedFromStatuses(status))))
+    .where(and(eq(tasks.id, id), inArray(tasks.status, options?.from ?? allowedFromStatuses(status))))
     .returning();
   if (row) return row;
+  if (options) return undefined;
   const current = await getTask(id);
   if (!current) throw new Error(`Task not found: ${id}`);
   logger.warn(

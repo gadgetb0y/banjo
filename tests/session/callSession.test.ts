@@ -701,6 +701,31 @@ describe('CallSession: the call ending while a tool handler is still running', (
     expect(order).toEqual(['status:started', 'handler finished', 'status:ended']);
   });
 
+  it('ignores a tool call that arrives while end() is waiting, and still ends the call exactly once', async () => {
+    const { telephony, options, order, handler, finish } = sessionWithSlowTool();
+    await new CallSession(options).start();
+
+    voiceAIEmitter.emit('event', { type: 'tool_call', call: { id: 'call-1', name: 'slow_tool', arguments: {} } } satisfies VoiceAIEvent);
+    await vi.waitFor(() => expect(handler).toHaveBeenCalled());
+    telephony.emit({ callId: callAttempt.id, type: 'ended', reason: 'callee hung up' });
+    await new Promise((resolve) => setTimeout(resolve, 10));
+
+    // The voice AI is still connected while end() waits, so the model can still call a tool.
+    voiceAIEmitter.emit('event', { type: 'tool_call', call: { id: 'call-2', name: 'slow_tool', arguments: {} } } satisfies VoiceAIEvent);
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(handler).toHaveBeenCalledTimes(1);
+    expect(fakeVoiceAI.sendToolResult).toHaveBeenCalledWith('call-2', { ok: false, error: 'call_ended' }, true);
+
+    finish();
+    await vi.waitFor(() => expect(order).toContain('status:ended'));
+    // disconnect() makes a real provider emit 'disconnected', which reaches end() again.
+    voiceAIEmitter.emit('event', { type: 'disconnected', reason: 'client disconnect' } satisfies VoiceAIEvent);
+    await new Promise((resolve) => setTimeout(resolve, 10));
+
+    expect(order.filter((entry) => entry === 'status:ended')).toHaveLength(1);
+    expect(options.notifyIfTerminal).toHaveBeenCalledTimes(1);
+  });
+
   it('stops waiting after TOOL_TIMEOUT_MS plus a margin if the handler never finishes', async () => {
     vi.useFakeTimers();
     try {

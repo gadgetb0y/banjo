@@ -1,4 +1,4 @@
-import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { CalendarProvider, CreateEventResult } from '../../src/calendar/types.js';
 import type { TelephonyProvider } from '../../src/telephony/providers/types.js';
 
@@ -23,11 +23,18 @@ beforeAll(async () => {
   ({ confirmAppointmentTool } = await import('../../src/voice/tools/callTools.js'));
 });
 
-beforeEach(async () => {
+async function clearTables() {
   await db.delete(callAttempts);
   await db.delete(tasks);
   await db.delete(contacts);
-});
+}
+
+beforeEach(clearTables);
+// Leave the shared banjo_test database as this file found it: other suites
+// (e.g. tests/googleContacts/reconcile.test.ts) only clear `contacts` in their
+// own setup, and a task left behind here makes that delete fail on its
+// foreign key — failing every test in whichever file runs next.
+afterAll(clearTables);
 
 const telephony: TelephonyProvider = {
   name: 'fake-telephony',
@@ -131,5 +138,20 @@ describe('cancelPendingTask', () => {
     // A cancelled task is terminal: the orchestrator's first transition can't revive it.
     expect((await service.transitionTask(scheduled.id, 'checking_availability')).status).toBe('cancelled');
     expect((await service.listNonTerminalTasks()).map((t) => t.id)).toEqual([live.id]);
+  });
+});
+
+describe('claiming a pending task (transitionTask with from)', () => {
+  it('lets exactly one of two concurrent claims win — two pollers must not both place a scheduled call', async () => {
+    const [contact] = await db.insert(contacts).values({ displayName: 'Salon', phoneNumber: '+15551230002' }).returning();
+    const task = await service.createTask({ contactId: contact.id, channel: 'phone', goalDescription: 'Call later', constraints: {} });
+
+    const claims = await Promise.all([
+      service.transitionTask(task.id, 'checking_availability', undefined, { from: ['pending'] }),
+      service.transitionTask(task.id, 'checking_availability', undefined, { from: ['pending'] }),
+    ]);
+
+    expect(claims.filter((claim) => claim !== undefined)).toHaveLength(1);
+    expect((await service.getTask(task.id))?.status).toBe('checking_availability');
   });
 });

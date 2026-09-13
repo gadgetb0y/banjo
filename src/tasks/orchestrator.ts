@@ -56,9 +56,21 @@ async function runTask(taskId: string): Promise<void> {
   // transitionTask leaves a terminal task unchanged and returns it as-is, so
   // each step checks it actually moved: a cancel_task landing between the
   // read above and these writes must stop the run before it dials.
-  const checking = await transitionTask(task.id, 'checking_availability');
-  if (checking.status !== 'checking_availability') {
-    logger.info({ taskId, status: checking.status }, 'task can no longer be started — not placing the call');
+  //
+  // A pending task is claimed with a compare-and-set (only from 'pending'):
+  // with scheduled calls, every process polling this database finds the same
+  // due task on the same tick, and without an exclusive claim each one would
+  // place the call. A task already in 'checking_availability' is a restart
+  // resume and keeps the plain transition.
+  const checking =
+    task.status === 'pending'
+      ? await transitionTask(task.id, 'checking_availability', undefined, { from: ['pending'] })
+      : await transitionTask(task.id, 'checking_availability');
+  if (checking?.status !== 'checking_availability') {
+    logger.info(
+      { taskId, status: checking?.status ?? 'claimed by another process or cancelled' },
+      'task can no longer be started — not placing the call',
+    );
     return;
   }
   const candidateWindows = await calendar.computeCandidateWindows({

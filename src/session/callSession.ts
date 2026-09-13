@@ -348,6 +348,16 @@ export class CallSession<TCtx = CallContext> {
   }
 
   private async handleToolCall(toolCallId: string, name: string, args: Record<string, unknown>): Promise<void> {
+    // The call is already over — end() may still be waiting on an earlier
+    // handler with the voice AI connected. Don't run a new tool against a gone
+    // call, and don't let setState('tool-pending') below overwrite 'ending':
+    // that reopened end()'s guard, so the voice AI's 'disconnected' ended the
+    // call a second time (duplicate end-of-call writes and SMS).
+    if (this.state === 'ending' || this.state === 'ended' || this.state === 'error') {
+      logger.warn({ callId: this.opts.callId, toolCallId, name, state: this.state }, 'Ignoring a tool call that arrived after the call ended');
+      this.voiceAI.sendToolResult(toolCallId, { ok: false, error: 'call_ended' }, true);
+      return;
+    }
     this.setState('tool-pending');
     // Session-level watchdog independent of each tool's own TOOL_TIMEOUT_MS —
     // if a call has been tool-pending unreasonably long, something is wrong

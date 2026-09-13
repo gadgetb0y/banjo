@@ -67,4 +67,17 @@ describe('triggerOrchestration: a cancel racing the start of a run', () => {
     expect(createCallAttempt).not.toHaveBeenCalled();
     expect(CallSession).not.toHaveBeenCalled();
   });
+
+  it('claims a pending task only from pending, and does not place the call when another process claimed it first', async () => {
+    getTask.mockResolvedValue({ id: 'task-2', channel: 'phone', status: 'pending', contactId: 'contact-1', constraints: {} });
+    getContact.mockResolvedValue({ id: 'contact-1' });
+    transitionTask.mockResolvedValue(undefined); // the compare-and-set matched nothing
+
+    triggerOrchestration('task-2');
+    await vi.waitFor(() => expect(logger.info).toHaveBeenCalled());
+
+    expect(transitionTask).toHaveBeenCalledWith('task-2', 'checking_availability', undefined, { from: ['pending'] });
+    expect(createCallAttempt).not.toHaveBeenCalled();
+    expect(CallSession).not.toHaveBeenCalled();
+  });
 });

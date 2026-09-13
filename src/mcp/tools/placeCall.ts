@@ -30,7 +30,8 @@ export const placeCallInputSchema = z.object({
     .describe(
       `Place the call no earlier than this time instead of right away, as a local date-time WITHOUT a UTC offset ` +
         `(e.g. "2026-09-14T09:00:00"), interpreted in ${config.CALENDAR_TIMEZONE}. Omit to call immediately. ` +
-        `The task stays "pending" until then; a time already in the past calls immediately.`,
+        `The task stays "pending" until then. A time up to 5 minutes in the past calls immediately; anything older is ` +
+        `rejected as a likely mistake (wrong date or year) rather than dialing now.`,
     ),
   constraints: z
     .object({
@@ -72,6 +73,9 @@ export function parseScheduledFor(value: string): Date {
   return parsed;
 }
 
+/** How far in the past a scheduledFor may be and still call immediately — see placeCallHandler. */
+const SCHEDULED_FOR_PAST_GRACE_MS = 5 * 60 * 1000;
+
 function formatInCalendarTimezone(date: Date): string {
   return date.toLocaleString('en-US', { timeZone: config.CALENDAR_TIMEZONE, dateStyle: 'medium', timeStyle: 'short' });
 }
@@ -87,6 +91,14 @@ function formatInCalendarTimezone(date: Date): string {
 export async function placeCallHandler(input: z.infer<typeof placeCallInputSchema>): Promise<PlaceCallResult> {
   const constraints: TaskConstraints = input.constraints ?? {};
   const scheduledFor = input.scheduledFor ? parseScheduledFor(input.scheduledFor) : undefined;
+  // A time well in the past is almost always a mistake (the wrong year, or
+  // yesterday's date) — dialing it now could place a real call at the wrong
+  // hour. A few minutes late is just the request arriving slowly.
+  if (scheduledFor && scheduledFor.getTime() < Date.now() - SCHEDULED_FOR_PAST_GRACE_MS) {
+    throw new Error(
+      `scheduledFor "${input.scheduledFor}" is already in the past (${formatInCalendarTimezone(scheduledFor)} ${config.CALENDAR_TIMEZONE}) — check the date and year, or omit scheduledFor to call now`,
+    );
+  }
 
   const task = await createTask({
     contactId: input.contactId,
