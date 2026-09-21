@@ -83,4 +83,125 @@ describe('confirmAppointmentTool.handler', () => {
     expect(transitionTask).toHaveBeenCalledTimes(1);
     expect(transitionTask).toHaveBeenCalledWith('task-1', 'confirmed', expect.objectContaining({ calendarEventId: 'evt-1' }));
   });
+
+  it('records the time the CALENDAR actually holds, not the time we asked for', async () => {
+    // The idempotency key is derived from the call attempt, so a confirm that
+    // fails *after* Google created the event (timeout, dropped response) and
+    // is then retried at a renegotiated time gets the ORIGINAL event back from
+    // the guard. Recording the requested time here would leave Postgres saying
+    // 19:00 while the calendar holds 18:00 — and Postgres is meant to be the
+    // source of truth for whether an appointment was booked, and when.
+    const calendar: CalendarProvider = {
+      computeCandidateWindows: vi.fn(async () => []),
+      isFree: vi.fn(async () => true),
+      createEventIdempotent: vi.fn(async () => ({
+        eventId: 'evt-1',
+        confirmedStart: '2026-08-05T18:00:00.000Z',
+        confirmedEnd: '2026-08-05T18:30:00.000Z',
+      })),
+      deleteEvent: vi.fn(async () => {}),
+    };
+
+    // Asking for 15:00 local / 19:00Z and a 60-minute slot, but the calendar
+    // comes back holding the earlier 18:00Z / 30-minute event.
+    await confirmAppointmentTool.handler(
+      { confirmedStart: '2026-08-05T15:00:00', durationMinutes: 60 },
+      makeContext(calendar),
+    );
+
+    expect(transitionTask).toHaveBeenCalledWith(
+      'task-1',
+      'confirmed',
+      expect.objectContaining({
+        outcome: expect.objectContaining({
+          kind: 'confirmed',
+          start: '2026-08-05T18:00:00.000Z',
+          durationMinutes: 30,
+        }),
+      }),
+    );
+  });
+
+  it('gives the calendar event a short title instead of the raw task prompt', async () => {
+    // goalDescription is a prompt written for the model ("Book a dinner table
+    // for two at Luigi's. Any evening in the next five days works; ask what
+    // they have available..."), and it was going straight into the event
+    // summary — i.e. into Steve's actual calendar.
+    const createEventIdempotent = vi.fn(async () => ({
+      eventId: 'evt-1',
+      confirmedStart: '2026-08-05T18:00:00.000Z',
+      confirmedEnd: '2026-08-05T18:30:00.000Z',
+    }));
+    const calendar: CalendarProvider = {
+      computeCandidateWindows: vi.fn(async () => []),
+      isFree: vi.fn(async () => true),
+      createEventIdempotent,
+      deleteEvent: vi.fn(async () => {}),
+    };
+
+    await confirmAppointmentTool.handler(
+      { confirmedStart: '2026-08-05T14:00:00', durationMinutes: 30, summary: 'Dinner at Luigi\'s' },
+      makeContext(calendar),
+    );
+
+    expect(createEventIdempotent).toHaveBeenCalledWith(
+      expect.objectContaining({ summary: 'Dinner at Luigi\'s' }),
+    );
+  });
+
+  it('falls back to the first sentence of the goal description when the model omits a title', async () => {
+    const longGoal = {
+      ...task,
+      goalDescription:
+        "Book a dinner table for two at Luigi's. Any evening in the next five days works; ask what they have available and take the earliest that fits.",
+    } as Task;
+    const createEventIdempotent = vi.fn(async () => ({
+      eventId: 'evt-1',
+      confirmedStart: '2026-08-05T18:00:00.000Z',
+      confirmedEnd: '2026-08-05T18:30:00.000Z',
+    }));
+    const calendar: CalendarProvider = {
+      computeCandidateWindows: vi.fn(async () => []),
+      isFree: vi.fn(async () => true),
+      createEventIdempotent,
+      deleteEvent: vi.fn(async () => {}),
+    };
+
+    await confirmAppointmentTool.handler(
+      { confirmedStart: '2026-08-05T14:00:00', durationMinutes: 30 },
+      { ...makeContext(calendar), task: longGoal },
+    );
+
+    expect(createEventIdempotent).toHaveBeenCalledWith(
+      expect.objectContaining({ summary: "Book a dinner table for two at Luigi's" }),
+    );
+  });
+
+  it('truncates a fallback title that has no sentence break to keep it calendar-sized', async () => {
+    const ramblingGoal = {
+      ...task,
+      goalDescription: `Book something ${'very '.repeat(40)}long`,
+    } as Task;
+    const createEventIdempotent = vi.fn(async () => ({
+      eventId: 'evt-1',
+      confirmedStart: '2026-08-05T18:00:00.000Z',
+      confirmedEnd: '2026-08-05T18:30:00.000Z',
+    }));
+    const calendar: CalendarProvider = {
+      computeCandidateWindows: vi.fn(async () => []),
+      isFree: vi.fn(async () => true),
+      createEventIdempotent,
+      deleteEvent: vi.fn(async () => {}),
+    };
+
+    await confirmAppointmentTool.handler(
+      { confirmedStart: '2026-08-05T14:00:00', durationMinutes: 30 },
+      { ...makeContext(calendar), task: ramblingGoal },
+    );
+
+    // At most 80 characters, and visibly cut rather than silently clipped.
+    expect(createEventIdempotent).toHaveBeenCalledWith(
+      expect.objectContaining({ summary: expect.stringMatching(/^.{1,79}…$/s) }),
+    );
+  });
 });
