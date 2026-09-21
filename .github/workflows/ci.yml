@@ -59,9 +59,6 @@ jobs:
 
   audit:
     runs-on: ubuntu-latest
-    # Informational only: a blocking gate on transitive advisories would red-X
-    # every PR for reasons unrelated to it. Read it, don't let it block you.
-    continue-on-error: true
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -69,4 +66,19 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci
-      - run: npm audit --audit-level=high
+
+      # What actually ships: the runtime image installs with --omit=dev, so a
+      # devDependency advisory never reaches production. This one DOES gate.
+      - name: Audit production dependencies
+        run: npm audit --omit=dev --audit-level=high
+
+      # Everything else is reported, never blocking. Most advisories here are
+      # transitive dev tooling (the vitest/vite chain), and failing the check on
+      # those would put a red X on every PR for reasons unrelated to it.
+      - name: Audit all dependencies (informational)
+        if: always()
+        run: |
+          echo '### npm audit (all dependencies)' >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          npm audit 2>&1 | tail -40 >> "$GITHUB_STEP_SUMMARY" || true
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
