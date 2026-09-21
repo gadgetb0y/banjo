@@ -1,0 +1,33 @@
+name: Feature request
+description: Suggest something Banjo should do
+labels: [enhancement]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Please read [CONTRIBUTING.md](../blob/main/CONTRIBUTING.md)'s "What Banjo is not" first —
+        multi-tenancy, dashboards, analytics, booking pages and general voice-agent-platform
+        features are out of scope by design, and this saves us both the round trip.
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: What's the problem?
+      description: The situation you're in, not the solution you have in mind.
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: What would you like Banjo to do?
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: scope
+    attributes:
+      label: Scope check
+      options:
+        - label: I've read "What Banjo is not" and this isn't one of those.
+          required: true

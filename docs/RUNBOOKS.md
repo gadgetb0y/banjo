@@ -27,9 +27,9 @@ Rotate on any of:
    ```bash
    openssl rand -hex 32
    ```
-   Any sufficiently random string works — `MCP_API_KEY` has no format requirement beyond
-   non-empty (`src/config/index.ts`'s `z.string().min(1, ...)`), just needs enough entropy that
-   it can't be guessed/brute-forced.
+   Any sufficiently random string works — `MCP_API_KEY` has no format requirement beyond a
+   32-character minimum (`src/config/index.ts`'s `z.string().min(32, ...)`), it just needs enough
+   entropy that it can't be guessed/brute-forced. `openssl rand -hex 32` gives 64 characters.
 
 2. **Update `.env`.**
    Replace the `MCP_API_KEY=` line's value with the new key. Do this on whichever host actually

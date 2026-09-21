@@ -1,0 +1,72 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: banjo
+          POSTGRES_PASSWORD: banjo
+          # The DB-backed suites hardcode
+          # postgresql://banjo:banjo@localhost:5432/banjo_test in their own
+          # beforeAll, overriding the value vitest.config.ts injects — so the
+          # service has to answer to exactly that name on exactly that port.
+          POSTGRES_DB: banjo_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U banjo -d banjo_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+
+      - run: npm run typecheck
+
+      - run: npm run build
+
+      # Boot migrations only ever target DATABASE_URL, and `npm test` doesn't
+      # migrate — the test database is always set up explicitly, here as locally.
+      - name: Migrate test database
+        run: npm run db:migrate
+        env:
+          DATABASE_URL: postgresql://banjo:banjo@localhost:5432/banjo_test
+
+      # vitest.config.ts sets fileParallelism: false on purpose — the DB suites
+      # share one database and truncate the same tables. Don't add -threads here.
+      - run: npm test
+
+  audit:
+    runs-on: ubuntu-latest
+    # Informational only: a blocking gate on transitive advisories would red-X
+    # every PR for reasons unrelated to it. Read it, don't let it block you.
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm audit --audit-level=high
