@@ -53,40 +53,43 @@ Banjo needs three things before it can place a real call — get these first:
    | [Cloudflare Tunnel](https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/) (`cloudflared`) | Local dev with a stable hostname you control, free, tied to a domain you own in Cloudflare. |
    | Reverse-proxy through a real deployment (e.g. an ALB, as the `.env.example` default hints) | Once Banjo is running as a persistent service rather than on your laptop — see `docs/RUNBOOKS.md`. |
 
-Then:
+Then, to run the whole thing in Docker:
 
 ```bash
 cp .env.example .env   # fill in ASSISTANT_PRINCIPAL_NAME + everything from steps 1-3 above
+docker compose up      # Postgres + Banjo; migrations are applied on boot
+```
+
+Or to develop against it locally, with hot reload:
+
+```bash
+cp .env.example .env
 npm install
-docker compose up -d   # local Postgres
-npm run db:generate && npm run db:migrate
-npm run dev
+docker compose up -d postgres   # just the database
+npm run dev                     # applies migrations, then starts on $PORT
 ```
 
 ### Test database
 
 `npm test`'s DB-backed suites run against a separate `banjo_test` database on the same Postgres
-instance, not the `banjo` dev database above — create and migrate it once:
+instance, not the `banjo` dev database above. Compose creates it for you on first run
+(`scripts/init-test-db.sql`); it just needs migrating once:
 
 ```bash
-docker compose exec postgres createdb -U banjo banjo_test
 DATABASE_URL=postgresql://banjo:banjo@localhost:5432/banjo_test npm run db:migrate
 ```
 
-### Upgrading an existing database
+Boot-time migrations only ever touch the database in `DATABASE_URL`, so the test database is always
+migrated explicitly like this — never automatically.
 
-`drizzle/` is gitignored, so schema changes arrive without migration files. After pulling a change to any
-`src/**/schema.ts`, run `npm run db:generate && npm run db:migrate` against both `banjo` and `banjo_test`
-before restarting — until then, every query on the changed table fails with `column "..." does not exist`
-(for `tasks`, that includes the orchestration poller and `place_call` on every voice provider).
+### Schema changes
 
-If your local `drizzle/` history no longer matches the database, apply the change directly instead. For
-`tasks.scheduled_for` (added for scheduled calls):
+Migration files live in `drizzle/` and are committed, and Banjo applies any unapplied ones at
+startup (`RUN_MIGRATIONS_ON_BOOT`, on by default) — so pulling a schema change and restarting is
+enough. Only the `banjo_test` database needs the explicit `db:migrate` above.
 
-```bash
-docker compose exec postgres psql -U banjo -d banjo -c 'ALTER TABLE tasks ADD COLUMN IF NOT EXISTS scheduled_for timestamptz'
-docker compose exec postgres psql -U banjo -d banjo_test -c 'ALTER TABLE tasks ADD COLUMN IF NOT EXISTS scheduled_for timestamptz'
-```
+If you *author* a schema change, run `npm run db:generate` and commit the generated SQL alongside
+your `src/**/schema.ts` edit.
 
 ## Companion Claude Code skill
 

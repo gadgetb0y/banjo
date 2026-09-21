@@ -2,12 +2,31 @@
 // touches env vars — a bad deploy should be caught here, not discovered by
 // Steve mid-call.
 import { config } from './config/index.js';
+import { runMigrations } from './db/migrate.js';
 import { startGoogleContactsSyncPoller } from './googleContacts/sync.js';
 import { logger } from './lib/logger.js';
 import { startServer } from './server.js';
 import { startOrchestrationPoller } from './tasks/orchestrator.js';
 
 logger.info({ nodeEnv: config.NODE_ENV, voiceAiProvider: config.VOICE_AI_PROVIDER }, 'Starting ea');
+
+// PUBLIC_HOSTNAME is optional in the schema (tests and schema-only tooling
+// don't need it), but nothing involving a real call works without it: every
+// Twilio webhook URL and both Media Stream wss:// URLs interpolate it, and
+// src/server.ts reconstructs it to validate Twilio's request signature. Unset,
+// the process boots happily and then hands Twilio `https://undefined/...`.
+if (!config.PUBLIC_HOSTNAME) {
+  logger.warn(
+    'PUBLIC_HOSTNAME is not set — Twilio webhooks and media streams will point at "undefined" and every call will fail. See README Quickstart.',
+  );
+}
+
+// Before the server accepts a webhook or the poller touches `tasks`: a missed
+// migration otherwise surfaces as `column "..." does not exist` from inside the
+// orchestration poller, long after startup looked successful.
+if (config.RUN_MIGRATIONS_ON_BOOT) {
+  await runMigrations();
+}
 
 startServer();
 startOrchestrationPoller();

@@ -33,6 +33,19 @@ const envSchema = z
 
     DATABASE_URL: z.string().url(),
 
+    // Apply the committed drizzle/ migrations at startup (see src/db/migrate.ts).
+    // On by default so `docker compose up` on a fresh volume, and a plain
+    // `npm run dev` after pulling a schema change, both just work — the
+    // previous alternative was a README step people skipped, and a skipped
+    // migration surfaces as `column "..." does not exist` deep inside the
+    // orchestration poller rather than at boot. Set false when something
+    // upstream owns schema (a managed migration job, a read-only replica).
+    // Same z.enum(['true','false']) reasoning as LOG_TRANSCRIPTS below.
+    RUN_MIGRATIONS_ON_BOOT: z
+      .enum(['true', 'false'])
+      .default('true')
+      .transform((v) => v === 'true'),
+
     VOICE_AI_PROVIDER: z.enum(['openai', 'openai-live', 'gemini', 'elevenlabs']),
     OPENAI_API_KEY: z.string().optional(),
     OPENAI_REALTIME_MODEL: z.string().default('gpt-realtime'),

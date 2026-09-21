@@ -25,14 +25,15 @@ npm run db:generate        # drizzle-kit generate (runs build first)
 npm run db:migrate         # drizzle-kit migrate (runs build first)
 npm run db:studio          # drizzle-kit studio
 npm run test:call          # tsx scripts/manual-test-call.ts — places a real outbound call for manual testing
-docker compose up -d       # local Postgres (banjo/banjo/banjo on :5432)
+docker compose up          # Postgres + Banjo in Docker (migrations applied on boot)
+docker compose up -d postgres   # just Postgres (banjo/banjo/banjo on :5432), for `npm run dev`
 ```
 
 Env schema is Zod-validated at process start (`src/config/index.ts`, imported first in `src/index.ts`) — copy `.env.example` to `.env` and fill in credentials for whichever `VOICE_AI_PROVIDER`/telephony/notification vendor you're using; cross-field `.refine()` checks only require the vars matching the *selected* providers.
 
 Tests don't need a real `.env` — `vitest.config.ts` injects a full baseline of fake-but-valid env vars so provider/tool modules can be imported in isolation. `tests/config.test.ts` is the one place that deliberately overrides individual vars to exercise validation itself.
 
-`drizzle/` is gitignored, so schema changes ship without migration files — after changing any `schema.ts`, see README's "Upgrading an existing database".
+`drizzle/` is committed, and `runMigrations()` (`src/db/migrate.ts`) applies unapplied migrations at startup, gated on `RUN_MIGRATIONS_ON_BOOT` (default true). After changing any `schema.ts`, run `npm run db:generate` and commit the generated SQL with it. Boot migrations only touch `DATABASE_URL`, so `banjo_test` is always migrated explicitly — see README's "Test database".
 
 ## Architecture
 

@@ -1,0 +1,51 @@
+name: Bug report
+description: Something in Banjo doesn't work
+labels: [bug]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: What you expected, and what you got instead.
+    validations:
+      required: true
+
+  - type: textarea
+    id: repro
+    attributes:
+      label: Steps to reproduce
+    validations:
+      required: true
+
+  - type: dropdown
+    id: path
+    attributes:
+      label: Which path?
+      options:
+        - Outbound call
+        - Inbound call
+        - MCP server / Claude Code skill
+        - Setup, Docker or migrations
+        - Calendar or Contacts
+        - Other / not sure
+    validations:
+      required: true
+
+  - type: input
+    id: provider
+    attributes:
+      label: VOICE_AI_PROVIDER
+      description: openai, openai-live, gemini or elevenlabs. Only the OpenAI path carries live traffic today.
+      placeholder: openai
+
+  - type: input
+    id: version
+    attributes:
+      label: Version or commit
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs
+      description: Redact phone numbers, API keys and anything the other party said.
+      render: text
