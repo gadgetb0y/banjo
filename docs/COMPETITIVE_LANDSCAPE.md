@@ -20,6 +20,7 @@ not a reason to hold the release. See [Roadmap](#roadmap-voicetelephony-abstract
 
 | Project | Covers | Missing, vs. Banjo |
 | --- | --- | --- |
+| [`dograh`](https://github.com/dograh-hq/dograh) | **The primary comparable** (added 2026-09-21). Open-source self-hostable voice-AI platform; MCP-native, BYOK across LLM/STT/TTS, 7+ telephony providers, one-command Docker self-host, visual workflow builder, hosted cloud | Not an errand-runner: no task/negotiation state machine for booking on your behalf, no contacts with cross-channel preference, no direct calendar booking. Ahead of Banjo on packaging, provider breadth and adoption |
 | [`ai-dialer`](https://github.com/askjohngeorge/ai-dialer) | Outbound scheduling calls | All-in on VAPI.ai, no provider abstraction; self-disclosed demo, not production |
 | [`audiocall`](https://github.com/Iamsdt/audiocall) | Twilio + Gemini Live bridge (closest architectural analog) | No contacts, task/negotiation state machine, calendar, or MCP layer |
 | [`ai-calling-agent`](https://github.com/revolutionarybukhari/ai-calling-agent) | Call handling + STT/TTS | No booking, calendar, contacts, or negotiation |
@@ -115,10 +116,11 @@ pattern). Comparable in shape to the original inbound-calling feature (`src/inbo
 
 ## White space (lower confidence — worth leaning into, not yet confirmed as unclaimed)
 
-- **MCP-server bridge to an AI coding assistant** — no verified competing project exposes outbound calling as
-  an MCP tool. Most defensible differentiator found, but this is an absence-of-evidence finding from a
-  non-exhaustive search; worth a sharper, dedicated search on "MCP + outbound calling" before leaning on it in
-  public-facing copy.
+- ~~**MCP-server bridge to an AI coding assistant** — no verified competing project exposes outbound calling as
+  an MCP tool. Most defensible differentiator found~~ — **retracted 2026-09-21.** The caveat on this bullet
+  ("an absence-of-evidence finding from a non-exhaustive search; worth a sharper, dedicated search before
+  leaning on it in public-facing copy") turned out to be the operative part. Dograh is MCP-native in its own
+  repo tagline and ships a Claude Code setup plugin. Do not use MCP-native as a differentiator in public copy.
 - **Data-integrity model** (Postgres source of truth, server-generated idempotent confirmation keys, a
   self-healing state-machine poller) — no surveyed project's description mentions anything comparable, but this
   wasn't verified against their source, only their README-level descriptions.
@@ -129,7 +131,151 @@ pattern). Comparable in shape to the original inbound-calling feature (`src/inbo
 ## Caveats
 
 Several sources are vendor-comparison blogs with a possible commercial angle; this surveyed a sample of repos
-and blog comparisons, not an exhaustive census (a few of the most exciting-sounding "direct competitor"
-candidates — e.g. `dograh-hq/dograh`, `soulee-dev/AICaller` — were refuted on direct inspection). The space
+and blog comparisons, not an exhaustive census (`soulee-dev/AICaller` was refuted on direct inspection —
+`dograh-hq/dograh` was dismissed here too, and **that call was wrong**; see the
+[2026-09-21 correction](#2026-09-21-correction-dograh-is-the-primary-comparable)). The space
 moved fast through 2025–2026, so any framework-capability claim here has a shelf life of months. "Has the
 feature" was verified — not "the feature works well at scale," license compatibility, or community health.
+
+---
+
+# 2026-09-17 update: ElevenLabs Reception
+
+ElevenLabs announced [Reception](https://elevenlabs.io/blog/reception) (reception.ai) on **2026-09-16** — a
+packaged vertical SaaS AI receptionist built on ElevenAgents, aimed at small businesses (home services,
+salons, clinics, real estate, property management). This section records what it actually ships and where it
+does and doesn't touch Banjo.
+
+Sources: [product page](https://elevenlabs.io/reception), [launch post](https://elevenlabs.io/blog/reception),
+[docs overview](https://elevenlabs.io/docs/reception-ai/overview),
+[receptionist capabilities](https://elevenlabs.io/docs/reception-ai/receptionist/overview),
+[scheduling](https://elevenlabs.io/docs/reception-ai/scheduling/overview),
+[inbox](https://elevenlabs.io/docs/reception-ai/features/inbox),
+[knowledge base](https://elevenlabs.io/docs/reception-ai/knowledge-base/overview).
+
+## What Reception ships
+
+| Area | Capability |
+| --- | --- |
+| Direction | **Inbound only.** No outbound calling or automated callbacks appear anywhere in the docs. |
+| Onboarding | Point it at your website; it scrapes services, hours, team and location into a knowledge base. Claimed sub-5-minute setup. |
+| Calls | 24/7 answering, personalized greetings, 70+ languages with automatic mid-call language detection, 2,000+ voices |
+| Booking | Four-way resource model — services x staff x assets (rooms/equipment) x availability. Multi-location with per-location hours and staff. Time-off blocking. Google Calendar sync. |
+| Channels | Phone + web chat + public self-serve booking page, all backed by one agent |
+| Transfers | Up to 10 intent-routed transfer rules per receptionist |
+| Messages | Takes messages with priority levels; **texts an SMS confirmation to the caller** |
+| Inbox | Every call stored with transcript, metadata, outcome summary; voicemails; and *knowledge gaps* (questions the agent couldn't answer) |
+| CRM | Auto-built client profiles with interaction history |
+| Analytics | Performance and revenue tracking |
+| Integrations | Google Calendar, Zapier (all paid tiers), webhooks (Plus/Premium) |
+| Scale | Multiple receptionists per account on higher tiers (per department, location or language) |
+| Pricing | $29 / 75 min / 1 concurrent call; $79 / 275 min / 3; $199 / 1,000 min / 10. Overage $0.45 -> $0.30/min. |
+| Stated gaps | No HIPAA compliance. No outbound. No self-hosting or multi-tenant deployment. |
+
+## The framing: these are near-inverse products
+
+Reception answers calls *for a business*. Banjo places calls *for a person*. Reception has no outbound
+capability at all, which means Banjo's entire primary path (`place_call` -> negotiate -> confirm -> notify,
+plus AMD-driven voicemail, DTMF, and scheduled calls) has **zero overlap** with it.
+
+The overlap is exactly one module: `src/inbound/`, still gated off behind `INBOUND_BOOKING_ENABLED`. That's
+where this analysis has teeth, and everything below is scoped to it.
+
+**Strategic stance: not a race.** Banjo isn't trying to beat Reception on features or price — a funded vendor
+will always win a packaged-SMB-SaaS feature race. The goal is to be the version companies and individuals can
+read, self-host, and fork into their own. Capability gaps matter only where they stop someone from building
+their own Reception on top of Banjo; they don't matter as scorecard entries.
+
+## Where Reception is ahead (all of it inbound)
+
+| Capability | Reception | Banjo | Notes |
+| --- | --- | --- | --- |
+| Knowledge base | Website-scraped, automatic | none | `src/inbound/systemPrompt.ts` is a static prompt. No business-facts store. |
+| Booking resource model | services x staff x assets x locations | single calendar, single duration | `INBOUND_DEFAULT_DURATION_MINUTES` + one `GOOGLE_CALENDAR_ID`. |
+| Business hours | per-location, per-staff, time-off | one global window | `src/inbound/businessHours.ts` is a single rectangle — no holidays or exceptions. |
+| Call transfer | 10 intent-based rules | none | Banjo's only escape hatch is `flag_for_owner_and_end_call` — hang up and notify. |
+| Caller-facing SMS | confirmation texted to caller | none | Banjo's SMS is one-way, owner-facing only (`NOTIFY_TO_PHONE_NUMBER`). See the two-way SMS roadmap item above. |
+| Transcripts / recordings | stored, searchable inbox | none | `LOG_TRANSCRIPTS` writes to logs only. No transcript column in `tasks`, `call_attempts` or `inbound_calls`. |
+| Knowledge-gap capture | logs unanswered questions for review | none | Cheap to copy and genuinely useful. |
+| Language auto-detect | 70+, switches mid-call | provider default, unconfigured | |
+| Web chat + booking page | yes | none | Banjo is phone-only. |
+| Analytics / CRM history | dashboard, revenue tracking | none | Banjo has no UI; `listRecentTasks` over MCP is the entire reporting surface. |
+| Multi-agent / multi-tenant | multiple receptionists | single-tenant | Deliberate design choice, not a defect. |
+
+## Where Banjo is ahead
+
+1. **Outbound calling, full stop.** The negotiation state machine, AMD-driven voicemail, DTMF against IVRs,
+   and scheduled calls with compare-and-set claiming. Not a feature flag away for Reception — a different
+   product.
+2. **MCP surface.** Nine tools exposed to an AI coding assistant. Reception offers Zapier and webhooks;
+   nothing agent-native.
+3. **Vendor-swappable voice AI.** Four adapters behind one interface; Reception is ElevenLabs-locked by
+   construction.
+4. **Data-integrity model.** Postgres as source of truth, server-generated idempotency keys from
+   `callAttemptId`, `transitionTask` as sole status writer with terminal-status refusal, self-healing poller.
+5. **Timezone discipline.** `zonedTimeToUtcIso()` enforced on every calendar-write path.
+6. **Self-hosting and data ownership.** Your Twilio, your calendar, your Postgres, MIT-licensed. Reception has
+   no HIPAA story; a self-hosted instance makes that a conversation you control.
+7. **Cross-channel contact routing.** `contacts.preferredChannel` persisting the online-vs-phone decision
+   across the skill and the call path.
+
+## What's worth taking
+
+Three cheap, high-leverage items, all landing in `src/inbound/`, none touching `callSession.ts`:
+
+1. **Persist transcripts + outcome summaries.** Every provider adapter already emits `transcript` events that
+   currently go only to the logger. A table keyed to `call_attempts`/`inbound_calls` is a schema change plus a
+   write, and it unblocks everything else here. Highest value per line of code in the repo today.
+2. **Knowledge-gap logging.** When the inbound agent can't answer, record the question rather than only
+   flagging the owner. Nearly free given #1.
+3. **Caller-facing SMS confirmation.** A deliberate narrowing of the two-way-SMS roadmap item above: one-way
+   "you're booked for X" to the *caller* after `book_appointment` needs no inbound webhook, no text-session
+   driver, and no message-log schema — roughly 10% of that item's cost for most of its perceived value.
+
+Explicitly **not** chasing: the services/staff/assets resource model and the analytics dashboard. Both are
+SMB-business features. Banjo is a single-person assistant; building a staff scheduler into it means chasing
+Reception into a market it has already packaged and priced for. If a forker needs that, the right answer is
+that the seams let them build it — not that Banjo ships it.
+
+## Pricing note
+
+$29/month for 75 minutes resets the floor of this category. It doesn't threaten Banjo's outbound path, but it
+does mean the inbound booking line has to justify itself on ownership and integration (your data, your
+calendar, MCP-native, agent-controllable) rather than on capability or cost — at 75 min/month, self-hosting is
+not obviously cheaper once realtime audio tokens are counted alongside Twilio minutes.
+
+---
+
+# 2026-09-21 correction: Dograh is the primary comparable
+
+The 2026-09-05 pass listed [`dograh-hq/dograh`](https://github.com/dograh-hq/dograh) among "exciting-sounding
+direct competitor candidates" that "were refuted on direct inspection." **That was wrong.** Verified live via
+the GitHub API on 2026-09-21: 5,692 stars, 1,423 forks, BSD-2-Clause, pushed that day. Its own repo
+description reads "Open source voice AI platform. Self-hosted alternative to Vapi and Retell. On Prem, BYOK
+across Speech to Speech or LLM/STT/TTS, with a visual workflow builder, MCP native and telephony support."
+It was #1 Product of the Day, Week and Month on Product Hunt, self-hosts via a single `curl` + start script,
+and ships an official Claude Code plugin so a coding agent can install it.
+
+## What this changes
+
+- **"MCP-native" is not a differentiator.** Retracted above in [White space](#white-space-lower-confidence--worth-leaning-into-not-yet-confirmed-as-unclaimed).
+  Dograh is MCP-native and better packaged. Do not put it in public-facing copy as a wedge.
+- **"Open-source self-hostable vendor-swappable voice AI" is taken**, by a project with a year's head start,
+  a hosted-cloud revenue line, and a deployment story Banjo does not currently match.
+- **The Verdict's five-layer claim still holds, but for a narrower reason than stated.** Dograh has the
+  provider abstractions and the MCP surface; it does not have the task/negotiation state machine, contacts
+  with cross-channel preference, or direct calendar booking. The differentiator is the *errand-running
+  assistant*, not the voice/telephony plumbing.
+- **Positioning implication:** Banjo is an AI assistant that makes your phone calls for you, that you run
+  yourself — an errand-runner, not a receptionist and not a voice-agent platform. Reception answers calls for
+  a business; Dograh is a platform for building business voice agents; Banjo places calls for a person.
+
+Full sourced analysis, including the ranked fork-blockers, per-minute cost table, the TCPA/AI-disclosure
+exposure on the outbound path, and an explicit list of refuted and unverified claims:
+[Banjo vs Reception — Strategy](https://claude.ai/code/artifact/a050344f-b407-4496-8531-56b86885a117).
+
+**Method note.** The deep-research harness's adversarial verification stage did not complete (session limits);
+3 claims reached a full 3-0 vote, 4 were refuted, 18 were extracted but never voted on. The decisive sources
+above were opened and verified directly instead. One refuted item to avoid repeating anywhere: the
+"16% of failed projects had contributing guidelines vs 72% of top projects / 27% vs 68% for CI" statistic did
+not survive verification against its cited source.
