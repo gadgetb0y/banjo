@@ -5,5 +5,6 @@ dist/
 *.log
 .DS_Store
 coverage/
-drizzle/
 .remember/
+.playwright-mcp/
+.claude/worktrees/
