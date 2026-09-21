@@ -2,27 +2,83 @@
 
 # Banjo
 
-An open-source AI executive assistant that places real outbound phone calls on your behalf — books
-appointments, makes reservations, delivers messages — using a vendor-agnostic real-time Voice AI (OpenAI
-Realtime, Gemini Live, or ElevenLabs Conversational AI) over Twilio. It can also answer inbound calls to your
-own number for people who want to book, check, or reschedule an appointment with you directly, recognizing
-callers who are already in your Google Contacts to personalize the greeting for family/friends/frequent
-callers. Outbound `find_contact` falls back to the same Google Contacts cache when a name isn't already
-saved locally, auto-provisioning it into your contact directory.
+**Banjo makes the phone calls you've been putting off.** Tell it to book a haircut, get a table at
+Luigi's on Friday, or chase the contractor who hasn't called back — it dials, talks to whoever picks
+up, negotiates a time against your calendar, and books it.
 
-**Why this exists:** closed SaaS "AI assistant that calls people for you" products exist — this is the
-version you can actually read, run yourself, and change. Single-tenant by design: you run your own instance
-against your own Twilio number, your own calendar, your own voice AI credentials. Fork it and make it yours.
+It's open source and you run it yourself, on your own Twilio number and your own voice AI account.
+Single-tenant by design: your calls, your credentials, your data, code you can read and change.
 
-See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for the full design, [`docs/RUNBOOKS.md`](docs/RUNBOOKS.md)
-for operational procedures, and [`docs/COMPETITIVE_LANDSCAPE.md`](docs/COMPETITIVE_LANDSCAPE.md) for how Banjo
-compares to other open-source projects in this space and the roadmap for its voice/telephony abstraction.
+Banjo is the phone half of a pair. The other half is a Claude Code skill
+([`skills/schedule-appointment/`](skills/schedule-appointment/SKILL.md)) that decides whether an errand can
+be done online — and only picks up the phone when it can't.
+
+It also answers your number, if you want it to: an optional inbound line where people can book,
+check or reschedule with you, recognizing callers already in your Google Contacts.
+
+See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for the full design, [`docs/ROADMAP.md`](docs/ROADMAP.md)
+for what's coming next, [`docs/RUNBOOKS.md`](docs/RUNBOOKS.md) for operational procedures, and
+[`docs/COMPETITIVE_LANDSCAPE.md`](docs/COMPETITIVE_LANDSCAPE.md) for how it compares to other
+open-source projects in this space.
 
 [![Banjo runtime architecture](docs/architecture-diagram.png)](docs/ARCHITECTURE.md)
 
+## Known limitations
+
+Banjo places real calls and books real appointments, and has done so reliably. It is also a young
+project with one maintainer. Things worth knowing before you build on it:
+
+- **One voice provider is actually proven.** OpenAI Realtime is the only adapter carrying live
+  traffic. `openai-live` (GPT-Live) has been tested on real calls but isn't the default. **Gemini
+  Live and ElevenLabs are scaffolded and unverified** — Gemini additionally emits no caller-side
+  transcripts at all.
+- **Calls aren't saved.** Transcripts go to the log (off by default) and are then dropped; there's
+  no transcript storage, no recording, and no way to review what was said after the fact.
+  ([#6](https://github.com/shatch/banjo/issues/6))
+- **No call transfer.** When a call needs a human, Banjo hangs up and notifies you rather than
+  handing the call over. ([#7](https://github.com/shatch/banjo/issues/7))
+- **AI disclosure is prompt-level only.** Banjo tells the model to say who it's calling for and not
+  to claim it's human if asked, but there's no enforced disclosure line and no recording-consent
+  announcement. **If you're in a jurisdiction with AI-disclosure or two-party-consent rules
+  (TCPA/FCC, California AB 2905), that's on you today.**
+  ([#8](https://github.com/shatch/banjo/issues/8))
+- **Caller phone numbers are logged unredacted**, and there's no log redaction config.
+  ([#8](https://github.com/shatch/banjo/issues/8))
+- **One call at a time.** The inbound line declines anything arriving while another call is live.
+- **It needs a publicly reachable hostname**, because Twilio dials back into it over HTTPS and a
+  WebSocket. See the Quickstart, and
+  [`docs/spikes/2026-09-21-outbound-registration-worker.md`](docs/spikes/2026-09-21-outbound-registration-worker.md)
+  for why this is hard to remove.
+- **Single-tenant, permanently.** One instance serves one person. See
+  [`CONTRIBUTING.md`](CONTRIBUTING.md) for what else Banjo deliberately isn't.
+
+## What a call costs
+
+You pay vendors directly. Per-unit prices, checked 2026-09-21:
+
+| What | Price | Source |
+| --- | --- | --- |
+| Twilio outbound voice, US local number | $0.0140 / min | [Twilio voice pricing](https://www.twilio.com/en-us/voice/pricing/us) |
+| Twilio inbound voice, US local number | $0.0085 / min | same |
+| Twilio US local phone number | $1.15 / month | same |
+| OpenAI `gpt-realtime` audio input | $32.00 / 1M tokens | [OpenAI API pricing](https://developers.openai.com/api/docs/pricing) |
+| OpenAI `gpt-realtime` audio output | $64.00 / 1M tokens | same |
+| OpenAI `gpt-4o-mini-transcribe` (caller-side transcription) | $1.25 in / $5.00 out per 1M tokens | same |
+| Twilio SMS notification, if enabled | per-message, US | [Twilio SMS pricing](https://www.twilio.com/en-us/sms/pricing/us) |
+
+Translating realtime audio tokens into a per-minute figure is unreliable — input grows with
+conversation length, silence still bills, and how much the model talks varies per call. **Measured
+across real calls, all-in vendor spend has run roughly $0.11–$0.17 per minute**, dominated by voice
+AI rather than telephony. A 3-minute booking call is somewhere around $0.35–$0.50.
+
+Two honest notes. Pick `gpt-realtime-mini` and audio costs drop by about two thirds, at some
+quality cost. And don't run Banjo to save money against a SaaS subscription — at these rates you'd
+need a lot of calls, and the saving won't pay for an hour of your attention. Run it because it's
+yours.
+
 ## Quickstart
 
-Banjo needs three things before it can place a real call — get these first:
+Banjo needs four things before it can place a real call — get these first:
 
 1. **A Twilio account and phone number.** Sign up at [twilio.com](https://www.twilio.com), buy a phone
    number capable of voice calls, and note your Account SID, Auth Token, and the number itself.
@@ -145,6 +201,12 @@ skills/
   schedule-appointment/  companion Claude Code skill — decides online vs. phone, drives online
                           booking via browser automation, calls into src/mcp/ for the phone path
 ```
+
+## Contributing
+
+[`CONTRIBUTING.md`](CONTRIBUTING.md) opens with what Banjo deliberately isn't — worth two minutes
+before you write anything. Security issues go through [`SECURITY.md`](SECURITY.md), privately, not
+the issue tracker.
 
 ## License
 
