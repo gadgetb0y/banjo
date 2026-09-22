@@ -9,6 +9,7 @@ import { pressDigitsTool } from '../telephony/dtmf.js';
 import type { TelephonyProvider } from '../telephony/providers/types.js';
 import { callTools, endConversationCallTool } from '../voice/tools/callTools.js';
 import type { VoiceTool } from '../voice/tools/defineVoiceTool.js';
+import { unregisterLiveCall } from './liveCalls.js';
 import { getTask, isTerminalStatus, transitionTask, updateCallAttempt } from './service.js';
 import type { CallAttempt, Task } from './schema.js';
 
@@ -116,10 +117,14 @@ export function buildOutboundCallSessionOptions(params: {
           await updateCallAttempt(callAttempt.id, { answeredBy: patch.answeredBy });
           break;
         case 'ended':
+          // The call is genuinely over here — not when start() returned. See
+          // the registerLiveCall comment in orchestrator.ts.
+          unregisterLiveCall(task.id);
           await updateCallAttempt(callAttempt.id, { status: 'ended', endedAt: new Date() });
           await failTaskIfStillNonTerminal(patch.reason);
           break;
         case 'failed':
+          unregisterLiveCall(task.id);
           await updateCallAttempt(callAttempt.id, { status: 'error', errorDetail: patch.reason, endedAt: new Date() });
           break;
         default: {
@@ -133,6 +138,7 @@ export function buildOutboundCallSessionOptions(params: {
     },
 
     async onFailure(reason: string) {
+      unregisterLiveCall(task.id);
       await failTaskIfStillNonTerminal(reason);
     },
 
