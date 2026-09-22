@@ -148,10 +148,26 @@ export const checkMyAvailabilityTool: VoiceTool<{
   },
 });
 
+const MS_PER_MINUTE = 60_000;
+const CALENDAR_TITLE_MAX_CHARS = 80;
+
+/**
+ * Fallback calendar title when the model doesn't supply one: the first
+ * sentence of the task's goal description, which is written as an instruction
+ * to the model rather than as something a human wants to read in their week.
+ */
+function calendarTitleFrom(goalDescription: string): string {
+  const firstSentence = goalDescription.trim().split(/(?<=\.)\s+/)[0] ?? goalDescription;
+  const trimmed = firstSentence.replace(/\.$/, '').trim();
+  if (trimmed.length <= CALENDAR_TITLE_MAX_CHARS) return trimmed;
+  return `${trimmed.slice(0, CALENDAR_TITLE_MAX_CHARS - 1).trimEnd()}…`;
+}
+
 export const confirmAppointmentTool: VoiceTool<{
   confirmedStart: string;
   durationMinutes: number;
   details?: string;
+  summary?: string;
 }> = defineVoiceTool({
   name: 'confirm_appointment',
   description:
@@ -163,6 +179,12 @@ export const confirmAppointmentTool: VoiceTool<{
         `The agreed appointment start time, as a local date-time WITHOUT a UTC offset (e.g. "2026-08-05T14:00:00") — express it in ${config.CALENDAR_TIMEZONE} local time, do not convert to UTC yourself.`,
       ),
     durationMinutes: z.number().int().positive().describe('The agreed appointment duration, in minutes.'),
+    summary: z
+      .string()
+      .optional()
+      .describe(
+        `A short calendar title for the appointment, as ${config.ASSISTANT_PRINCIPAL_NAME} should see it in their calendar — e.g. "Dinner at Luigi's" or "Haircut with Clauda". A few words, not a sentence.`,
+      ),
     details: z.string().optional().describe('Any additional details worth recording (location, contact name, notes).'),
   }),
   handler: async (input, ctx) => {
@@ -188,14 +210,30 @@ export const confirmAppointmentTool: VoiceTool<{
         idempotencyKey,
         start: startUtcIso,
         durationMinutes: input.durationMinutes,
-        summary: ctx.task.goalDescription,
+        // goalDescription is a prompt written for the model ("Book a dinner
+        // table for two at Luigi's. Any evening in the next five days works;
+        // ask what they have available...") and used to go straight into the
+        // event summary — i.e. into Steve's actual calendar.
+        summary: input.summary?.trim() || calendarTitleFrom(ctx.task.goalDescription),
         description: input.details,
       });
+
+      // What the CALENDAR holds, not what we asked for. The idempotency key is
+      // derived from the call attempt, so a confirm that fails *after* Google
+      // created the event (timeout, dropped response) and is then retried at a
+      // renegotiated time gets the ORIGINAL event back from the guard. Recording
+      // the requested time here would leave Postgres claiming a time the
+      // calendar doesn't hold — and Postgres is the source of truth for whether
+      // an appointment was booked, and when.
+      const confirmedStartIso = new Date(result.confirmedStart).toISOString();
+      const confirmedDurationMinutes = Math.round(
+        (Date.parse(result.confirmedEnd) - Date.parse(result.confirmedStart)) / MS_PER_MINUTE,
+      );
       const recorded = await transitionTask(ctx.task.id, 'confirmed', {
         outcome: {
           kind: 'confirmed',
-          start: startUtcIso,
-          durationMinutes: input.durationMinutes,
+          start: confirmedStartIso,
+          durationMinutes: confirmedDurationMinutes,
           details: input.details,
         },
         calendarEventId: result.eventId,
