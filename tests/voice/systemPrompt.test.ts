@@ -96,3 +96,22 @@ describe('buildFrontendSystemPromptGuidance (voice layer of a split provider, e.
     }
   });
 });
+
+describe('keeping internal mechanics off the call', () => {
+  // On a live call (2026-09-22) the model narrated its own plumbing at the
+  // callee: "since six o'clock might not match the pre-approved windows, I'll
+  // quickly check Steve's availability" — she has no idea Banjo has windows,
+  // and six o'clock was inside the window anyway.
+  it('tells the model not to expose its own scheduling machinery, in both directions', () => {
+    for (const direction of ['outbound', 'inbound'] as const) {
+      const prompt = buildBaseSystemPromptGuidance(direction);
+      expect(prompt).toContain('Never describe your own mechanics');
+    }
+  });
+
+  it('carries that guidance into the voice layer, where the talking happens', () => {
+    // A split provider runs the frontend prompt for speech — guidance that
+    // only lands in the backend prompt would not reach the words spoken.
+    expect(buildFrontendSystemPromptGuidance('outbound')).toContain('Never describe your own mechanics');
+  });
+});

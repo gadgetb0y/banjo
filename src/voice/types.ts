@@ -37,6 +37,16 @@ export interface NormalizedToolCall {
   id: string;
   name: string;
   arguments: Record<string, unknown>;
+  /**
+   * The vendor's raw arguments payload, set ONLY when the adapter could not
+   * parse it (a truncated JSON string, most often). `arguments` is then empty
+   * — which is otherwise indistinguishable from a deliberate no-argument call
+   * — so CallSession uses this to tell the model its call was cut off and
+   * should be sent again, rather than failing it as invalid input. A real
+   * call once hit this: the model never retried, and went on to assert an
+   * availability answer it had never actually checked.
+   */
+  unparsedArguments?: string;
   /** Kept for debugging/logging only — never branch on this outside the adapter. */
   rawVendorEvent?: unknown;
 }
