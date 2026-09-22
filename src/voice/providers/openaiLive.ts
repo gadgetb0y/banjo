@@ -699,12 +699,17 @@ export class OpenAILiveProvider implements VoiceAIProvider {
     this.emittedCallIds.add(callId);
     this.noteResponseActivity();
     let args: Record<string, unknown> = {};
+    let unparsedArguments: string | undefined;
     try {
       args = JSON.parse(argsStr);
     } catch (err) {
+      // Deliberately NOT swallowed into `args = {}`: an empty object is a
+      // legitimate call shape, so passing one on here loses the difference
+      // between "the model sent no arguments" and "the message was cut off".
       log.warn({ err, argsStr, callId }, 'failed to parse function_call arguments as JSON');
+      unparsedArguments = argsStr;
     }
-    const call: NormalizedToolCall = { id: callId, name, arguments: args, rawVendorEvent: raw };
+    const call: NormalizedToolCall = { id: callId, name, arguments: args, unparsedArguments, rawVendorEvent: raw };
     this.emitEvent({ type: 'tool_call', call });
   }
 }

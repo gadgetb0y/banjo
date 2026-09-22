@@ -912,6 +912,46 @@ describe('CallSession: silence watchdog — the model going quiet after a user t
     }
   });
 
+  it('tells the model its arguments were malformed, rather than invalid, when the vendor payload did not parse', async () => {
+    // A truncated arguments string arrives as `arguments: {}` plus
+    // `unparsedArguments` — without the distinction, a cut-off message looks
+    // exactly like a deliberate no-argument call, and the model gets told its
+    // input was invalid rather than that it should send the call again.
+    const telephony = makeFakeTelephony();
+    const options = makeFakeCallSessionOptions(telephony.provider);
+    const handler = vi.fn(async () => ({ ok: true }));
+    options.tools = [
+      {
+        name: 'check_my_availability',
+        description: 'test-only availability tool',
+        schema: z.object({ date: z.string(), time: z.string(), durationMinutes: z.number() }),
+        handler,
+      },
+    ];
+    const session = new CallSession(options);
+    await session.start();
+
+    voiceAIEmitter.emit('event', {
+      type: 'tool_call',
+      call: {
+        id: 'call-1',
+        name: 'check_my_availability',
+        arguments: {},
+        unparsedArguments: '{"date":"2026-09-22","time":"6:00pm',
+      },
+    } satisfies VoiceAIEvent);
+
+    await vi.waitFor(() =>
+      expect(fakeVoiceAI.sendToolResult).toHaveBeenCalledWith(
+        'call-1',
+        expect.objectContaining({ ok: false, error: 'malformed_arguments' }),
+        true,
+      ),
+    );
+    // The handler must not run — we have no idea what was actually asked for.
+    expect(handler).not.toHaveBeenCalled();
+  });
+
   it('does not nudge if the model responds via a tool_call rather than audio', async () => {
     vi.useFakeTimers();
     try {
