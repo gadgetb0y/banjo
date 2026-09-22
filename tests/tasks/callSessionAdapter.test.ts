@@ -3,6 +3,7 @@ import type { CalendarProvider } from '../../src/calendar/types.js';
 import type { Contact } from '../../src/contacts/schema.js';
 import type { CallAttempt, Task } from '../../src/tasks/schema.js';
 import type { TelephonyProvider } from '../../src/telephony/providers/types.js';
+import { getLiveCall, listLiveCalls, registerLiveCall, unregisterLiveCall } from '../../src/tasks/liveCalls.js';
 
 // buildOutboundCallSessionOptions's onStatusChange/onFailure call through to
 // tasks/service.js (getTask/transitionTask/updateCallAttempt) — stub the
@@ -151,5 +152,44 @@ describe('buildOutboundCallSessionOptions', () => {
     const ctx = await options.buildToolContext(123, report);
     expect(ctx.verbatimDelivery).toBe(report);
     expect(ctx.estimatedAudioDoneAt).toBe(123);
+  });
+});
+
+describe('clearing the live-call registration when a call really ends', () => {
+  // The registration has to outlive CallSession.start(), which returns as soon
+  // as the call is set up — so the adapter's end-of-call signals are what
+  // clear it. Each one, because a call reaches exactly one of them.
+  function optionsForLiveTask() {
+    registerLiveCall({ taskId: 'task-1', callAttemptId: 'call-attempt-1', session: { stop: vi.fn() } });
+    return buildOutboundCallSessionOptions({
+      task: fakeTask,
+      callAttempt: fakeCallAttempt,
+      contact: fakeContact,
+      telephony: fakeTelephony,
+      calendar: fakeCalendar,
+      systemPrompt: 'irrelevant for this test',
+    });
+  }
+
+  beforeEach(() => {
+    for (const c of listLiveCalls()) unregisterLiveCall(c.taskId);
+  });
+
+  it("clears it when the call ends normally", async () => {
+    const options = optionsForLiveTask();
+    await options.onStatusChange({ kind: 'ended', reason: 'callee hung up' });
+    expect(getLiveCall('task-1')).toBeUndefined();
+  });
+
+  it('clears it when the call ends in a status failure', async () => {
+    const options = optionsForLiveTask();
+    await options.onStatusChange({ kind: 'failed', reason: 'telephony blew up' });
+    expect(getLiveCall('task-1')).toBeUndefined();
+  });
+
+  it('clears it when the session reports a failure', async () => {
+    const options = optionsForLiveTask();
+    await options.onFailure('voice ai died');
+    expect(getLiveCall('task-1')).toBeUndefined();
   });
 });

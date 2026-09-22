@@ -93,13 +93,24 @@ async function runTask(taskId: string): Promise<void> {
     buildOutboundCallSessionOptions({ task, callAttempt, contact, telephony, calendar, systemPrompt, frontendSystemPrompt }),
   );
   // Registered for as long as the call runs: stop_call needs a handle on it,
-  // and the stale-call sweep below uses membership here to tell a live call
-  // apart from one whose process died mid-conversation.
+  // and the stale-call sweep uses membership here to tell a live call apart
+  // from one whose process died mid-conversation.
+  //
+  // Deliberately NOT unregistered when start() returns. start() resolves once
+  // the call is SET UP — originated, voice AI connected — and the conversation
+  // then runs on event handlers for however long it lasts. Clearing the entry
+  // here (the first cut did, in a `finally`) meant it vanished the moment the
+  // phone began ringing, so stop_call could never find a live call: caught on a
+  // real call that had been answered and was still reported as unreachable.
+  // The adapter clears it on the real end-of-call signals instead.
   registerLiveCall({ taskId: task.id, callAttemptId: callAttempt.id, session });
   try {
     await session.start();
-  } finally {
+  } catch (err) {
+    // start() threw outright, so no end-of-call signal will ever fire for this
+    // session and nothing else would ever clear it.
     unregisterLiveCall(task.id);
+    throw err;
   }
 }
 
