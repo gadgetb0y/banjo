@@ -96,3 +96,18 @@ describe('buildFrontendSystemPromptGuidance (voice layer of a split provider, e.
     }
   });
 });
+describe('confirming only on explicit agreement', () => {
+  // A live call (2026-09-22) fired confirm_appointment while the other party
+  // was still negotiating, off the back of its own read-back rather than
+  // anything they had actually said.
+  it('tells the model not to confirm until the other party has actually agreed', () => {
+    const prompt = buildBaseSystemPromptGuidance('outbound');
+    expect(prompt).toContain('Do not confirm anything the other party has not explicitly agreed to');
+  });
+
+  it('carries that guidance into the voice layer', () => {
+    expect(buildFrontendSystemPromptGuidance('outbound')).toContain(
+      'Do not confirm anything the other party has not explicitly agreed to',
+    );
+  });
+});
