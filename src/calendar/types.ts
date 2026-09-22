@@ -54,6 +54,14 @@ export interface CalendarProvider {
   computeCandidateWindows(input: CheckAvailabilityInput): Promise<TimeWindow[]>;
   isFree(input: IsFreeInput): Promise<boolean>;
   createEventIdempotent(input: CreateEventInput): Promise<CreateEventResult>;
+  /**
+   * Finds an event previously written under `idempotencyKey`, or undefined if
+   * there is none. Used by the stale-call sweep to tell "we booked something
+   * and then lost the call" apart from "nothing happened" — createEventIdempotent
+   * already does this lookup internally, but a caller that must NOT create
+   * anything needs it on its own.
+   */
+  findEventByIdempotencyKey(idempotencyKey: string): Promise<CreateEventResult | undefined>;
   /** Deletes a calendar event outright. Used by inbound's reschedule_booking (delete-then-recreate) — see src/inbound/tools.ts. */
   deleteEvent(eventId: string): Promise<void>;
 }

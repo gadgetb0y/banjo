@@ -3,9 +3,10 @@ import { getContact } from '../contacts/service.js';
 import { logger } from '../lib/logger.js';
 import { CallSession } from '../session/callSession.js';
 import { createTelephonyProvider } from '../telephony/factory.js';
-import { buildOutboundCallSessionOptions } from './callSessionAdapter.js';
+import { buildOutboundCallSessionOptions, notifyTaskOutcome } from './callSessionAdapter.js';
 import { buildCallFrontendPrompt, buildCallSystemPrompt } from './promptBuilder.js';
-import { createCallAttempt, getTask, isTaskDue, listNonTerminalTasks, transitionTask } from './service.js';
+import { getLiveCall, registerLiveCall, unregisterLiveCall } from './liveCalls.js';
+import { createCallAttempt, getTask, isTaskDue, latestCallAttemptFor, listNonTerminalTasks, transitionTask } from './service.js';
 import type { TimeWindow } from './schema.js';
 
 const calendar = new GoogleCalendarProvider();
@@ -91,7 +92,15 @@ async function runTask(taskId: string): Promise<void> {
   const session = new CallSession(
     buildOutboundCallSessionOptions({ task, callAttempt, contact, telephony, calendar, systemPrompt, frontendSystemPrompt }),
   );
-  await session.start();
+  // Registered for as long as the call runs: stop_call needs a handle on it,
+  // and the stale-call sweep below uses membership here to tell a live call
+  // apart from one whose process died mid-conversation.
+  registerLiveCall({ taskId: task.id, callAttemptId: callAttempt.id, session });
+  try {
+    await session.start();
+  } finally {
+    unregisterLiveCall(task.id);
+  }
 }
 
 /**
@@ -114,6 +123,89 @@ function defaultLookaheadWindow(): TimeWindow[] {
 }
 
 const POLL_INTERVAL_MS = 15_000;
+
+/**
+ * How long a call attempt may sit unfinished before the sweep treats it as
+ * abandoned. Generous on purpose: the registry check below is the real
+ * safeguard for calls this process is driving, and this floor only has to
+ * outlast any plausible real conversation. Sweeping a live call would hang up
+ * on someone mid-sentence, which is far worse than reporting a dead one late.
+ */
+const STALE_CALL_AFTER_MS = 15 * 60 * 1000;
+
+const MS_PER_MINUTE = 60_000;
+
+/**
+ * Closes out calls whose process died mid-conversation.
+ *
+ * `calling`/`negotiating` tasks are deliberately never redialed — redialing a
+ * business because our process crashed is worse than not. But nothing moved
+ * them either, and notifyIfTerminal only fires on a terminal status, so the
+ * user asked for a booking and then simply never heard anything. The silence
+ * was the bug, not the missing retry.
+ *
+ * Reconciles against the calendar before deciding: confirm_appointment writes
+ * the event BEFORE marking the task confirmed, so a crash in that window
+ * leaves a real booking attached to a task that never reached 'confirmed'.
+ * Reporting that as "failed, nothing happened" would be a lie the user acts on.
+ */
+export async function sweepStaleCalls(): Promise<void> {
+  const tasks = await listNonTerminalTasks();
+  for (const task of tasks) {
+    if (task.status !== 'calling' && task.status !== 'negotiating') continue;
+    // Running right here — however long it has been going.
+    if (getLiveCall(task.id)) continue;
+
+    const attempt = await latestCallAttemptFor(task.id);
+    if (!attempt || attempt.endedAt) continue;
+    if (Date.now() - attempt.startedAt.getTime() < STALE_CALL_AFTER_MS) continue;
+
+    // A Calendar outage must not stall the sweep — an honest "we don't know"
+    // still beats leaving the task in limbo, which is the bug being fixed.
+    let booked: Awaited<ReturnType<typeof calendar.findEventByIdempotencyKey>>;
+    try {
+      booked = await calendar.findEventByIdempotencyKey(`confirm:${attempt.id}`);
+    } catch (err) {
+      logger.error({ err, taskId: task.id }, 'stale-call sweep could not reach the calendar — reporting outcome as unknown');
+    }
+
+    if (booked) {
+      logger.warn(
+        { taskId: task.id, callAttemptId: attempt.id, eventId: booked.eventId },
+        'stale call had already written its calendar event — recording it as confirmed',
+      );
+      await transitionTask(
+        task.id,
+        'confirmed',
+        {
+          calendarEventId: booked.eventId,
+          outcome: {
+            kind: 'confirmed',
+            start: new Date(booked.confirmedStart).toISOString(),
+            durationMinutes: Math.round((Date.parse(booked.confirmedEnd) - Date.parse(booked.confirmedStart)) / MS_PER_MINUTE),
+            details: 'Recovered after the call was interrupted — the calendar event was already written.',
+          },
+        },
+        { from: ['calling', 'negotiating'] },
+      );
+    } else {
+      logger.warn({ taskId: task.id, callAttemptId: attempt.id }, 'stale call swept — no calendar event found');
+      await transitionTask(
+        task.id,
+        'failed',
+        {
+          outcome: {
+            kind: 'failed',
+            reason: 'The call was interrupted before it finished, and no booking was found on the calendar. Its outcome is unknown.',
+          },
+        },
+        { from: ['calling', 'negotiating'] },
+      );
+    }
+
+    await notifyTaskOutcome(task.id);
+  }
+}
 
 /**
  * Restart-safety net: an in-process trigger is the primary hand-off
@@ -139,5 +231,7 @@ export function startOrchestrationPoller(): void {
         }
       })
       .catch((err) => logger.error({ err }, 'Orchestration poller failed'));
+
+    sweepStaleCalls().catch((err) => logger.error({ err }, 'Stale-call sweep failed'));
   }, POLL_INTERVAL_MS);
 }

@@ -12,6 +12,21 @@ import type { VoiceTool } from '../voice/tools/defineVoiceTool.js';
 import { getTask, isTerminalStatus, transitionTask, updateCallAttempt } from './service.js';
 import type { CallAttempt, Task } from './schema.js';
 
+/**
+ * Fires the outcome notification for a task that has reached a terminal
+ * status. Extracted from the CallSessionOptions closure so the stale-call
+ * sweep can notify too — a task whose process died mid-call has no session
+ * left to do it, which is exactly why those failures used to be silent.
+ */
+export async function notifyTaskOutcome(taskId: string): Promise<void> {
+  const current = await getTask(taskId);
+  if (!current || !current.outcome || !isTerminalStatus(current.status)) return;
+  const contact = await getContact(current.contactId);
+  if (!contact) return;
+  const summary = buildOutcomeSummary(contact, current.outcome);
+  await createNotificationChannel().notify(current.id, current.outcome, summary);
+}
+
 /** All live-call tools for an outbound call, keyed by name — check_my_availability/confirm_appointment/etc.
  *  (backend-service tools) plus press_digits (telephony-layer, routed differently — see telephony/dtmf.ts).
  *  Conversation-mode tasks additionally get end_conversation_call — see docs/superpowers/specs/
@@ -122,12 +137,7 @@ export function buildOutboundCallSessionOptions(params: {
     },
 
     async notifyIfTerminal() {
-      const current = await getTask(task.id);
-      if (!current || !current.outcome || !isTerminalStatus(current.status)) return;
-      const c = await getContact(current.contactId);
-      if (!c) return;
-      const summary = buildOutcomeSummary(c, current.outcome);
-      await createNotificationChannel().notify(current.id, current.outcome, summary);
+      await notifyTaskOutcome(task.id);
     },
   };
 }
