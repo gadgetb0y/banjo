@@ -529,6 +529,22 @@ export class CallSession<TCtx = CallContext> {
     clearTimeout(timer);
   }
 
+  /**
+   * Ends a call from outside the session — the MCP stop_call tool's entry
+   * point. Routes straight into the normal teardown rather than reaching for
+   * the telephony provider directly, so an operator-stopped call is torn down
+   * and persisted exactly like any other ending: Twilio hung up, the call
+   * attempt closed out, the task failed with `reason` if it hadn't already
+   * reached an outcome, and the usual notification fired.
+   *
+   * Safe to call on a session that is already ending or ended — `end` is a
+   * no-op in those states.
+   */
+  async stop(reason: string): Promise<void> {
+    logger.info({ callId: this.opts.callId, reason }, 'call stopped from outside the session');
+    await this.end(reason);
+  }
+
   private async end(reason: string): Promise<void> {
     if (this.state === 'ended' || this.state === 'error' || this.state === 'ending') return;
     this.clearSilenceWatchdog();

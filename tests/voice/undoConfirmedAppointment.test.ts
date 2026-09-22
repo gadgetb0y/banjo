@@ -36,6 +36,7 @@ function makeCalendar(overrides: Partial<CalendarProvider> = {}): CalendarProvid
     computeCandidateWindows: vi.fn(async () => []),
     isFree: vi.fn(async () => true),
     createEventIdempotent: vi.fn(async () => ({ eventId: 'evt-1', confirmedStart: '', confirmedEnd: '' })),
+    findEventByIdempotencyKey: vi.fn(async () => undefined),
     deleteEvent: vi.fn(async () => {}),
     ...overrides,
   };

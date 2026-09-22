@@ -80,6 +80,16 @@ export class GoogleCalendarProvider implements CalendarProvider {
     return !overlapsAny;
   }
 
+  async findEventByIdempotencyKey(idempotencyKey: string): Promise<CreateEventResult | undefined> {
+    const found = await this.calendar.events.list({
+      calendarId: config.GOOGLE_CALENDAR_ID,
+      privateExtendedProperty: [`idempotencyKey=${idempotencyKey}`],
+    });
+    const event = found.data.items?.[0];
+    if (!event?.id || !event.start?.dateTime || !event.end?.dateTime) return undefined;
+    return { eventId: event.id, confirmedStart: event.start.dateTime, confirmedEnd: event.end.dateTime };
+  }
+
   async createEventIdempotent({
     idempotencyKey,
     start,

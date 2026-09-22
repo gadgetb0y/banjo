@@ -8,6 +8,7 @@ import { logger } from '../lib/logger.js';
 
 import { placeCallInputSchema, placeCallHandler } from './tools/placeCall.js';
 import { cancelTaskInputSchema, cancelTaskHandler } from './tools/cancelTask.js';
+import { stopCallInputSchema, stopCallHandler } from './tools/stopCall.js';
 import { getTaskStatusInputSchema, getTaskStatusHandler } from './tools/getTaskStatus.js';
 import { findContactInputSchema, findContactHandler } from './tools/findContact.js';
 import { listContactsInputSchema, listContactsHandler } from './tools/listContacts.js';
@@ -106,6 +107,15 @@ export function createMcpServer(): McpServer {
       'scheduledFor. A call already in progress or finished is not affected; the result says whether it was cancelled.',
     cancelTaskInputSchema.shape,
     adapt(cancelTaskHandler),
+  );
+
+  server.tool(
+    'stop_call',
+    'Hang up a call that is already in progress — the one thing cancel_task cannot do. Use this to stop a ' +
+      'call that is going wrong or was placed in error. The task is recorded as failed with the reason given, ' +
+      'and the usual outcome notification is sent.',
+    stopCallInputSchema.shape,
+    adapt(stopCallHandler),
   );
 
   server.tool(

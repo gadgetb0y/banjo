@@ -61,6 +61,7 @@ function calendarWithPendingWrite() {
             resolve({ eventId: 'evt-race', confirmedStart: '2026-09-15T18:00:00.000Z', confirmedEnd: '2026-09-15T18:30:00.000Z' });
         }),
     ),
+    findEventByIdempotencyKey: vi.fn(async () => undefined),
     deleteEvent: vi.fn(async () => {}),
   };
   return { calendar, finishWrite: () => finishWrite() };

@@ -50,6 +50,7 @@ describe('confirmAppointmentTool.handler', () => {
       createEventIdempotent: vi.fn(async () => {
         throw new SlotUnavailableError();
       }),
+      findEventByIdempotencyKey: vi.fn(async () => undefined),
       deleteEvent: vi.fn(async () => {}),
     };
 
@@ -71,6 +72,7 @@ describe('confirmAppointmentTool.handler', () => {
         confirmedStart: '2026-08-05T18:00:00.000Z',
         confirmedEnd: '2026-08-05T18:30:00.000Z',
       })),
+      findEventByIdempotencyKey: vi.fn(async () => undefined),
       deleteEvent: vi.fn(async () => {}),
     };
 
@@ -99,6 +101,7 @@ describe('confirmAppointmentTool.handler', () => {
         confirmedStart: '2026-08-05T18:00:00.000Z',
         confirmedEnd: '2026-08-05T18:30:00.000Z',
       })),
+      findEventByIdempotencyKey: vi.fn(async () => undefined),
       deleteEvent: vi.fn(async () => {}),
     };
 
@@ -136,6 +139,7 @@ describe('confirmAppointmentTool.handler', () => {
       computeCandidateWindows: vi.fn(async () => []),
       isFree: vi.fn(async () => true),
       createEventIdempotent,
+      findEventByIdempotencyKey: vi.fn(async () => undefined),
       deleteEvent: vi.fn(async () => {}),
     };
 
@@ -164,6 +168,7 @@ describe('confirmAppointmentTool.handler', () => {
       computeCandidateWindows: vi.fn(async () => []),
       isFree: vi.fn(async () => true),
       createEventIdempotent,
+      findEventByIdempotencyKey: vi.fn(async () => undefined),
       deleteEvent: vi.fn(async () => {}),
     };
 
@@ -191,6 +196,7 @@ describe('confirmAppointmentTool.handler', () => {
       computeCandidateWindows: vi.fn(async () => []),
       isFree: vi.fn(async () => true),
       createEventIdempotent,
+      findEventByIdempotencyKey: vi.fn(async () => undefined),
       deleteEvent: vi.fn(async () => {}),
     };
 

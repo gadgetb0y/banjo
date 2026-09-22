@@ -184,6 +184,17 @@ export async function createCallAttempt(taskId: string): Promise<CallAttempt> {
   return row;
 }
 
+/** The most recent call attempt for a task, or undefined if it never reached the phone. */
+export async function latestCallAttemptFor(taskId: string): Promise<CallAttempt | undefined> {
+  const [row] = await db
+    .select()
+    .from(callAttempts)
+    .where(eq(callAttempts.taskId, taskId))
+    .orderBy(desc(callAttempts.startedAt))
+    .limit(1);
+  return row;
+}
+
 export async function updateCallAttempt(
   id: string,
   patch: Partial<Pick<CallAttempt, 'status' | 'providerCallId' | 'answeredBy' | 'endedAt' | 'errorDetail'>>,

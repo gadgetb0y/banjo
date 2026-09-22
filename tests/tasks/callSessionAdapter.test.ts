@@ -50,6 +50,7 @@ const fakeCalendar: CalendarProvider = {
     confirmedStart: '2026-08-04T18:00:00.000Z',
     confirmedEnd: '2026-08-04T18:30:00.000Z',
   })),
+  findEventByIdempotencyKey: vi.fn(async () => undefined),
   deleteEvent: vi.fn(async () => {}),
 };
 
