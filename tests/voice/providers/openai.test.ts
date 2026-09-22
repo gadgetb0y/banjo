@@ -89,3 +89,64 @@ describe('OpenAIRealtimeProvider.triggerResponse: race with connect()', () => {
     expect(sentTypes(ws)).not.toContain('response.create');
   });
 });
+
+describe('OpenAIRealtimeProvider tool-call argument parsing', () => {
+  async function connectedProvider() {
+    const provider = new OpenAIRealtimeProvider();
+    const connectPromise = provider.connect(sessionConfig);
+    const ws = wsInstances[wsInstances.length - 1]!;
+    ws.readyState = FakeWs.OPEN;
+    ws.emit('open');
+    await connectPromise;
+    const calls: { id: string; name: string; arguments: Record<string, unknown>; unparsedArguments?: string }[] = [];
+    provider.on('event', (e) => {
+      if (e.type === 'tool_call') calls.push(e.call);
+    });
+    return { provider, ws, calls };
+  }
+
+  it('flags truncated arguments instead of passing them off as an empty object', async () => {
+    // A real live call (2026-09-22) produced exactly this: OpenAI streamed
+    // `{"date":"2026-09-22","time":"6:00pm` — unterminated. The parse failure
+    // was swallowed and the tool ran with {}, which is indistinguishable from
+    // a legitimate no-argument call, so the model was told its arguments were
+    // invalid rather than that its message had been cut off. It never retried,
+    // and asserted an availability answer it had never actually checked.
+    const { ws, calls } = await connectedProvider();
+
+    ws.emit(
+      'message',
+      JSON.stringify({
+        type: 'response.function_call_arguments.done',
+        call_id: 'call_RutETUnPmWe7AVud',
+        name: 'check_my_availability',
+        arguments: '{"date":"2026-09-22","time":"6:00pm',
+      }),
+    );
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0]).toMatchObject({
+      name: 'check_my_availability',
+      arguments: {},
+      unparsedArguments: '{"date":"2026-09-22","time":"6:00pm',
+    });
+  });
+
+  it('leaves unparsedArguments unset when the arguments parse cleanly', async () => {
+    const { ws, calls } = await connectedProvider();
+
+    ws.emit(
+      'message',
+      JSON.stringify({
+        type: 'response.function_call_arguments.done',
+        call_id: 'call-ok',
+        name: 'check_my_availability',
+        arguments: '{"date":"2026-09-22","time":"18:00","durationMinutes":90}',
+      }),
+    );
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0]!.unparsedArguments).toBeUndefined();
+    expect(calls[0]!.arguments).toEqual({ date: '2026-09-22', time: '18:00', durationMinutes: 90 });
+  });
+});

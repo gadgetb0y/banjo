@@ -231,7 +231,9 @@ export class CallSession<TCtx = CallContext> {
         // speaking yet (e.g. check_my_availability before saying anything).
         this.clearSilenceWatchdog();
         this.responseActive = true;
-        this.trackToolHandler(this.handleToolCall(event.call.id, event.call.name, event.call.arguments));
+        this.trackToolHandler(
+          this.handleToolCall(event.call.id, event.call.name, event.call.arguments, event.call.unparsedArguments),
+        );
         break;
       case 'transcript':
         // Was previously unhandled entirely — we had zero visibility into
@@ -347,7 +349,12 @@ export class CallSession<TCtx = CallContext> {
     this.voiceAI.triggerResponse();
   }
 
-  private async handleToolCall(toolCallId: string, name: string, args: Record<string, unknown>): Promise<void> {
+  private async handleToolCall(
+    toolCallId: string,
+    name: string,
+    args: Record<string, unknown>,
+    unparsedArguments?: string,
+  ): Promise<void> {
     // The call is already over — end() may still be waiting on an earlier
     // handler with the voice AI connected. Don't run a new tool against a gone
     // call, and don't let setState('tool-pending') below overwrite 'ending':
@@ -375,8 +382,36 @@ export class CallSession<TCtx = CallContext> {
       return;
     }
 
+    // The vendor's arguments payload never parsed, so `args` is empty for a
+    // reason that has nothing to do with what the model meant to send. Telling
+    // it the arguments were *invalid* invites it to give up and improvise;
+    // telling it the message was truncated invites it to send the call again.
+    if (unparsedArguments !== undefined) {
+      logger.warn(
+        { callId: this.opts.callId, toolCallId, name, unparsedArguments },
+        'tool call rejected: the vendor arguments payload could not be parsed',
+      );
+      this.voiceAI.sendToolResult(
+        toolCallId,
+        {
+          ok: false,
+          error: 'malformed_arguments',
+          message: 'Your tool call arguments did not arrive as valid JSON and were likely truncated. Call the tool again with the complete arguments.',
+        },
+        true,
+      );
+      this.clearWatchdogAndResume();
+      return;
+    }
+
     const parsed = tool.schema.safeParse(args);
     if (!parsed.success) {
+      // Logged as well as returned: this used to go only to the model, so a
+      // rejected tool call left no trace in the logs at all.
+      logger.warn(
+        { callId: this.opts.callId, toolCallId, name, details: parsed.error.flatten() },
+        'tool call rejected: arguments failed schema validation',
+      );
       this.voiceAI.sendToolResult(toolCallId, { ok: false, error: 'invalid_arguments', details: parsed.error.flatten() }, true);
       this.clearWatchdogAndResume();
       return;
