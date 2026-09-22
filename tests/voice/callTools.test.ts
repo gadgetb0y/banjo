@@ -39,11 +39,12 @@ beforeEach(() => {
 });
 
 describe('voice tools: schema + JSON Schema conversion', () => {
-  it('registers all 6 call tools with unique names', () => {
+  it('registers all 7 call tools with unique names', () => {
     const names = callTools.map((t) => t.name);
     expect(names).toEqual([
       'check_my_availability',
       'confirm_appointment',
+      'undo_confirmed_appointment',
       'leave_voicemail_and_end_call',
       'report_negotiation_failed',
       'escalate_and_end_call',
@@ -463,5 +464,17 @@ describe('endConversationCallTool: not part of the base booking toolset', () => 
   it('requires a summary argument', () => {
     expect(endConversationCallTool.schema.safeParse({}).success).toBe(false);
     expect(endConversationCallTool.schema.safeParse({ summary: 'All good.' }).success).toBe(true);
+  });
+});
+
+describe('confirm_appointment guards against confirming too early', () => {
+  it('spells out in its description that a read-back is not agreement', async () => {
+    const { confirmAppointmentTool, undoConfirmedAppointmentTool } = await import('../../src/voice/tools/callTools.js');
+    // The model treated its own "to confirm, you're offering Friday at 6:00 PM"
+    // as the agreement and called this immediately afterwards.
+    expect(confirmAppointmentTool.description).toContain('Your own summary of a time is not agreement');
+    // And it must know there is now a way back.
+    expect(confirmAppointmentTool.description).toContain('undo_confirmed_appointment');
+    expect(undoConfirmedAppointmentTool.name).toBe('undo_confirmed_appointment');
   });
 });

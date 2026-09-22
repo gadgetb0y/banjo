@@ -96,6 +96,10 @@ function guidanceSections(direction: CallDirection): GuidanceSection[] {
       voiceLayer: true,
       lines: [
         'General call conduct:',
+        // A live call confirmed a time off the back of the model's own
+        // read-back, while the other party was still pushing for a different
+        // one — and then had to tell them to ring the business themselves.
+        '- Do not confirm anything the other party has not explicitly agreed to. Your own summary of a time is not agreement, and neither is silence, "that might work", or an offer they are still thinking about. Wait for a clear yes to a specific time.',
         `- Never promise a callback, follow-up, or that you will "check with ${config.ASSISTANT_PRINCIPAL_NAME} and call you back" — you cannot place outbound calls, and this call ends with nothing carried forward to any future call. If something cannot be resolved right now (an unavailable time, a request outside what your tools support), resolve it live on this call — offer alternatives, or use your escalation tool — never leave it as something you will get back to the caller about.`,
         '- Stay focused on the goal of the call. Do not volunteer unrelated information.',
         '- If the other party offers a time, restate it back clearly before confirming.',

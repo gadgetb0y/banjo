@@ -95,9 +95,7 @@ describe('buildFrontendSystemPromptGuidance (voice layer of a split provider, e.
       expect(base).toContain(section);
     }
   });
-});
-
-describe('keeping internal mechanics off the call', () => {
+});describe('keeping internal mechanics off the call', () => {
   // On a live call (2026-09-22) the model narrated its own plumbing at the
   // callee: "since six o'clock might not match the pre-approved windows, I'll
   // quickly check Steve's availability" — she has no idea Banjo has windows,
@@ -113,5 +111,21 @@ describe('keeping internal mechanics off the call', () => {
     // A split provider runs the frontend prompt for speech — guidance that
     // only lands in the backend prompt would not reach the words spoken.
     expect(buildFrontendSystemPromptGuidance('outbound')).toContain('Never describe your own mechanics');
+  });
+});
+
+describe('confirming only on explicit agreement', () => {
+  // A live call (2026-09-22) fired confirm_appointment while the other party
+  // was still negotiating, off the back of its own read-back rather than
+  // anything they had actually said.
+  it('tells the model not to confirm until the other party has actually agreed', () => {
+    const prompt = buildBaseSystemPromptGuidance('outbound');
+    expect(prompt).toContain('Do not confirm anything the other party has not explicitly agreed to');
+  });
+
+  it('carries that guidance into the voice layer', () => {
+    expect(buildFrontendSystemPromptGuidance('outbound')).toContain(
+      'Do not confirm anything the other party has not explicitly agreed to',
+    );
   });
 });

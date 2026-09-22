@@ -171,7 +171,7 @@ export const confirmAppointmentTool: VoiceTool<{
 }> = defineVoiceTool({
   name: 'confirm_appointment',
   description:
-    `Lock in the appointment once both sides have agreed on a specific time. This writes the event to ${config.ASSISTANT_PRINCIPAL_NAME}'s calendar and marks the task confirmed. Only call this once — after you have verbally confirmed the time with the other party. If it fails with error "slot_unavailable", the slot was taken by something else between your availability check and this call — do not treat it as booked; tell the caller and negotiate a different time.`,
+    `Lock in the appointment once the other party has explicitly agreed to a specific time. This writes the event to ${config.ASSISTANT_PRINCIPAL_NAME}'s calendar and marks the task confirmed. Your own summary of a time is not agreement — wait for their clear yes to that specific time, not to a time you are still proposing. If you called this too early, undo_confirmed_appointment removes the event and reopens the negotiation. If it fails with error "slot_unavailable", the slot was taken by something else between your availability check and this call — do not treat it as booked; tell the caller and negotiate a different time.`,
   schema: z.object({
     confirmedStart: z
       .string()
@@ -247,6 +247,80 @@ export const confirmAppointmentTool: VoiceTool<{
         );
       }
       return { ok: true, confirmedStart: result.confirmedStart };
+    });
+  },
+});
+
+/**
+ * The way back from a confirmation that shouldn't have happened yet.
+ *
+ * A real call (2026-09-22) had the model fire confirm_appointment while the
+ * other party was still negotiating; when they asked for a different time it
+ * had nothing to undo with, and told them to ring the business themselves.
+ * Rescheduling is this tool followed by confirm_appointment again; cancelling
+ * outright is this tool followed by a terminal tool. One primitive, composed,
+ * rather than two tools each carrying their own copy of the calendar dance.
+ *
+ * Deliberately claims the task BEFORE touching the calendar. The other
+ * ordering — delete, then transition — leaves Postgres claiming a confirmed
+ * booking whose calendar event is gone if the transition loses a race, and a
+ * silent false "you're booked" is the worst outcome available here. This way a
+ * failed delete leaves a stray event that confirm_appointment's idempotency
+ * guard will find and report honestly (it returns the event's real start, so
+ * Postgres and the calendar still agree).
+ */
+export const undoConfirmedAppointmentTool: VoiceTool<{ reason: string }> = defineVoiceTool({
+  name: 'undo_confirmed_appointment',
+  description:
+    `Undo an appointment you already confirmed on this call — removes it from ${config.ASSISTANT_PRINCIPAL_NAME}'s calendar and reopens the negotiation. Use this when the other party changes the time, withdraws it, or makes clear they had not actually agreed, AFTER you called confirm_appointment. To move the appointment, call this and then confirm_appointment with the new time. Fails with "nothing_to_undo" if there is no confirmed booking on this call to remove.`,
+  schema: z.object({
+    reason: z
+      .string()
+      .min(1)
+      .describe('Why the confirmed appointment is being undone, e.g. "callee asked for 5pm instead". Recorded for the user; not spoken to the callee.'),
+  }),
+  handler: async (input, ctx) => {
+    return runToolSafely('undo_confirmed_appointment', async () => {
+      const calendarEventId = ctx.task.calendarEventId;
+      if (ctx.task.status !== 'confirmed' || !calendarEventId) {
+        return {
+          ok: false as const,
+          error: 'nothing_to_undo' as const,
+          message: 'There is no confirmed appointment on this call to undo.',
+        };
+      }
+
+      // Compare-and-set on 'confirmed' specifically. This is the only path out
+      // of a terminal status, and `from` keeps it that narrow — every other
+      // caller of transitionTask still gets allowedFromStatuses' refusal.
+      const reopened = await transitionTask(
+        ctx.task.id,
+        'negotiating',
+        { outcome: null, calendarEventId: null },
+        { from: ['confirmed'] },
+      );
+      if (!reopened) {
+        return {
+          ok: false as const,
+          error: 'nothing_to_undo' as const,
+          message: 'There is no confirmed appointment on this call to undo.',
+        };
+      }
+
+      try {
+        await ctx.calendar.deleteEvent(calendarEventId);
+      } catch (err) {
+        // The task is already reopened, so the call can carry on — but the
+        // event is still out there and someone has to know.
+        log.error(
+          { err, taskId: ctx.task.id, calendarEventId },
+          'task reopened, but its calendar event could not be deleted',
+        );
+        throw err;
+      }
+
+      log.info({ taskId: ctx.task.id, calendarEventId, reason: input.reason }, 'confirmed appointment undone mid-call');
+      return { ok: true as const };
     });
   },
 });
@@ -419,6 +493,7 @@ export const endConversationCallTool: VoiceTool<{ summary: string }> = defineVoi
 export const callTools: VoiceTool[] = [
   checkMyAvailabilityTool,
   confirmAppointmentTool,
+  undoConfirmedAppointmentTool,
   leaveVoicemailAndEndCallTool,
   reportNegotiationFailedTool,
   escalateAndEndCallTool,

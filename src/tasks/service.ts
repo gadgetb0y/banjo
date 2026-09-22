@@ -68,8 +68,11 @@ function allowedFromStatuses(status: Task['status']): Task['status'][] {
 
 type TransitionPatch = Partial<{
   candidateWindows: TimeWindow[];
-  outcome: TaskOutcome;
-  calendarEventId: string;
+  // Nullable so a transition can CLEAR them, not only set them — undoing a
+  // confirmed booking mid-call has to leave no trace of the event it removed,
+  // and both columns are nullable in the schema.
+  outcome: TaskOutcome | null;
+  calendarEventId: string | null;
 }>;
 
 /**
