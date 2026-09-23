@@ -8,6 +8,34 @@ function formatWindows(windows: TimeWindow[]): string {
   return windows.map((w) => `${w.start} to ${w.end}`).join('; ');
 }
 
+/**
+ * The task's own constraints, which used to stop at the database. A demo call
+ * (2026-09-22) had durationMinutes 90 and notes "Full groom preferred" on the
+ * task and neither in the prompt: the model asked the callee how long to book
+ * three times, and told her a 3:30 slot "works" when 90 minutes there ran into
+ * Steve's 4pm meeting — most likely because it checked a short slot, having no
+ * duration to check with. `contact.notes` is a different thing (standing
+ * context about who is being called), so this is additive, not a replacement.
+ *
+ * Optional-chained because the column is NOT NULL but test fixtures and any
+ * future partial Task shape shouldn't turn a missing field into "undefined
+ * minutes" in front of the model.
+ */
+function taskDetails(task: Task): string {
+  const lines: string[] = [];
+  const duration = task.constraints?.durationMinutes;
+  if (duration) {
+    lines.push(
+      `Appointment length: ${duration} minutes. Use this duration in every check_my_availability and confirm_appointment call. ` +
+        `Do not ask the other party how long to book — you already know. If they tell you the service itself takes a different ` +
+        `length, use theirs for both the check and the booking.`,
+    );
+  }
+  const notes = task.constraints?.notes?.trim();
+  if (notes) lines.push(`Notes from ${config.ASSISTANT_PRINCIPAL_NAME} for this call: ${notes}`);
+  return lines.length ? `\n\n${lines.join('\n')}` : '';
+}
+
 function conversationModeGuidance(task: Task): string {
   if (task.mode !== 'conversation') return '';
   return `
@@ -39,7 +67,7 @@ ${buildBaseSystemPromptGuidance()}
 
 You are calling ${contact.displayName} on behalf of ${config.ASSISTANT_PRINCIPAL_NAME} to: ${task.goalDescription}.
 
-Contact context: ${contact.notes ?? '(no notes on file)'}
+Contact context: ${contact.notes ?? '(no notes on file)'}${taskDetails(task)}
 
 You may offer or accept any of these times without checking back with anyone: ${formatWindows(candidateWindows)}.
 If the other party offers a time outside these windows, call check_my_availability(date, time, durationMinutes)
@@ -84,6 +112,6 @@ ${buildFrontendSystemPromptGuidance()}
 
 You are calling ${contact.displayName} on behalf of ${config.ASSISTANT_PRINCIPAL_NAME} to: ${task.goalDescription}.
 
-Contact context: ${contact.notes ?? '(no notes on file)'}${conversationModeFrontendGuidance(task)}
+Contact context: ${contact.notes ?? '(no notes on file)'}${taskDetails(task)}${conversationModeFrontendGuidance(task)}
 `.trim();
 }

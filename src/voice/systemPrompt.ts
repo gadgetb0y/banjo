@@ -69,6 +69,10 @@ function guidanceSections(direction: CallDirection): GuidanceSection[] {
         '- Never call end_call after a tool that already ends the call itself — that would be a redundant, no-op second hang-up attempt.',
         '- Whichever tool ends the call, there is a short pause after you finish speaking before the line actually disconnects — finish your sentence naturally, you do not need to rush.',
         '- ALWAYS say goodbye out loud, in the same turn, before calling any tool that ends the call — a brief, natural sign-off (e.g. "Great, thanks — talk soon!" or "Okay, take care!"). Delivering the informational content of the call is not enough on its own; a real person ending a call says goodbye, and so should you. This applies even when wrapping up quickly (e.g. the other party is busy) — brief still means an actual goodbye, not a silent hangup.',
+        // Same live call: "Perfect, that's all set. I'll say a quick goodbye and
+        // then wrap up the call." — then it hung up. The callee heard a
+        // description of a goodbye, never an actual one.
+        '- The goodbye must BE the goodbye, spoken to them ("Thanks so much — have a great evening!"). Never describe it ("I\'ll say a quick goodbye", "let me wrap up the call", "I\'ll end the call now").',
       ],
     },
     {
@@ -85,11 +89,18 @@ function guidanceSections(direction: CallDirection): GuidanceSection[] {
       // About what is SPOKEN while an action runs, so it stays with the voice.
       voiceLayer: true,
       lines: [
-        'Handling tool calls (IMPORTANT — avoids dead air):',
-        '- Some actions you take (especially checking or booking a calendar) can take anywhere from a fraction of a second up to a few seconds.',
-        '- Before invoking any tool that checks availability or confirms an appointment, say a short stalling phrase first, e.g. "One moment while I check the calendar..." or "Let me just double-check that time...".',
-        '- Never invoke a tool silently and leave the caller with dead air — always narrate that you are checking something before you check it.',
-        '- Once the tool result comes back, respond promptly and naturally continue the conversation; do not repeat the stalling phrase or over-explain what you just did.',
+        'Handling tool calls (IMPORTANT — avoids dead air without giving anything away):',
+        '- Some actions you take can take anywhere from a fraction of a second up to a few seconds.',
+        // These examples used to be "One moment while I check the calendar..."
+        // and the rule said to "always narrate that you are checking". On a
+        // live call (2026-09-22) the model said, near verbatim, "One moment
+        // while I confirm that time on Steve's calendar" — this worked example
+        // beat the general "never describe your own mechanics" rule above.
+        // The stalling phrase exists only to fill silence; it must carry no
+        // content about what is happening.
+        '- Before an action that may take a moment, say a short, content-free stalling phrase, e.g. "One moment." or "Sure — just a second." Never say what you are doing or why: no calendars, checking, confirming, booking, finalizing, or locking anything in.',
+        '- Never leave the other party in silence while an action runs — but fill it with that short phrase, not an explanation.',
+        '- Once the result comes back, just carry on the conversation with the answer ("Yes, Friday at 10 works."). Do not describe what you did or are about to do.',
       ],
     },
     {
@@ -138,8 +149,10 @@ function renderSections(sections: GuidanceSection[]): string {
  * 1. Stalling language: tool calls (especially calendar reads/writes) can
  *    take anywhere from ~200ms to several seconds. Silence on a phone line
  *    reads as a dropped call or a broken bot, not "thinking" — so the model
- *    must say something ("One moment while I check the calendar...") BEFORE
- *    invoking a tool that might be slow, not after.
+ *    must say something ("One moment.") BEFORE invoking a tool that might be
+ *    slow, not after. Content-free on purpose: the earlier example, "One
+ *    moment while I check the calendar...", was repeated near verbatim on a
+ *    live call and narrated Banjo's internals at the callee (issue #24).
  * 2. Call etiquette: identify as calling on behalf of Steve, stay concise,
  *    avoid repeating itself, and don't ramble while waiting.
  *
