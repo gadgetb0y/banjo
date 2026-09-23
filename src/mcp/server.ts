@@ -228,7 +228,12 @@ function getRawNodeReqRes(c: Context): { req: IncomingMessage; res: ServerRespon
  *  node_modules/@modelcontextprotocol/sdk/dist/**\/server/sse.d.ts once installed.
  */
 export function registerMcpRoutes(app: Hono): void {
-  const server = createMcpServer();
+  // One McpServer PER CONNECTION, not per process. A server instance binds to
+  // a single transport, so the shared one this used to create refused every
+  // client after the first with "Already connected to a transport" (a 500) —
+  // Banjo could serve exactly one Claude Code session at a time (issue #31).
+  // The per-session `transports` map below was always built for many clients;
+  // the server just has to match it.
   const transports = new Map<string, SSEServerTransport>();
 
   app.get(MCP_SSE_PATH, async (c) => {
@@ -244,11 +249,13 @@ export function registerMcpRoutes(app: Hono): void {
       return c.text('Internal Server Error', 500);
     }
 
+    const server = createMcpServer();
     const transport = new SSEServerTransport(MCP_MESSAGES_PATH, raw.res);
     transports.set(transport.sessionId, transport);
 
     raw.res.on('close', () => {
       transports.delete(transport.sessionId);
+      void server.close().catch((err) => logger.warn({ err }, 'MCP session did not close cleanly'));
     });
 
     await server.connect(transport);
