@@ -10,6 +10,17 @@ updates:
       # individually, since those are the ones that need reading.
       minor-and-patch:
         update-types: [minor, patch]
+    ignore:
+      # Types must track the Node we actually run (node:22-alpine, engines
+      # >=22). Types for a newer major let code compile against APIs the
+      # runtime doesn't have, and it fails only when that code runs. Move
+      # this with the Dockerfile's base image, never ahead of it.
+      - dependency-name: "@types/node"
+        update-types: ["version-update:semver-major"]
+      # TypeScript 7 is a from-scratch rewrite of the compiler, and it also
+      # produces the Docker build. A deliberate migration, not a weekly PR.
+      - dependency-name: "typescript"
+        update-types: ["version-update:semver-major"]
 
   - package-ecosystem: github-actions
     directory: /
