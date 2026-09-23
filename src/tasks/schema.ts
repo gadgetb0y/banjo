@@ -74,7 +74,13 @@ export const callAttempts = pgTable('call_attempts', {
     .references(() => tasks.id),
   providerCallId: text('provider_call_id'), // Twilio Call SID
   status: callAttemptStatusEnum('status').notNull().default('connecting'),
-  answeredBy: text('answered_by'), // AMD result: human | machine_start | fax | unknown | null
+  // Twilio AMD's GUESS — human | machine_start | fax | unknown | null — not a
+  // fact. It routinely reports machine_start for a person answering with a
+  // business greeting (a long first utterance looks like voicemail to it), so
+  // don't build logic on this without re-testing against real businesses.
+  // Nothing branches on it today; the model decides voicemail vs human by
+  // listening. See docs/ARCHITECTURE.md Open Risks #23 and issue #32.
+  answeredBy: text('answered_by'),
   startedAt: timestamp('started_at', { withTimezone: true }).notNull().defaultNow(),
   endedAt: timestamp('ended_at', { withTimezone: true }),
   errorDetail: text('error_detail'),
