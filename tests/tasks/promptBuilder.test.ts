@@ -68,3 +68,39 @@ describe('buildCallFrontendPrompt: voice-layer prompt for a split provider (open
     expect(prompt).not.toContain('end_conversation_call');
   });
 });
+
+describe('the task\'s own constraints reach the model', () => {
+  // Demo call, 2026-09-22: the task said 90 minutes and "Full groom preferred",
+  // and neither was in the prompt. The model asked the callee how long to book
+  // three times, then told her a 3:30 slot "works" when a 90-minute appointment
+  // there ran into Steve's 4pm meeting — most likely because it checked a short
+  // slot, having no duration to check with.
+  const groomTask = {
+    goalDescription: "Book a grooming appointment for Banjo, Steve's dog",
+    mode: 'booking',
+    constraints: { durationMinutes: 90, notes: 'Full groom preferred.' },
+  } as Task;
+
+  it('states the appointment length, and tells the model to use it rather than ask', () => {
+    const prompt = buildCallSystemPrompt(groomTask, contact, []);
+    expect(prompt).toContain('90 minutes');
+    expect(prompt).toMatch(/every check_my_availability and confirm_appointment call/i);
+    expect(prompt).toMatch(/do not ask the other party how long/i);
+  });
+
+  it("includes the task's notes, which are separate from the contact's", () => {
+    const prompt = buildCallSystemPrompt(groomTask, contact, []);
+    expect(prompt).toContain('Full groom preferred.');
+  });
+
+  it('gives the voice layer the length and notes too, since it is the part that talks', () => {
+    const prompt = buildCallFrontendPrompt(groomTask, contact);
+    expect(prompt).toContain('90 minutes');
+    expect(prompt).toContain('Full groom preferred.');
+  });
+
+  it('says nothing about length when the task does not specify one, rather than inventing a number', () => {
+    const prompt = buildCallSystemPrompt(bookingTask, contact, []);
+    expect(prompt).not.toMatch(/Appointment length:/);
+  });
+});

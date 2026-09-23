@@ -129,3 +129,46 @@ describe('confirming only on explicit agreement', () => {
     );
   });
 });
+
+describe('the stalling phrase before a tool call gives nothing away', () => {
+  // #24, second round. #26 added "never describe your own mechanics", but the
+  // Handling-tool-calls section still told the model to say "One moment while I
+  // check the calendar..." and to "always narrate that you are checking
+  // something". On the next live call it said, near verbatim: "One moment while
+  // I confirm that time on Steve's calendar." The more specific instruction,
+  // with a worked example, won. These pin that the two can't disagree again.
+  for (const direction of ['outbound', 'inbound'] as const) {
+    it(`${direction}: offers no stalling example that mentions a calendar or a check`, () => {
+      const prompt = buildBaseSystemPromptGuidance(direction);
+      expect(prompt).not.toMatch(/check the calendar/i);
+      expect(prompt).not.toMatch(/double-check that time/i);
+      expect(prompt).not.toMatch(/narrate that you are checking/i);
+    });
+  }
+
+  it('still guards against dead air, with a phrase that says nothing about why', () => {
+    const prompt = buildBaseSystemPromptGuidance('outbound');
+    expect(prompt).toContain('"One moment."');
+    expect(prompt).toMatch(/never say what you are doing or why/i);
+  });
+
+  it('reaches the voice layer, where the stalling phrase is actually spoken', () => {
+    const prompt = buildFrontendSystemPromptGuidance('outbound');
+    expect(prompt).not.toMatch(/check the calendar/i);
+    expect(prompt).toContain('"One moment."');
+  });
+});
+
+describe('the goodbye is said, not announced', () => {
+  // Same call: "I'll say a quick goodbye and then wrap up the call." — then it
+  // hung up. The callee never heard a goodbye, only a description of one.
+  it('tells the model the goodbye must be the goodbye itself', () => {
+    const prompt = buildBaseSystemPromptGuidance('outbound');
+    expect(prompt).toMatch(/never describe it/i);
+    expect(prompt).toContain("I'll say a quick goodbye");
+  });
+
+  it('carries that into the voice layer', () => {
+    expect(buildFrontendSystemPromptGuidance('outbound')).toMatch(/never describe it/i);
+  });
+});
