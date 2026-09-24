@@ -5,6 +5,7 @@ import { CallSession } from '../session/callSession.js';
 import { createTelephonyProvider } from '../telephony/factory.js';
 import { buildOutboundCallSessionOptions, notifyTaskOutcome } from './callSessionAdapter.js';
 import { buildCallFrontendPrompt, buildCallSystemPrompt } from './promptBuilder.js';
+import { readOwnerProfile } from './ownerProfile.js';
 import { getLiveCall, registerLiveCall, unregisterLiveCall } from './liveCalls.js';
 import { createCallAttempt, getTask, isTaskDue, latestCallAttemptFor, listNonTerminalTasks, transitionTask } from './service.js';
 import type { TimeWindow } from './schema.js';
@@ -86,8 +87,9 @@ async function runTask(taskId: string): Promise<void> {
 
   const callAttempt = await createCallAttempt(task.id);
   const telephony = createTelephonyProvider();
-  const systemPrompt = buildCallSystemPrompt(task, contact, candidateWindows);
-  const frontendSystemPrompt = buildCallFrontendPrompt(task, contact);
+  const ownerProfile = readOwnerProfile();
+  const systemPrompt = buildCallSystemPrompt(task, contact, candidateWindows, ownerProfile);
+  const frontendSystemPrompt = buildCallFrontendPrompt(task, contact, ownerProfile);
 
   const session = new CallSession(
     buildOutboundCallSessionOptions({ task, callAttempt, contact, telephony, calendar, systemPrompt, frontendSystemPrompt }),

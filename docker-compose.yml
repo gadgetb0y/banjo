@@ -30,6 +30,12 @@ services:
       DATABASE_URL: postgresql://banjo:banjo@postgres:5432/banjo
     ports:
       - '${PORT:-3000}:${PORT:-3000}'
+    # Owner profile (PROMPT_PROFILE_FILE=./banjo-profile.md in .env): mount it
+    # read-only. Commented out because Docker creates a DIRECTORY at the host
+    # path if the file doesn't exist yet. Uncomment here, or put it in a
+    # git-ignored docker-compose.override.yml.
+    # volumes:
+    #   - ./banjo-profile.md:/app/banjo-profile.md:ro
     depends_on:
       postgres:
         condition: service_healthy

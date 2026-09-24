@@ -51,6 +51,8 @@ The system is two independently-swappable vendor abstraction layers, glued toget
 
 **Timezone:** `CALENDAR_TIMEZONE` (default `America/New_York`) is the single source of truth for what a spoken time means; conversions go through `src/lib/timezone.ts`'s `zonedTimeToUtcIso()`. A real booking once landed 4 hours off because this wasn't enforced everywhere — don't reintroduce a bare unzoned timestamp on any call-facing or calendar-write path.
 
+**Owner profile:** `PROMPT_PROFILE_FILE` (`src/tasks/ownerProfile.ts`) is the only user-customizable part of the call prompt: added to outbound prompts after every fixed rule, which it's told it cannot override. Put new customization there, not in a way that lets users replace the rules in `src/voice/systemPrompt.ts`.
+
 **Call-ending tools** (`leave_voicemail_and_end_call`, `report_negotiation_failed`, `escalate_and_end_call`, `end_call`, `end_conversation_call`) all route through `hangUpAfterSpeaking()` (`src/voice/tools/callTools.ts`) rather than hanging up immediately, so trailing speech isn't cut off. `leaveVoicemailAndEndCallTool` is the only tool that declares `verbatimMessage` (forces the exact message to be spoken via `VoiceAIProvider.sayVerbatim`, so delivered audio and recorded outcome can't diverge) — don't add `verbatimMessage` to the other terminal tools; their `reason`/`summary` args are metadata for the user, not content the callee is meant to hear.
 
 ## Testing conventions

@@ -160,3 +160,38 @@ describe('the free ranges are for checking, not for reading out (#42)', () => {
     expect(prompt).toMatch(/let them say what they have first/i);
   });
 });
+
+describe("the owner's profile: customizable, below the fixed rules", () => {
+  const profile = 'Banjo is a 30 lb goldendoodle, nervous with clippers.\nKeep calls brief and friendly.';
+
+  it('puts the profile text in the prompt, clearly marked as the owner\'s own notes', () => {
+    const prompt = buildCallSystemPrompt(bookingTask, contact, [], profile);
+    expect(prompt).toContain('Banjo is a 30 lb goldendoodle, nervous with clippers.');
+    expect(prompt).toMatch(/in their own words/i);
+  });
+
+  it('states that the fixed rules win on any conflict, naming the ones that matter most', () => {
+    const prompt = buildCallSystemPrompt(bookingTask, contact, [], profile);
+    expect(prompt).toMatch(/the rules above win/i);
+    expect(prompt).toMatch(/you are an AI/i);
+    expect(prompt).toMatch(/clear yes/i);
+  });
+
+  it('comes after the fixed guidance, so the rules it defers to are "above" it', () => {
+    const prompt = buildCallSystemPrompt(bookingTask, contact, [], profile);
+    expect(prompt.indexOf('Banjo is a 30 lb')).toBeGreaterThan(prompt.indexOf('Never claim to be human'));
+  });
+
+  it('tells the model not to volunteer personal details from it', () => {
+    expect(buildCallSystemPrompt(bookingTask, contact, [], profile)).toMatch(/do not volunteer/i);
+  });
+
+  it('reaches the voice layer too, since that is the part answering questions', () => {
+    expect(buildCallFrontendPrompt(bookingTask, contact, profile)).toContain('nervous with clippers');
+  });
+
+  it('adds nothing when there is no profile', () => {
+    expect(buildCallSystemPrompt(bookingTask, contact, [])).not.toMatch(/in their own words/i);
+    expect(buildCallFrontendPrompt(bookingTask, contact)).not.toMatch(/in their own words/i);
+  });
+});

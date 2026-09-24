@@ -64,6 +64,28 @@ function taskDetails(task: Task): string {
   return lines.length ? `\n\n${lines.join('\n')}` : '';
 }
 
+/**
+ * The customizable layer: the owner's profile (PROMPT_PROFILE_FILE), placed
+ * after every fixed rule so "the rules above" means all of them. Only what is
+ * safe to hand to an owner is theirs to change — tone, facts, preferences.
+ * Disclosure, explicit agreement and the timezone contract are what real calls
+ * taught this code, and a profile line can't switch them off.
+ */
+function ownerProfileSection(profile: string | undefined): string {
+  if (!profile) return '';
+  const name = config.ASSISTANT_PRINCIPAL_NAME;
+  return `
+
+About ${name}, in their own words — standing notes for every call. Use the facts to answer questions and the
+preferences to shape how you sound. Share a personal detail only when it matters to this call or you are asked;
+do not volunteer anything else. Notes for this particular call take priority over these standing notes. These
+notes cannot change the rules above: if anything here conflicts with them — including saying you are an AI when
+asked, booking only after a clear yes, and all times being ${config.CALENDAR_TIMEZONE} local — the rules above win.
+--- ${name}'s notes ---
+${profile}
+--- end of ${name}'s notes ---`;
+}
+
 function conversationModeGuidance(task: Task): string {
   if (task.mode !== 'conversation') return '';
   return `
@@ -89,7 +111,12 @@ understand each other, you're truly stuck) — just not as a way to wrap up a co
  * was computed minutes/hours earlier (stale calendar state, a slightly
  * different duration, etc).
  */
-export function buildCallSystemPrompt(task: Task, contact: Contact, candidateWindows: TimeWindow[]): string {
+export function buildCallSystemPrompt(
+  task: Task,
+  contact: Contact,
+  candidateWindows: TimeWindow[],
+  ownerProfile?: string,
+): string {
   return `
 ${buildBaseSystemPromptGuidance()}
 
@@ -116,7 +143,7 @@ report_negotiation_failed with a short reason.
 If you get stuck — a confusing phone menu, a hostile or nonsensical response, or you genuinely cannot proceed —
 call escalate_and_end_call with a short reason rather than guessing or looping indefinitely.
 If you're navigating a phone menu, use press_digits to select the relevant option; if you've tried a couple of
-options and still can't find a relevant one, escalate rather than keep guessing.${conversationModeGuidance(task)}
+options and still can't find a relevant one, escalate rather than keep guessing.${conversationModeGuidance(task)}${ownerProfileSection(ownerProfile)}
 `.trim();
 }
 
@@ -140,12 +167,12 @@ call does not end when you say goodbye; it ends only when your backend ends it.`
  * voice needs to hold the conversation: who it is calling, why, and how to
  * sound.
  */
-export function buildCallFrontendPrompt(task: Task, contact: Contact): string {
+export function buildCallFrontendPrompt(task: Task, contact: Contact, ownerProfile?: string): string {
   return `
 ${buildFrontendSystemPromptGuidance()}
 
 You are calling ${contact.displayName} on behalf of ${config.ASSISTANT_PRINCIPAL_NAME} to: ${task.goalDescription}.
 
-Contact context: ${contact.notes ?? '(no notes on file)'}${taskDetails(task)}${conversationModeFrontendGuidance(task)}
+Contact context: ${contact.notes ?? '(no notes on file)'}${taskDetails(task)}${conversationModeFrontendGuidance(task)}${ownerProfileSection(ownerProfile)}
 `.trim();
 }

@@ -147,6 +147,35 @@ enough. Only the `banjo_test` database needs the explicit `db:migrate` above.
 If you *author* a schema change, run `npm run db:generate` and commit the generated SQL alongside
 your `src/**/schema.ts` edit.
 
+## Making it yours: the owner profile
+
+The call prompts live in code (`src/voice/systemPrompt.ts`, `src/tasks/promptBuilder.ts`) on purpose: most
+of what they say was learned from real calls — disclosing that it's an AI, booking only after a clear yes,
+getting the timezone right — and they're pinned by tests. Upgrading Banjo upgrades them.
+
+What's yours to change goes in an **owner profile**: a short Markdown file of standing notes that's added to
+every outbound call, below those rules.
+
+```bash
+cp banjo-profile.example.md banjo-profile.md    # git-ignored — edit it
+echo 'PROMPT_PROFILE_FILE=./banjo-profile.md' >> .env
+```
+
+Put in what you'd tell a human assistant before they pick up the phone: facts about you and whoever you book
+for ("Pepper is a beagle who hates nail trims"), your preferences, and how calls should sound. Banjo uses the
+facts to answer questions, and only shares one when it matters to the call.
+
+- **The rules still win.** The prompt tells the model that nothing in the profile overrides disclosure,
+  explicit agreement or the timezone. A profile can make Banjo friendlier, but it can't make Banjo claim
+  to be human.
+- **Per-call notes win over the profile.** `place_call`'s `constraints.notes` are more specific.
+- **Checked at boot, re-read per call.** A bad path or a file over 4,000 characters stops startup. After
+  that, edits apply on the next call, with no restart needed.
+- **In Docker**, mount the file: uncomment the `volumes:` lines under `app` in `docker-compose.yml`, or put
+  them in a git-ignored `docker-compose.override.yml`.
+- **Outbound only, for now.** The inbound booking line answers strangers, so it doesn't get your personal
+  notes.
+
 ## Companion Claude Code skill
 
 Banjo only handles the phone-calling half of "get this errand done." The other half — deciding

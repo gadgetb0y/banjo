@@ -8,3 +8,6 @@ coverage/
 .remember/
 .playwright-mcp/
 .claude/worktrees/
+# Personal: the owner profile and local compose tweaks (e.g. mounting it)
+banjo-profile.md
+docker-compose.override.yml
