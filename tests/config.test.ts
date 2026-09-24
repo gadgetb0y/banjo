@@ -27,7 +27,7 @@ const ALL_CONFIG_KEYS = [
   'NOTIFICATION_CHANNEL', 'NOTIFY_TO_PHONE_NUMBER', 'NOTIFY_FROM_PHONE_NUMBER',
   'MCP_API_KEY', 'TOOL_TIMEOUT_MS', 'LOG_TRANSCRIPTS',
   'INBOUND_BOOKING_ENABLED', 'BUSINESS_HOURS_DAYS', 'BUSINESS_HOURS_START', 'BUSINESS_HOURS_END',
-  'INBOUND_DEFAULT_DURATION_MINUTES', 'INBOUND_MAX_LOOKAHEAD_DAYS', 'ASSISTANT_PRINCIPAL_NAME',
+  'INBOUND_DEFAULT_DURATION_MINUTES', 'INBOUND_MAX_LOOKAHEAD_DAYS', 'ASSISTANT_PRINCIPAL_NAME', 'DISCLOSURE_LINE',
 ];
 
 function setEnv(overrides: Record<string, string | undefined>) {
@@ -143,5 +143,26 @@ describe('config: env schema', () => {
   it('rejects a malformed BUSINESS_HOURS_DAYS value', async () => {
     setEnv({ BUSINESS_HOURS_DAYS: '7' }); // 7 is out of the valid 0-6 range
     await expect(import('../src/config/index.js')).rejects.toThrow();
+  });
+
+  describe('DISCLOSURE_LINE (#8)', () => {
+    it('defaults to a line that says it is an AI and names the principal', async () => {
+      setEnv({});
+      const { config, disclosureLine } = await import('../src/config/index.js');
+      expect(config.DISCLOSURE_LINE).toMatch(/\bAI\b/);
+      expect(disclosureLine()).toContain(config.ASSISTANT_PRINCIPAL_NAME);
+      expect(disclosureLine()).not.toContain('{name}');
+    });
+
+    it('accepts custom wording that says AI', async () => {
+      setEnv({ DISCLOSURE_LINE: "Hello! Quick heads-up: I'm {name}'s AI assistant." });
+      const { disclosureLine } = await import('../src/config/index.js');
+      expect(disclosureLine()).toBe(`Hello! Quick heads-up: I'm ${BASE_ENV.ASSISTANT_PRINCIPAL_NAME}'s AI assistant.`);
+    });
+
+    it('refuses to start with wording that does not say AI', async () => {
+      setEnv({ DISCLOSURE_LINE: "Hi, I'm calling on behalf of {name}." });
+      await expect(import('../src/config/index.js')).rejects.toThrow(/DISCLOSURE_LINE/);
+    });
   });
 });

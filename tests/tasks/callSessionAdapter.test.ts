@@ -63,6 +63,25 @@ describe('buildOutboundCallSessionOptions', () => {
     vi.clearAllMocks();
   });
 
+  for (const [disclosure, disclosed] of [
+    ['disclosed', true],
+    ['missed', false],
+    ['no_speech', null],
+  ] as const) {
+    it(`records disclosure=${disclosure} on the call attempt as disclosed=${disclosed} (#8)`, async () => {
+      const options = buildOutboundCallSessionOptions({
+        task: { ...fakeTask, mode: 'booking' } as Task,
+        callAttempt: fakeCallAttempt,
+        contact: fakeContact,
+        telephony: fakeTelephony,
+        calendar: fakeCalendar,
+        systemPrompt: 'irrelevant for this test',
+      });
+      await options.onStatusChange({ kind: 'ended', reason: 'callee hung up', disclosure });
+      expect(updateCallAttempt).toHaveBeenCalledWith('call-attempt-1', expect.objectContaining({ disclosed }));
+    });
+  }
+
   it('onTranscript saves the line against this call attempt (#6)', async () => {
     const options = buildOutboundCallSessionOptions({
       task: { ...fakeTask, mode: 'booking' } as Task,
@@ -150,7 +169,7 @@ describe('buildOutboundCallSessionOptions', () => {
       systemPrompt: 'irrelevant for this test',
     });
 
-    await options.onStatusChange({ kind: 'ended', reason: 'stop' });
+    await options.onStatusChange({ kind: 'ended', reason: 'stop', disclosure: 'disclosed' });
 
     expect(getTask).toHaveBeenCalledWith('task-1');
     expect(transitionTask).toHaveBeenCalledWith('task-1', 'failed', {
@@ -169,7 +188,7 @@ describe('buildOutboundCallSessionOptions', () => {
       systemPrompt: 'irrelevant for this test',
     });
 
-    await options.onStatusChange({ kind: 'ended', reason: 'stop' });
+    await options.onStatusChange({ kind: 'ended', reason: 'stop', disclosure: 'disclosed' });
 
     expect(transitionTask).not.toHaveBeenCalled();
   });
@@ -215,13 +234,13 @@ describe('clearing the live-call registration when a call really ends', () => {
 
   it("clears it when the call ends normally", async () => {
     const options = optionsForLiveTask();
-    await options.onStatusChange({ kind: 'ended', reason: 'callee hung up' });
+    await options.onStatusChange({ kind: 'ended', reason: 'callee hung up', disclosure: 'disclosed' });
     expect(getLiveCall('task-1')).toBeUndefined();
   });
 
   it('clears it when the call ends in a status failure', async () => {
     const options = optionsForLiveTask();
-    await options.onStatusChange({ kind: 'failed', reason: 'telephony blew up' });
+    await options.onStatusChange({ kind: 'failed', reason: 'telephony blew up', disclosure: 'disclosed' });
     expect(getLiveCall('task-1')).toBeUndefined();
   });
 

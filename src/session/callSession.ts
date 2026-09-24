@@ -8,6 +8,7 @@ import type { VerbatimDeliveryReport, VoiceAIEvent, VoiceAIProvider } from '../v
 import { createAudioPlaybackTracker, type AudioPlaybackTracker } from './audioPlaybackTracker.js';
 import { negotiateAudioFormats, resolveAudioPipeline, type AudioPipeline } from './audioPipeline.js';
 import type { CallContext } from './types.js';
+import { checkDisclosure, type DisclosureResult } from './disclosure.js';
 import { classifyTranscript } from './transcriptQuality.js';
 
 export type CallSessionState = 'connecting' | 'active' | 'tool-pending' | 'ending' | 'ended' | 'error';
@@ -73,8 +74,8 @@ type AnsweredBy = Extract<TelephonyEvent, { type: 'answering_machine_detected' }
 export type CallSessionStatusPatch =
   | { kind: 'started'; providerCallId: string }
   | { kind: 'answering_machine_detected'; answeredBy: AnsweredBy }
-  | { kind: 'ended'; reason: string }
-  | { kind: 'failed'; reason: string };
+  | { kind: 'ended'; reason: string; disclosure: DisclosureResult }
+  | { kind: 'failed'; reason: string; disclosure: DisclosureResult };
 
 /**
  * Generic over the shape of context passed to this call's tool handlers
@@ -137,6 +138,8 @@ export class CallSession<TCtx = CallContext> {
   private readonly voiceAI: VoiceAIProvider;
   /** Last seq handed to onTranscript (#6). */
   private transcriptSeq = 0;
+  /** The first thing Banjo said — what the disclosure check (#8) judges. */
+  private firstAssistantLine: string | undefined;
   private readonly pipeline: AudioPipeline;
   private readonly outputFormat;
   private readonly toolRegistry: Map<string, VoiceTool<any, TCtx>>;
@@ -280,6 +283,7 @@ export class CallSession<TCtx = CallContext> {
           const quality = classifyTranscript(event.text);
           if (quality === 'empty') break;
           this.recordTranscript(event.role, event.text, quality);
+          if (event.role === 'assistant' && this.firstAssistantLine === undefined) this.firstAssistantLine = event.text;
           if (config.LOG_TRANSCRIPTS) {
             logger.info(
               { callId: this.opts.callId, role: event.role, text: event.text, ...(quality === 'suspect' && { suspect: true }) },
@@ -539,7 +543,7 @@ export class CallSession<TCtx = CallContext> {
     this.clearSilenceWatchdog();
     logger.error({ err, reason, callId: this.opts.callId }, 'Call session error');
     this.setState('error');
-    await this.opts.onStatusChange({ kind: 'failed', reason });
+    await this.opts.onStatusChange({ kind: 'failed', reason, disclosure: checkDisclosure(this.firstAssistantLine) });
     // A dropped telephony/voice-AI leg has no PSTN-level way to auto-resume —
     // the caller would have to call back. Disconnect the other leg promptly
     // so we're not leaking billed connection time on a call that's already dead.
@@ -594,7 +598,7 @@ export class CallSession<TCtx = CallContext> {
     this.clearSilenceWatchdog();
     this.setState('ending');
     await this.waitForInFlightToolHandlers();
-    await this.opts.onStatusChange({ kind: 'ended', reason });
+    await this.opts.onStatusChange({ kind: 'ended', reason, disclosure: checkDisclosure(this.firstAssistantLine) });
     await this.voiceAI.disconnect().catch(() => {});
     await this.hangUpTelephony();
     this.setState('ended');

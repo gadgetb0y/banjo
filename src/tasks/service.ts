@@ -197,7 +197,7 @@ export async function latestCallAttemptFor(taskId: string): Promise<CallAttempt 
 
 export async function updateCallAttempt(
   id: string,
-  patch: Partial<Pick<CallAttempt, 'status' | 'providerCallId' | 'answeredBy' | 'endedAt' | 'errorDetail'>>,
+  patch: Partial<Pick<CallAttempt, 'status' | 'providerCallId' | 'answeredBy' | 'endedAt' | 'errorDetail' | 'disclosed'>>,
 ): Promise<CallAttempt> {
   const [row] = await db.update(callAttempts).set(patch).where(eq(callAttempts.id, id)).returning();
   if (!row) throw new Error(`Call attempt not found: ${id}`);

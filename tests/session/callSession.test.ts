@@ -1035,7 +1035,7 @@ describe('CallSession: silence watchdog — the model going quiet after a user t
 
       await vi.advanceTimersByTimeAsync(7000); // second window, still nothing -> give up
 
-      expect(options.onStatusChange).toHaveBeenCalledWith({ kind: 'failed', reason: 'assistant_silence_watchdog' });
+      expect(options.onStatusChange).toHaveBeenCalledWith(expect.objectContaining({ kind: 'failed', reason: 'assistant_silence_watchdog' }));
       expect(telephony.provider.hangUp).toHaveBeenCalled();
     } finally {
       vi.useRealTimers();
@@ -1096,5 +1096,44 @@ describe('CallSession: every finalised line goes to onTranscript, numbered in ar
     await new Promise((r) => setTimeout(r, 0));
     expect(options.onFailure).not.toHaveBeenCalled();
     expect(vi.mocked(options.onTranscript).mock.calls[1]![0]).toMatchObject({ seq: 2, text: 'Second.' });
+  });
+});
+
+describe("CallSession: reports whether the call opened by saying it's an AI (#8)", () => {
+  beforeEach(() => {
+    voiceAIEmitter.removeAllListeners('event');
+  });
+
+  async function endAfter(lines: { role: 'user' | 'assistant'; text: string }[]) {
+    const telephony = makeFakeTelephony();
+    const options = makeFakeCallSessionOptions(telephony.provider);
+    const session = new CallSession(options);
+    await session.start();
+    for (const { role, text } of lines) {
+      voiceAIEmitter.emit('event', { type: 'transcript', role, text, isFinal: true } satisfies VoiceAIEvent);
+    }
+    await session.stop('test over');
+    return vi.mocked(options.onStatusChange).mock.calls.map(([patch]) => patch).find((p) => p.kind === 'ended');
+  }
+
+  it('disclosed: Banjo\'s first line says AI', async () => {
+    const ended = await endAfter([
+      { role: 'user', text: "Claudia's, how can I help?" },
+      { role: 'assistant', text: "Hi, I'm an AI assistant calling on behalf of Steve." },
+    ]);
+    expect(ended).toMatchObject({ kind: 'ended', disclosure: 'disclosed' });
+  });
+
+  it("missed: judged on Banjo's FIRST line, so saying it later when asked doesn't count", async () => {
+    const ended = await endAfter([
+      { role: 'assistant', text: "Hi, I'm calling on behalf of Steve." },
+      { role: 'user', text: 'Am I talking to a real person?' },
+      { role: 'assistant', text: "I'm an AI assistant." },
+    ]);
+    expect(ended).toMatchObject({ disclosure: 'missed' });
+  });
+
+  it('no_speech: Banjo never spoke', async () => {
+    expect(await endAfter([])).toMatchObject({ disclosure: 'no_speech' });
   });
 });

@@ -145,8 +145,10 @@ export interface TelephonyProvider {
 **`call_attempts`** — child of a phone-channel task, tracks call *mechanics* separately from the task's *business outcome*:
 
 ```ts
-{ id, taskId, providerCallId, status, answeredBy, startedAt, endedAt, errorDetail }
+{ id, taskId, providerCallId, status, answeredBy, disclosed, startedAt, endedAt, errorDetail }
 ```
+
+`disclosed`: whether the first thing Banjo said on the call included "AI" (#8, `session/disclosure.ts`), or null if it never spoke. Outbound calls are prompted to open with `DISCLOSURE_LINE`, but that's a prompt rule, not an enforced line; this column is the after-the-fact check. A miss is also noted in the owner's notification.
 
 **`call_transcript_turns`** (`src/transcripts/`) — what was said, one row per finalised line, written only when `PERSIST_TRANSCRIPTS=true` and deleted after `TRANSCRIPT_RETENTION_DAYS` (default 30; 0 = forever):
 

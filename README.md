@@ -92,11 +92,12 @@ project with one maintainer. Things worth knowing before you build on it:
   ([#8](https://github.com/shatch/banjo/issues/8)).
 - **No call transfer.** When a call needs a human, Banjo hangs up and notifies you rather than
   handing the call over. ([#7](https://github.com/shatch/banjo/issues/7))
-- **AI disclosure is prompt-level only.** Banjo tells the model to say who it's calling for and not
-  to claim it's human if asked, but there's no enforced disclosure line and no recording-consent
-  announcement. **If you're in a jurisdiction with AI-disclosure or two-party-consent rules
-  (TCPA/FCC, California AB 2905), that's on you today.**
-  ([#8](https://github.com/shatch/banjo/issues/8))
+- **AI disclosure is a prompt rule, checked after the call, not enforced.** Banjo is told to open every
+  call with `DISCLOSURE_LINE` (default: *"Hi, I'm an AI assistant calling on behalf of {name}."*, and it
+  must say "AI"). Afterwards, its first line is checked. A miss is recorded on the call attempt and
+  noted in your notification, but it isn't prevented, and there's no recording-consent announcement yet.
+  **If you're in a jurisdiction with AI-disclosure or two-party-consent rules (TCPA/FCC, California
+  AB 2905), check your own calls.** ([#8](https://github.com/shatch/banjo/issues/8))
 - **Logs are redacted, not access-controlled.** Phone numbers are logged with only the last 4 digits,
   and voicemail text and raw tool arguments as a length. Error messages from vendors can still quote a
   number, and `LOG_TRANSCRIPTS=true` deliberately logs full call text. Treat logs as sensitive.

@@ -88,14 +88,14 @@ describe('buildInboundCallSessionOptions', () => {
   it('onStatusChange persists status=ended on the inbound call', async () => {
     updateInboundCall.mockClear();
     const options = buildOptions();
-    await options.onStatusChange({ kind: 'ended', reason: 'stop' });
+    await options.onStatusChange({ kind: 'ended', reason: 'stop', disclosure: 'disclosed' });
     expect(updateInboundCall).toHaveBeenCalledWith('inbound-call-1', { status: 'ended' });
   });
 
   it('onStatusChange persists status=error on failure', async () => {
     updateInboundCall.mockClear();
     const options = buildOptions();
-    await options.onStatusChange({ kind: 'failed', reason: 'telephony_error' });
+    await options.onStatusChange({ kind: 'failed', reason: 'telephony_error', disclosure: 'disclosed' });
     expect(updateInboundCall).toHaveBeenCalledWith('inbound-call-1', { status: 'error' });
   });
 

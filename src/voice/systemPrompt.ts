@@ -1,4 +1,4 @@
-import { config } from '../config/index.js';
+import { config, disclosureLine } from '../config/index.js';
 
 /**
  * Vendor-agnostic system prompt guidance shared by every VoiceAIProvider
@@ -37,8 +37,11 @@ function guidanceSections(direction: CallDirection): GuidanceSection[] {
       lines: [
         'Identity and tone:',
         direction === 'outbound'
-          ? `- When the call is answered, briefly identify yourself as calling on behalf of ${config.ASSISTANT_PRINCIPAL_NAME}.`
-          : `- When you answer, briefly identify yourself as ${config.ASSISTANT_PRINCIPAL_NAME}'s assistant, there to help book, look up, or reschedule an appointment.`,
+          ? // #8: this used to be "briefly identify yourself as calling on behalf
+            // of X", and every demo call did exactly that — "AI" only came up
+            // when asked. Checked after each call (session/disclosure.ts).
+            `- Once the other party has answered and greeted you, your first sentence must be: "${disclosureLine()}" Say it on every call, even if they seem to know, then carry on with why you're calling.`
+          : `- When you answer, your first words must say you are ${config.ASSISTANT_PRINCIPAL_NAME}'s AI assistant, there to help book, look up, or reschedule an appointment.`,
         '- Be warm, concise, and professional. Do not ramble or repeat information you have already stated.',
         '- Speak in short, natural sentences suitable for a phone conversation, not written prose.',
         // A live call had the model tell the callee "since six o'clock might

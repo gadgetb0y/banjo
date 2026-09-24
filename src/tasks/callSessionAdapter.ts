@@ -3,7 +3,9 @@ import type { Contact } from '../contacts/schema.js';
 import { getContact } from '../contacts/service.js';
 import type { CallSessionOptions } from '../session/callSession.js';
 import type { CallContext } from '../session/types.js';
-import { buildOutcomeSummary } from '../notifications/channel.js';
+import { logger } from '../lib/logger.js';
+import { buildOutcomeSummary, withDisclosureNote } from '../notifications/channel.js';
+import type { DisclosureResult } from '../session/disclosure.js';
 import { createNotificationChannel } from '../notifications/twilioSms.js';
 import { pressDigitsTool } from '../telephony/dtmf.js';
 import type { TelephonyProvider } from '../telephony/providers/types.js';
@@ -20,12 +22,12 @@ import { saveTranscriptTurn } from '../transcripts/service.js';
  * sweep can notify too — a task whose process died mid-call has no session
  * left to do it, which is exactly why those failures used to be silent.
  */
-export async function notifyTaskOutcome(taskId: string): Promise<void> {
+export async function notifyTaskOutcome(taskId: string, disclosure?: DisclosureResult): Promise<void> {
   const current = await getTask(taskId);
   if (!current || !current.outcome || !isTerminalStatus(current.status)) return;
   const contact = await getContact(current.contactId);
   if (!contact) return;
-  const summary = buildOutcomeSummary(contact, current.outcome);
+  const summary = withDisclosureNote(buildOutcomeSummary(contact, current.outcome), disclosure);
   await createNotificationChannel().notify(current.id, current.outcome, summary);
 }
 
@@ -82,6 +84,15 @@ export function buildOutboundCallSessionOptions(params: {
     }
   }
 
+  // Set when the call ends, read by notifyIfTerminal right after (#8).
+  let disclosure: DisclosureResult | undefined;
+  const recordDisclosure = (result: DisclosureResult): DisclosureResult => {
+    if (result === 'missed') {
+      logger.warn({ taskId: task.id, callAttemptId: callAttempt.id }, "call did not open by saying it's an AI");
+    }
+    return result;
+  };
+
   return {
     callId: callAttempt.id,
     telephony,
@@ -130,12 +141,19 @@ export function buildOutboundCallSessionOptions(params: {
           // The call is genuinely over here — not when start() returned. See
           // the registerLiveCall comment in orchestrator.ts.
           unregisterLiveCall(task.id);
-          await updateCallAttempt(callAttempt.id, { status: 'ended', endedAt: new Date() });
+          disclosure = recordDisclosure(patch.disclosure);
+          await updateCallAttempt(callAttempt.id, { status: 'ended', endedAt: new Date(), disclosed: disclosedColumn(patch.disclosure) });
           await failTaskIfStillNonTerminal(patch.reason);
           break;
         case 'failed':
           unregisterLiveCall(task.id);
-          await updateCallAttempt(callAttempt.id, { status: 'error', errorDetail: patch.reason, endedAt: new Date() });
+          disclosure = recordDisclosure(patch.disclosure);
+          await updateCallAttempt(callAttempt.id, {
+            status: 'error',
+            errorDetail: patch.reason,
+            endedAt: new Date(),
+            disclosed: disclosedColumn(patch.disclosure),
+          });
           break;
         default: {
           // Exhaustiveness check: if CallSessionStatusPatch grows a new
@@ -153,7 +171,12 @@ export function buildOutboundCallSessionOptions(params: {
     },
 
     async notifyIfTerminal() {
-      await notifyTaskOutcome(task.id);
+      await notifyTaskOutcome(task.id, disclosure);
     },
   };
+}
+
+/** call_attempts.disclosed: true / false, or null when Banjo never spoke. */
+function disclosedColumn(result: DisclosureResult): boolean | null {
+  return result === 'no_speech' ? null : result === 'disclosed';
 }

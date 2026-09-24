@@ -1,3 +1,4 @@
+import { logger } from '../lib/logger.js';
 import type { CalendarProvider } from '../calendar/types.js';
 import type { CallSessionOptions } from '../session/callSession.js';
 import type { TelephonyProvider } from '../telephony/providers/types.js';
@@ -77,10 +78,13 @@ export function buildInboundCallSessionOptions(params: {
           // into an unhandled case.
           break;
         case 'ended':
-          await updateInboundCall(inboundCall.id, { status: 'ended' });
-          break;
         case 'failed':
-          await updateInboundCall(inboundCall.id, { status: 'error' });
+          // #8: inbound has no per-call notification, so a missed disclosure
+          // is a log line here rather than a note to the owner.
+          if (patch.disclosure === 'missed') {
+            logger.warn({ inboundCallId: inboundCall.id }, "inbound call did not open by saying it's an AI");
+          }
+          await updateInboundCall(inboundCall.id, { status: patch.kind === 'ended' ? 'ended' : 'error' });
           break;
         default: {
           // Exhaustiveness check: if CallSessionStatusPatch grows a new
