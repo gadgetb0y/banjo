@@ -18,7 +18,9 @@ check or reschedule with you, recognizing callers already in your Google Contact
 
 ## Hear it
 
-▶ **[Listen to a real call (2:11)](assets/banjo-demo.mp4)**: Banjo books a dog grooming appointment. The
+
+https://github.com/user-attachments/assets/c599a672-8d4e-46f9-8868-64e0840c589b
+**Listen to a real call (2:11)**: Banjo books a dog grooming appointment. The
 call and the calendar are real; the groomer is role-played. Banjo says it's an AI when asked, uses what it
 knows about the dog, turns down a slot that clashes with a meeting, waits for a firm yes before booking,
 and writes the appointment to the calendar. This is a first pass. It hangs up without reading the booking
