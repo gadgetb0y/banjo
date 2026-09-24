@@ -2,7 +2,7 @@ import { z } from 'zod';
 import { SlotUnavailableError } from '../../calendar/types.js';
 import { config } from '../../config/index.js';
 import { childLogger } from '../../lib/logger.js';
-import { zonedTimeToUtcIso } from '../../lib/timezone.js';
+import { formatInZone, formatSpokenInZone, zonedTimeToUtcIso } from '../../lib/timezone.js';
 import { TimeoutError, withTimeout } from '../../lib/withTimeout.js';
 import type { CallContext } from '../../session/types.js';
 import { getTask, NON_TERMINAL_STATUSES, transitionTask } from '../../tasks/service.js';
@@ -246,7 +246,16 @@ export const confirmAppointmentTool: VoiceTool<{
           'calendar event written, but the task could not be marked confirmed',
         );
       }
-      return { ok: true, confirmedStart: result.confirmedStart };
+      // Local and spoken, never the calendar's own string (UTC, or an offset
+      // the model would have to apply): the prompt says every time is
+      // CALENDAR_TIMEZONE local, and the model reads this back to the other
+      // party (#44). Same failure class as the 4-hours-off booking.
+      const spoken = formatSpokenInZone(confirmedStartIso, config.CALENDAR_TIMEZONE);
+      return {
+        ok: true,
+        confirmedStart: formatInZone(confirmedStartIso, config.CALENDAR_TIMEZONE),
+        spokenStart: `${spoken.day} at ${spoken.time}`,
+      };
     });
   },
 });
