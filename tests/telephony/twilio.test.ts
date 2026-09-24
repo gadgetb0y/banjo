@@ -1,5 +1,11 @@
 import { EventEmitter } from 'node:events';
 import { describe, expect, it, vi } from 'vitest';
+// twilio.ts logs through a childLogger; capture it so hang-up warnings can be asserted.
+const { fakeLog } = vi.hoisted(() => ({
+  fakeLog: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
+}));
+vi.mock('../../src/lib/logger.js', () => ({ childLogger: () => fakeLog, logger: fakeLog }));
+
 import { TwilioProvider } from '../../src/telephony/providers/twilio.js';
 import { pcm16ToMuLaw } from '../../src/telephony/audio/codec.js';
 import type { TelephonyEvent } from '../../src/telephony/providers/types.js';
@@ -231,6 +237,36 @@ describe('TwilioProvider.hangUp', () => {
 
     await expect(provider.hangUp('CA-inbound-1')).rejects.toThrow('call already completed');
     expect(provider.isAnyCallActive()).toBe(false);
+  });
+});
+
+describe('TwilioProvider.hangUp: a repeat hang-up is expected, not a warning', () => {
+  // Every call logged "hangUp called with no known providerCallId" at WARN:
+  // an ending tool hangs up (and the call is forgotten), then CallSession's
+  // teardown hangs up again, as its own comment says it safely may. The
+  // warning is still worth having for a call Twilio never knew about.
+  function providerWithCall() {
+    const provider = new TwilioProvider();
+    provider.registerInboundCall('CA-inbound-1', '+15555550100');
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const client = (provider as any).client;
+    Object.defineProperty(client, 'calls', { value: vi.fn(() => ({ update: vi.fn(async () => ({})) })), configurable: true });
+    return provider;
+  }
+
+  it('does not warn when hanging up a call this provider already ended', async () => {
+    const provider = providerWithCall();
+    fakeLog.warn.mockClear();
+    await provider.hangUp('CA-inbound-1');
+    await provider.hangUp('CA-inbound-1');
+    expect(fakeLog.warn).not.toHaveBeenCalledWith(expect.anything(), expect.stringMatching(/no known providerCallId/));
+  });
+
+  it('still warns for a call it never knew about', async () => {
+    const provider = new TwilioProvider();
+    fakeLog.warn.mockClear();
+    await provider.hangUp('CA-never-seen');
+    expect(fakeLog.warn).toHaveBeenCalledWith(expect.anything(), expect.stringMatching(/no known providerCallId/));
   });
 });
 
