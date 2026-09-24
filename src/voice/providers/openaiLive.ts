@@ -386,9 +386,10 @@ export class OpenAILiveProvider implements VoiceAIProvider {
     this.holdTurnEndForVerbatim = true;
     this.clearTurnEndTimer();
     // No verbatim mechanism exists — this is a request, not a guarantee;
-    // verbatimDeliveryReport() checks what was actually said.
+    // verbatimDeliveryReport() checks what was actually said. JSON.stringify
+    // quotes the message so a double quote inside it can't end it early.
     this.appendInstructions(
-      `One-time cue for this moment only: say exactly the following once, word for word, and nothing else — no preamble, no additions, no acknowledgement — and never repeat it on a later turn: "${text}"`,
+      `One-time cue for this moment only: say exactly the following once, word for word, and nothing else — no preamble, no additions, no acknowledgement — and never repeat it on a later turn: ${JSON.stringify(text)}`,
     );
   }
 

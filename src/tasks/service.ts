@@ -1,4 +1,4 @@
-import { and, desc, eq, inArray } from 'drizzle-orm';
+import { and, desc, eq, inArray, isNull, lte, or } from 'drizzle-orm';
 import { db } from '../db/index.js';
 import { logger } from '../lib/logger.js';
 import {
@@ -127,11 +127,7 @@ export async function transitionTask(
  * racing a just-starting run still stops it before dialing.
  */
 export async function cancelPendingTask(id: string): Promise<Task | undefined> {
-  const [row] = await db
-    .update(tasks)
-    .set({ status: 'cancelled', updatedAt: new Date() })
-    .where(and(eq(tasks.id, id), inArray(tasks.status, ['pending', 'checking_availability'])))
-    .returning();
+  const row = await transitionTask(id, 'cancelled', undefined, { from: ['pending', 'checking_availability'] });
   return row ?? getTask(id);
 }
 
@@ -165,6 +161,24 @@ export async function listRecentTasks(limit = 20): Promise<Task[]> {
 
 export async function listNonTerminalTasks(): Promise<Task[]> {
   return db.select().from(tasks).where(inArray(tasks.status, NON_TERMINAL_STATUSES));
+}
+
+/**
+ * Tasks the orchestration poller should start now: not yet on a call
+ * ('pending', or 'checking_availability' left behind by a restart) and due
+ * (isTaskDue, as SQL). Filtered in the query so a 15s tick doesn't load every
+ * call in progress and every call scheduled for next week.
+ */
+export async function listStartableTasks(now: Date = new Date()): Promise<Task[]> {
+  return db
+    .select()
+    .from(tasks)
+    .where(
+      and(
+        inArray(tasks.status, ['pending', 'checking_availability']),
+        or(isNull(tasks.scheduledFor), lte(tasks.scheduledFor, now)),
+      ),
+    );
 }
 
 /**

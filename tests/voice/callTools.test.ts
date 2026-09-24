@@ -5,20 +5,18 @@ import type { TelephonyProvider } from '../../src/telephony/providers/types.js';
 import { pressDigitsTool, pressDigitsToolDefinition } from '../../src/telephony/dtmf.js';
 
 // leaveVoicemailAndEndCallTool/reportNegotiationFailedTool/escalateAndEndCallTool/
-// endCallTool all call transitionTask (and endCallTool also getTask) — stub the
+// endCallTool all call transitionTask — stub the
 // whole persistence layer so those handlers can be exercised directly, without
 // hitting a real DB, matching the pattern already used in
 // tests/voice/confirmAppointmentTool.test.ts. vi.hoisted() is required here
 // (rather than a bare top-level const) because these mock fns are referenced
 // inside vi.mock's factory below, which vitest hoists above every import.
-const { transitionTask, getTask } = vi.hoisted(() => ({
+const { transitionTask } = vi.hoisted(() => ({
   transitionTask: vi.fn(async (id: string, status: string) => ({ id, status }) as unknown as Task),
-  getTask: vi.fn(async () => undefined as Task | undefined),
 }));
 vi.mock('../../src/tasks/service.js', () => ({
-  getTask,
   transitionTask,
-  NON_TERMINAL_STATUSES: ['pending', 'checking_availability', 'calling', 'negotiating'],
+  isTerminalStatus: (status: string) => !['pending', 'checking_availability', 'calling', 'negotiating'].includes(status),
 }));
 
 const {
@@ -32,6 +30,7 @@ const {
   hangUpAfterSpeaking,
   leaveVoicemailAndEndCallTool,
   reportNegotiationFailedTool,
+  VOICEMAIL_MESSAGE_MAX_CHARS,
 } = await import('../../src/voice/tools/callTools.js');
 
 beforeEach(() => {
@@ -265,16 +264,16 @@ describe('outcome-recording order relative to hangUpAfterSpeaking (regression fo
   // Task 6-era bug: leaveVoicemailAndEndCallTool/reportNegotiationFailedTool/
   // escalateAndEndCallTool all awaited hangUpAfterSpeaking BEFORE recording
   // the task's outcome via transitionTask; endCallTool awaited it before its
-  // own getTask/transitionTask safety net. Combined with hangUpAfterSpeaking's
+  // own transitionTask safety net. Combined with hangUpAfterSpeaking's
   // wait being unbounded (now capped at MAX_HANGUP_WAIT_MS, see above), a long
   // trailing utterance could blow runToolSafely's TOOL_TIMEOUT_MS budget and
   // the outcome-recording call would simply never run. The fix reorders each
   // handler so outcome-recording happens first — asserted here via mock
   // invocationCallOrder, the same pattern already used in
   // tests/session/callSession.test.ts for fail()'s ordering.
-  function makeCtx(hangUp: TelephonyProvider['hangUp'], estimatedAudioDoneAt: number): CallContext {
+  function makeCtx(hangUp: TelephonyProvider['hangUp'], estimatedAudioDoneAt: number, task: Partial<Task> = {}): CallContext {
     return {
-      task: { id: 'task-1', goalDescription: 'Book a haircut' } as Task,
+      task: { id: 'task-1', status: 'negotiating', goalDescription: 'Book a haircut', ...task } as Task,
       callAttempt: { id: 'call-attempt-1' } as CallAttempt,
       callId: 'call-attempt-1',
       telephony: { hangUp } as unknown as TelephonyProvider,
@@ -380,9 +379,8 @@ describe('outcome-recording order relative to hangUpAfterSpeaking (regression fo
     expect(transitionOrder).toBeLessThan(hangUpOrder);
   });
 
-  it('end_call: the getTask/transitionTask safety-net check runs before hangUp, even with a long trailing wait', async () => {
+  it('end_call: the transitionTask safety net runs before hangUp, even with a long trailing wait', async () => {
     vi.useFakeTimers();
-    getTask.mockResolvedValueOnce({ id: 'task-1', status: 'negotiating' } as unknown as Task);
     const hangUp = vi.fn(async () => {});
     const now = Date.now();
 
@@ -391,7 +389,6 @@ describe('outcome-recording order relative to hangUpAfterSpeaking (regression fo
     await promise;
     vi.useRealTimers();
 
-    expect(getTask).toHaveBeenCalledWith('task-1');
     expect(transitionTask).toHaveBeenCalledWith('task-1', 'escalated', expect.anything());
     expect(hangUp).toHaveBeenCalledTimes(1);
     const transitionOrder = transitionTask.mock.invocationCallOrder[0]!;
@@ -401,19 +398,17 @@ describe('outcome-recording order relative to hangUpAfterSpeaking (regression fo
 
   it('end_call on a conversation-mode task completes the conversation instead of escalating — the model can reach the generic end_call tool on these tasks too (see outboundToolsFor), and treating that as an escalation mislabels a normal close as needing Steve follow-up', async () => {
     vi.useFakeTimers();
-    getTask.mockResolvedValueOnce({ id: 'task-1', status: 'negotiating', mode: 'conversation' } as unknown as Task);
     const hangUp = vi.fn(async () => {});
     const now = Date.now();
 
     const promise = endCallTool.handler(
       { summary: 'Caught up about the day; asked them to grab some groceries.' },
-      makeCtx(hangUp, now + 60_000),
+      makeCtx(hangUp, now + 60_000, { mode: 'conversation' }),
     );
     await vi.advanceTimersByTimeAsync(6000);
     await promise;
     vi.useRealTimers();
 
-    expect(getTask).toHaveBeenCalledWith('task-1');
     expect(transitionTask).toHaveBeenCalledWith(
       'task-1',
       'conversation_completed',
@@ -429,6 +424,18 @@ describe('outcome-recording order relative to hangUpAfterSpeaking (regression fo
     const transitionOrder = transitionTask.mock.invocationCallOrder[0]!;
     const hangUpOrder = vi.mocked(hangUp).mock.invocationCallOrder[0]!;
     expect(transitionOrder).toBeLessThan(hangUpOrder);
+  });
+
+  it('end_call right after a booking leaves the confirmed task alone', async () => {
+    vi.useFakeTimers();
+    const hangUp = vi.fn(async () => {});
+    const promise = endCallTool.handler({}, makeCtx(hangUp, Date.now(), { status: 'confirmed' }));
+    await vi.advanceTimersByTimeAsync(6000);
+    await promise;
+    vi.useRealTimers();
+
+    expect(transitionTask).not.toHaveBeenCalled();
+    expect(hangUp).toHaveBeenCalledTimes(1);
   });
 
   it('end_conversation_call: transitionTask runs before hangUp, even with a long trailing wait', async () => {
@@ -492,4 +499,16 @@ describe('ending a call: answer what is open, then an actual goodbye (#55)', () 
       expect(tool.description).toMatch(/never say you are wrapping up/i);
     });
   }
+});
+
+describe('leave_voicemail_and_end_call: message length (#3)', () => {
+  // The message is spoken verbatim within SPEAK_VERBATIM_TIMEOUT_MS (20s), and
+  // on openai-live it rides in a session.instructions.append capped at 500
+  // tokens — an unbounded message could fail outright or be cut off mid-way.
+  it(`accepts a message up to ${VOICEMAIL_MESSAGE_MAX_CHARS} characters and refuses a longer one`, () => {
+    const ok = leaveVoicemailAndEndCallTool.schema.safeParse({ message: 'x'.repeat(VOICEMAIL_MESSAGE_MAX_CHARS) });
+    const tooLong = leaveVoicemailAndEndCallTool.schema.safeParse({ message: 'x'.repeat(VOICEMAIL_MESSAGE_MAX_CHARS + 1) });
+    expect(ok.success).toBe(true);
+    expect(tooLong.success).toBe(false);
+  });
 });
