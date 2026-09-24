@@ -77,6 +77,7 @@ function makeFakeCallSessionOptions(telephony: TelephonyProvider): CallSessionOp
     onStatusChange: vi.fn(async () => {}),
     onFailure: vi.fn(async () => {}),
     notifyIfTerminal: vi.fn(async () => {}),
+    onTranscript: vi.fn(async () => {}),
   };
 }
 
@@ -1039,5 +1040,61 @@ describe('CallSession: silence watchdog — the model going quiet after a user t
     } finally {
       vi.useRealTimers();
     }
+  });
+});
+
+describe('CallSession: every finalised line goes to onTranscript, numbered in arrival order (#6)', () => {
+  beforeEach(() => {
+    voiceAIEmitter.removeAllListeners('event');
+  });
+
+  async function startedSession() {
+    const telephony = makeFakeTelephony();
+    const options = makeFakeCallSessionOptions(telephony.provider);
+    const session = new CallSession(options);
+    await session.start();
+    return { session, options };
+  }
+
+  const say = (role: 'user' | 'assistant', text: string, isFinal = true) =>
+    voiceAIEmitter.emit('event', { type: 'transcript', role, text, isFinal } satisfies VoiceAIEvent);
+
+  it('passes seq, role, text, quality, provider and arrival time; seq counts across both sides', async () => {
+    const { options } = await startedSession();
+    say('user', "Claudia's, how can I help?");
+    say('assistant', 'Hi, calling for Steve.');
+    await vi.waitFor(() => expect(options.onTranscript).toHaveBeenCalledTimes(2));
+
+    const calls = vi.mocked(options.onTranscript).mock.calls.map(([t]) => t);
+    expect(calls[0]).toMatchObject({ seq: 1, role: 'user', text: "Claudia's, how can I help?", quality: 'ok', voiceProvider: 'fake-voice' });
+    expect(calls[1]).toMatchObject({ seq: 2, role: 'assistant' });
+    expect(calls[0]!.spokenAt).toBeInstanceOf(Date);
+  });
+
+  it('skips partial and empty lines without using up a seq number', async () => {
+    const { options } = await startedSession();
+    say('user', 'Claud', false);
+    say('user', '   ');
+    say('user', 'Hello?');
+    await vi.waitFor(() => expect(options.onTranscript).toHaveBeenCalledTimes(1));
+    expect(vi.mocked(options.onTranscript).mock.calls[0]![0]).toMatchObject({ seq: 1, text: 'Hello?' });
+  });
+
+  it('keeps suspect lines, marked as suspect (#25)', async () => {
+    const { options } = await startedSession();
+    say('user', 'ᱤᱠ');
+    await vi.waitFor(() => expect(options.onTranscript).toHaveBeenCalledTimes(1));
+    expect(vi.mocked(options.onTranscript).mock.calls[0]![0]).toMatchObject({ quality: 'suspect' });
+  });
+
+  it('a failed save never fails the call, and the next line is still recorded', async () => {
+    const { options } = await startedSession();
+    vi.mocked(options.onTranscript).mockRejectedValueOnce(new Error('db down'));
+    say('user', 'First.');
+    say('user', 'Second.');
+    await vi.waitFor(() => expect(options.onTranscript).toHaveBeenCalledTimes(2));
+    await new Promise((r) => setTimeout(r, 0));
+    expect(options.onFailure).not.toHaveBeenCalled();
+    expect(vi.mocked(options.onTranscript).mock.calls[1]![0]).toMatchObject({ seq: 2, text: 'Second.' });
   });
 });

@@ -134,6 +134,20 @@ const envSchema = z
       .default('false')
       .transform((v) => v === 'true'),
 
+    // Save every call's finalised transcript lines to Postgres (#6,
+    // src/transcripts/). Off by default: this turns what was said on a call
+    // into stored personal data, which each install should choose to do.
+    // Same z.enum(['true','false']) reasoning as LOG_TRANSCRIPTS above.
+    PERSIST_TRANSCRIPTS: z
+      .enum(['true', 'false'])
+      .default('false')
+      .transform((v) => v === 'true'),
+    // Saved transcripts older than this are deleted (at boot, then daily).
+    // Applies even with PERSIST_TRANSCRIPTS off, so turning saving off doesn't
+    // leave old transcripts behind forever. 0 = keep forever — must be set
+    // explicitly; the default is a retention window, not an absence of one.
+    TRANSCRIPT_RETENTION_DAYS: z.coerce.number().int().min(0).default(30),
+
     // Kill switch for the inbound voice booking line (see
     // docs/superpowers/specs/2026-08-07-inbound-voice-booking-design.md) —
     // off by default so the public phone line only goes live once every

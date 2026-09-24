@@ -10,6 +10,11 @@ is in [`CONTRIBUTING.md`](../CONTRIBUTING.md).
 
 ## 1. Persist transcripts
 
+> **Shipped** in [#6](https://github.com/shatch/banjo/issues/6): `call_transcript_turns`, opt-in via
+> `PERSIST_TRANSCRIPTS`, 30-day default retention, read with `get_call_transcript`. The notes below are
+> the design reasoning. Still open from them: transcriber confidence (logprobs), and persisting
+> `openai-live` deltas.
+
 **Why first:** it's the highest value per line of code in the repo. Every provider adapter already
 emits normalized `transcript` events; today they reach `logger` (gated behind `LOG_TRANSCRIPTS`, off
 by default) and are then dropped. Nothing else — dispute resolution, call QA, knowledge-gap logging,

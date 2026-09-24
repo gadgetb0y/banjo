@@ -9,6 +9,11 @@ vi.mock('../../src/inbound/service.js', () => ({
   updateInboundCall: (...args: unknown[]) => updateInboundCall(...args),
 }));
 
+const saveTranscriptTurn = vi.fn(async () => {});
+vi.mock('../../src/transcripts/service.js', () => ({
+  saveTranscriptTurn: (...args: unknown[]) => saveTranscriptTurn(...(args as [])),
+}));
+
 const { buildInboundCallSessionOptions: buildOpts } = await import('../../src/inbound/callSessionAdapter.js');
 
 const fakeInboundCall = { id: 'inbound-call-1', twilioCallSid: 'CA-inbound-1' } as InboundCall;
@@ -112,5 +117,13 @@ describe('buildInboundCallSessionOptions', () => {
     const options = buildOptions();
     await options.onFailure('some_reason');
     expect(updateInboundCall).not.toHaveBeenCalled();
+  });
+});
+
+describe('buildInboundCallSessionOptions: onTranscript (#6)', () => {
+  it('saves the line against the inbound call row, not the Twilio CallSid', async () => {
+    const turn = { seq: 1, role: 'user' as const, text: 'Hello?', quality: 'ok' as const, voiceProvider: 'openai', spokenAt: new Date() };
+    await buildOptions().onTranscript(turn);
+    expect(saveTranscriptTurn).toHaveBeenCalledWith({ inboundCallId: 'inbound-call-1' }, turn);
   });
 });

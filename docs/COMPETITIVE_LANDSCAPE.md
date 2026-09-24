@@ -195,7 +195,7 @@ their own Reception on top of Banjo; they don't matter as scorecard entries.
 | Business hours | per-location, per-staff, time-off | one global window | `src/inbound/businessHours.ts` is a single rectangle — no holidays or exceptions. |
 | Call transfer | 10 intent-based rules | none | Banjo's only escape hatch is `flag_for_owner_and_end_call` — hang up and notify. |
 | Caller-facing SMS | confirmation texted to caller | none | Banjo's SMS is one-way, owner-facing only (`NOTIFY_TO_PHONE_NUMBER`). See the two-way SMS roadmap item above. |
-| Transcripts / recordings | stored, searchable inbox | none | `LOG_TRANSCRIPTS` writes to logs only. No transcript column in `tasks`, `call_attempts` or `inbound_calls`. |
+| Transcripts / recordings | stored, searchable inbox | transcripts, opt-in | `PERSIST_TRANSCRIPTS` stores every line (`call_transcript_turns`, 30-day default retention), read with `get_call_transcript`. No audio recording, no search or inbox UI. |
 | Knowledge-gap capture | logs unanswered questions for review | none | Cheap to copy and genuinely useful. |
 | Language auto-detect | 70+, switches mid-call | provider default, unconfigured | |
 | Web chat + booking page | yes | none | Banjo is phone-only. |
@@ -221,7 +221,7 @@ their own Reception on top of Banjo; they don't matter as scorecard entries.
 
 ## What's worth taking
 
-Three cheap, high-leverage items, all landing in `src/inbound/`, none touching `callSession.ts`:
+Three cheap, high-leverage items. (#1 turned out not to be inbound-only: the write path goes through `callSession.ts` and both adapters. It shipped in #6.)
 
 1. **Persist transcripts + outcome summaries.** Every provider adapter already emits `transcript` events that
    currently go only to the logger. A table keyed to `call_attempts`/`inbound_calls` is a schema change plus a

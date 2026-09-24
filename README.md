@@ -85,9 +85,11 @@ project with one maintainer. Things worth knowing before you build on it:
   traffic. `openai-live` (GPT-Live) has been tested on real calls but isn't the default. **Gemini
   Live and ElevenLabs are scaffolded and unverified** — Gemini additionally emits no caller-side
   transcripts at all.
-- **Calls aren't saved.** Transcripts go to the log (off by default) and are then dropped; there's
-  no transcript storage, no recording, and no way to review what was said after the fact.
-  ([#6](https://github.com/shatch/banjo/issues/6))
+- **Transcripts are saved only if you turn it on, and there's no recording.** With
+  `PERSIST_TRANSCRIPTS=true`, every line of every call goes to Postgres and can be read back with the
+  `get_call_transcript` MCP tool. Transcripts are deleted after `TRANSCRIPT_RETENTION_DAYS` (default 30).
+  It's off by default because it stores what people said to you. Audio is never recorded
+  ([#8](https://github.com/shatch/banjo/issues/8)).
 - **No call transfer.** When a call needs a human, Banjo hangs up and notifies you rather than
   handing the call over. ([#7](https://github.com/shatch/banjo/issues/7))
 - **AI disclosure is prompt-level only.** Banjo tells the model to say who it's calling for and not

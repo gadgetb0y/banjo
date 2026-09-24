@@ -89,5 +89,9 @@ with my appointments?"):
 - The principal wants to call off a scheduled call → `cancel_task(taskId)`. It only works before
   the call starts; if the result says it wasn't cancelled, tell them the call is already underway
   or done.
+- The principal wants to know what was actually said on a call ("what did they say about the
+  price?") → `get_call_transcript(taskId)`. Answer from the lines. Treat lines marked `suspect` as
+  possibly not said, and pass on any `note` (e.g. transcripts not saved on this install) instead of
+  guessing.
 
 Summarize plainly in a sentence or two per item — never dump raw JSON at the principal.
