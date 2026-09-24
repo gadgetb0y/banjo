@@ -728,7 +728,10 @@ describe('CallSession: the call ending while a tool handler is still running', (
     expect(options.notifyIfTerminal).toHaveBeenCalledTimes(1);
   });
 
-  it('stops waiting after TOOL_TIMEOUT_MS plus a margin if the handler never finishes', async () => {
+  it("stops waiting at the tool's own budget (its watchdog, 15s) plus a margin if the handler never finishes (#3)", async () => {
+    // Was TOOL_TIMEOUT_MS + 1s (9s), shorter than the 15s the tool-pending
+    // watchdog itself allows a handler — so end() could record the call over
+    // a handler that was still inside its budget.
     vi.useFakeTimers();
     try {
       const { telephony, options, order, handler } = sessionWithSlowTool();
@@ -739,13 +742,32 @@ describe('CallSession: the call ending while a tool handler is still running', (
       expect(handler).toHaveBeenCalled();
       telephony.emit({ callId: callAttempt.id, type: 'ended', reason: 'callee hung up' });
 
-      await vi.advanceTimersByTimeAsync(8000); // TOOL_TIMEOUT_MS
+      await vi.advanceTimersByTimeAsync(12_000); // past the old 9s cap, inside the tool's budget
       expect(order).not.toContain('status:ended');
-      await vi.advanceTimersByTimeAsync(1000); // the margin
+      await vi.advanceTimersByTimeAsync(4_000); // 15s budget + 1s margin
       expect(order).toContain('status:ended');
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it('a failure mid-tool also waits for the handler, so a booking still landing is recorded before "failed" (#3)', async () => {
+    // A telephony error (or the tool-pending watchdog) during
+    // confirm_appointment used to record 'failed' — and text a failure —
+    // while the calendar write was still going.
+    const { telephony, options, order, handler, finish } = sessionWithSlowTool();
+    await new CallSession(options).start();
+
+    voiceAIEmitter.emit('event', { type: 'tool_call', call: { id: 'call-1', name: 'slow_tool', arguments: {} } } satisfies VoiceAIEvent);
+    await vi.waitFor(() => expect(handler).toHaveBeenCalled());
+    telephony.emit({ callId: callAttempt.id, type: 'error', error: new Error('media stream dropped') });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(order).toEqual(['status:started']);
+
+    finish();
+    await vi.waitFor(() => expect(order).toContain('status:failed'));
+    expect(order).toEqual(['status:started', 'handler finished', 'status:failed']);
+    await vi.waitFor(() => expect(options.notifyIfTerminal).toHaveBeenCalledTimes(1));
   });
 });
 
