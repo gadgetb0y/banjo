@@ -616,7 +616,8 @@ export class CallSession<TCtx = CallContext> {
    * Safe to call even when the telephony leg is already gone (e.g. end()
    * reached via the telephony layer's own 'ended' event, after which
    * TwilioProvider has already deleted its per-call state) —
-   * TwilioProvider.hangUp() no-ops with a warning log in that case, and any
+   * TwilioProvider.hangUp() no-ops quietly in that case (it remembers calls
+   * it recently ended), and any
    * REST error here is swallowed rather than blocking the rest of cleanup.
    */
   private async hangUpTelephony(): Promise<void> {
