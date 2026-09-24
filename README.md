@@ -97,8 +97,9 @@ project with one maintainer. Things worth knowing before you build on it:
   announcement. **If you're in a jurisdiction with AI-disclosure or two-party-consent rules
   (TCPA/FCC, California AB 2905), that's on you today.**
   ([#8](https://github.com/shatch/banjo/issues/8))
-- **Caller phone numbers are logged unredacted**, and there's no log redaction config.
-  ([#8](https://github.com/shatch/banjo/issues/8))
+- **Logs are redacted, not access-controlled.** Phone numbers are logged with only the last 4 digits,
+  and voicemail text and raw tool arguments as a length. Error messages from vendors can still quote a
+  number, and `LOG_TRANSCRIPTS=true` deliberately logs full call text. Treat logs as sensitive.
 - **One call at a time.** The inbound line declines anything arriving while another call is live.
 - **It needs a publicly reachable hostname**, because Twilio dials back into it over HTTPS and a
   WebSocket. See the Quickstart, and

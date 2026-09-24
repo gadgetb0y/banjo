@@ -269,9 +269,9 @@ export class CallSession<TCtx = CallContext> {
         // medical/appointment details, identity-verification info like a
         // DOB a business asks for. Gated behind LOG_TRANSCRIPTS (off by
         // default, see src/config/index.ts) so it's opt-in for local-dev
-        // debugging rather than an unconditional info-level log. Redaction/
-        // a proper log sink with access controls is still tracked as a
-        // further step in docs/ARCHITECTURE.md's Open Risks.
+        // debugging rather than an unconditional info-level log. The logger's
+        // redact config (lib/logger.ts, #8) deliberately leaves this `text`
+        // alone: turning LOG_TRANSCRIPTS on is asking to see it.
         if (!event.isFinal) break;
         {
           // #25: the transcriber finalises turns nobody spoke. Empty ones are

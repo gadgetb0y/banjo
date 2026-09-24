@@ -40,7 +40,9 @@ export class TwilioSmsNotificationChannel implements NotificationChannel {
         body: summary,
       });
     } catch (err) {
-      logger.error({ err, taskId, outcome }, 'Failed to send notification SMS');
+      // The kind only: a voicemail_left outcome carries the message spoken to
+      // the other party (#8). The logger redacts it too; this doesn't rely on that.
+      logger.error({ err, taskId, outcomeKind: outcome.kind }, 'Failed to send notification SMS');
     }
   }
 }

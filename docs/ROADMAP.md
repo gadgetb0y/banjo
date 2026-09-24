@@ -149,6 +149,10 @@ disclosure line above is what makes it defensible.
 
 ### PII
 
+> **Shipped** (#8, first PR): `src/lib/logger.ts` now has a `redact` config: phone fields masked to
+> the last 4 digits, `outcome.message`/`outcome.details`/`argsStr` logged as a length, and the SMS
+> failure log records only `outcome.kind`. Not covered: numbers quoted inside vendor error messages.
+
 `src/lib/logger.ts` is 14 lines and has **no pino `redact` config**. Concretely:
 
 - Inbound caller phone numbers are logged unredacted at `info`, on by default, at five sites in
