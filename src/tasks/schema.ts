@@ -1,4 +1,4 @@
-import { jsonb, pgEnum, pgTable, text, timestamp, uuid } from 'drizzle-orm/pg-core';
+import { boolean, jsonb, pgEnum, pgTable, text, timestamp, uuid } from 'drizzle-orm/pg-core';
 import { contacts } from '../contacts/schema.js';
 
 export const taskChannelEnum = pgEnum('task_channel', ['phone', 'online']);
@@ -81,6 +81,11 @@ export const callAttempts = pgTable('call_attempts', {
   // placed after that; older rows hold the guess. The model decides voicemail
   // vs human by listening. See docs/ARCHITECTURE.md Open Risks #23.
   answeredBy: text('answered_by'),
+  // Whether the first thing Banjo said on this call included "AI" (#8,
+  // session/disclosure.ts). null: Banjo never spoke, or the call predates
+  // the check. A fact about how the call was conducted, so it lives here
+  // rather than in the task's outcome, which is usually settled mid-call.
+  disclosed: boolean('disclosed'),
   startedAt: timestamp('started_at', { withTimezone: true }).notNull().defaultNow(),
   endedAt: timestamp('ended_at', { withTimezone: true }),
   errorDetail: text('error_detail'),

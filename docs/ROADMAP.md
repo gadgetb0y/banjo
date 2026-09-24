@@ -126,6 +126,12 @@ up the phone.
 
 ### Disclosure is weaker than it looks
 
+> **Shipped** (#8, second PR) as a prompt rule plus a check, not the enforced verbatim opener
+> sketched below. The decision on #8 was that a checked prompt rule was enough for now.
+> `DISCLOSURE_LINE` (must say "AI") is Banjo's required first sentence on outbound calls, and the
+> inbound greeting says it's an AI assistant. After each call, `call_attempts.disclosed` records
+> whether Banjo's first line said "AI", and a miss is noted in the owner's notification.
+
 `src/voice/systemPrompt.ts` currently says, in prose:
 
 - "briefly identify yourself as calling on behalf of `<principal>`" — which does not require saying

@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { buildBaseSystemPromptGuidance, buildFrontendSystemPromptGuidance } from '../../src/voice/systemPrompt.js';
+import { disclosureLine } from '../../src/config/index.js';
 
 describe('buildBaseSystemPromptGuidance', () => {
   it('defaults to the outbound identity line', () => {
@@ -27,15 +28,24 @@ describe('buildBaseSystemPromptGuidance', () => {
     }
   });
 
-  it("direction='outbound' tells the model to identify itself as calling on Alex's behalf", () => {
+  it("direction='outbound': the first sentence is the disclosure line, said on every call, not only when asked (#8)", () => {
+    // Every demo call opened "I'm calling on behalf of Steve" and only said
+    // "AI" when asked — what the old "identify yourself as calling on behalf
+    // of" wording allowed.
     const prompt = buildBaseSystemPromptGuidance('outbound');
-    expect(prompt).toContain('identify yourself as calling on behalf of Alex');
+    expect(prompt).toContain(`first sentence must be: "${disclosureLine()}"`);
+    expect(prompt).toMatch(/every call, even if they seem to know/i);
   });
 
-  it("direction='inbound' does not tell the model it is calling — it answered, the caller called it", () => {
+  it("direction='inbound' opens by saying it's Alex's AI assistant, and doesn't say it is calling", () => {
     const prompt = buildBaseSystemPromptGuidance('inbound');
-    expect(prompt).not.toContain('identify yourself as calling on behalf of Alex');
+    expect(prompt).toMatch(/first words must say you are Alex's AI assistant/);
+    expect(prompt).not.toContain(disclosureLine());
     expect(prompt.toLowerCase()).not.toMatch(/identify yourself as calling/);
+  });
+
+  it('the disclosure rule reaches the voice layer too', () => {
+    expect(buildFrontendSystemPromptGuidance('outbound')).toContain(disclosureLine());
   });
 
   it('forbids promising a callback or that the assistant will follow up later — this system cannot deliver either', () => {

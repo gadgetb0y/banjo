@@ -1,3 +1,4 @@
+import type { DisclosureResult } from '../session/disclosure.js';
 import type { Contact } from '../contacts/schema.js';
 import type { TaskOutcome } from '../tasks/schema.js';
 
@@ -26,4 +27,15 @@ export function buildOutcomeSummary(contact: Contact, outcome: TaskOutcome): str
     case 'conversation_completed':
       return `Called ${contact.displayName}: ${outcome.summary}`;
   }
+}
+
+/**
+ * Appends a note when the call didn't open by saying it's an AI (#8). The
+ * owner is who answers for that call, so they hear about it with the outcome,
+ * not only in a log line.
+ */
+export function withDisclosureNote(summary: string, disclosure: DisclosureResult | undefined): string {
+  return disclosure === 'missed'
+    ? `${summary} Note: Banjo didn't say it was an AI at the start of this call.`
+    : summary;
 }

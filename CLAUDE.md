@@ -51,6 +51,8 @@ The system is two independently-swappable vendor abstraction layers, glued toget
 
 **Timezone:** `CALENDAR_TIMEZONE` (default `America/New_York`) is the single source of truth for what a spoken time means; conversions go through `src/lib/timezone.ts`'s `zonedTimeToUtcIso()`. A real booking once landed 4 hours off because this wasn't enforced everywhere — don't reintroduce a bare unzoned timestamp on any call-facing or calendar-write path.
 
+**AI disclosure:** outbound calls must open with `DISCLOSURE_LINE` (config-validated to say "AI"). It's a prompt rule in `src/voice/systemPrompt.ts`, checked afterwards by `session/disclosure.ts` into `call_attempts.disclosed`. Don't weaken the rule's wording or the "AI" validation; they are the only disclosure mechanism.
+
 **Transcripts:** `call_transcript_turns` (`src/transcripts/`) is written only through `CallSessionOptions.onTranscript`, never `transitionTask` (its compare-and-set would drop transcripts of finished calls), and is off unless `PERSIST_TRANSCRIPTS=true`. A failed save must never affect the call. Retention (`TRANSCRIPT_RETENTION_DAYS`) runs even with saving off.
 
 **Owner profile:** `PROMPT_PROFILE_FILE` (`src/tasks/ownerProfile.ts`) is the only user-customizable part of the call prompt: added to outbound prompts after every fixed rule, which it's told it cannot override. Put new customization there, not in a way that lets users replace the rules in `src/voice/systemPrompt.ts`.

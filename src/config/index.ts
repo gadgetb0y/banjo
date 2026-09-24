@@ -18,6 +18,9 @@ const e164 = z
  * time, so the process fails fast on a missing/invalid value rather than
  * discovering it mid-call. Import this module first in src/index.ts.
  */
+/** "AI" or "A.I." as a word — not the letters inside "said" or "wait". Shared with session/disclosure.ts. */
+export const AI_WORD = /\bA\.?I\b/i;
+
 const envSchema = z
   .object({
     NODE_ENV: z.enum(['development', 'production', 'test']).default('development'),
@@ -30,6 +33,19 @@ const envSchema = z
     // on behalf of Alex"). Required with no default so a fork can't
     // accidentally run with a placeholder identity on a real call.
     ASSISTANT_PRINCIPAL_NAME: z.string().min(1, 'ASSISTANT_PRINCIPAL_NAME is required'),
+
+    // What Banjo says first on every outbound call (#8): that it's an AI, and
+    // for whom. {name} becomes ASSISTANT_PRINCIPAL_NAME. The wording is yours;
+    // saying "AI" is not optional — the TCPA/FCC and California AB 2905
+    // exposure is on this path, and it's the decent thing to tell whoever
+    // picks up. Checked after each call against what was actually said
+    // (session/disclosure.ts).
+    DISCLOSURE_LINE: z
+      .string()
+      .default("Hi, I'm an AI assistant calling on behalf of {name}.")
+      .refine((line) => AI_WORD.test(line), {
+        message: 'DISCLOSURE_LINE must say "AI" — it is how every outbound call tells the other party they are talking to an AI',
+      }),
 
     DATABASE_URL: z.string().url(),
 
@@ -222,4 +238,9 @@ const envSchema = z
   });
 
 export const config = envSchema.parse(process.env);
+
+/** DISCLOSURE_LINE with {name} filled in — the sentence every outbound call opens with. */
+export function disclosureLine(): string {
+  return config.DISCLOSURE_LINE.replaceAll('{name}', config.ASSISTANT_PRINCIPAL_NAME);
+}
 export type AppConfig = typeof config;

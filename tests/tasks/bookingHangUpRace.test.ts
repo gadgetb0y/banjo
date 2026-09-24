@@ -88,7 +88,7 @@ describe('booking vs. hang-up race', () => {
     await vi.waitFor(() => expect(calendar.createEventIdempotent).toHaveBeenCalled());
 
     // The callee hangs up mid-write: the end-of-call path fails the still-in-progress task first.
-    await options.onStatusChange({ kind: 'ended', reason: 'callee hung up' });
+    await options.onStatusChange({ kind: 'ended', reason: 'callee hung up', disclosure: 'disclosed' });
     expect((await service.getTask(task.id))?.status).toBe('failed');
 
     finishWrite();
@@ -111,7 +111,7 @@ describe('booking vs. hang-up race', () => {
     finishWrite();
     await confirming;
 
-    await options.onStatusChange({ kind: 'ended', reason: 'callee hung up' });
+    await options.onStatusChange({ kind: 'ended', reason: 'callee hung up', disclosure: 'disclosed' });
     await service.transitionTask(task.id, 'conversation_completed', { outcome: { kind: 'conversation_completed', summary: 'late' } });
     await service.transitionTask(task.id, 'failed', { outcome: { kind: 'failed', reason: 'late' } });
 

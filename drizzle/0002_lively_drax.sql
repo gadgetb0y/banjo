@@ -1,0 +1,1 @@
+ALTER TABLE "call_attempts" ADD COLUMN "disclosed" boolean;
