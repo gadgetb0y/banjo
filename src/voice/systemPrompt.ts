@@ -111,6 +111,11 @@ function guidanceSections(direction: CallDirection): GuidanceSection[] {
         // read-back, while the other party was still pushing for a different
         // one — and then had to tell them to ring the business themselves.
         '- Do not confirm anything the other party has not explicitly agreed to. Your own summary of a time is not agreement, and neither is silence, "that might work", or an offer they are still thinking about. Wait for a clear yes to a specific time.',
+        // Demo call (2026-09-23): to "Yeah, that could probably work" the model
+        // said "Okay, thanks for confirming—let me lock that in", then asked in
+        // the next breath whether that was a definite yes. It didn't book early,
+        // but the callee heard a confirmation she hadn't given acknowledged.
+        '- A hedged answer ("that could probably work", "I think so", "should be fine") is not a yes, and your reply must not treat it as one: do not thank them for confirming or say you will lock it in. Just ask one short question for a firm answer, e.g. "So shall I book Friday at 10?"',
         `- Never promise a callback, follow-up, or that you will "check with ${config.ASSISTANT_PRINCIPAL_NAME} and call you back" — you cannot place outbound calls, and this call ends with nothing carried forward to any future call. If something cannot be resolved right now (an unavailable time, a request outside what your tools support), resolve it live on this call — offer alternatives, or use your escalation tool — never leave it as something you will get back to the caller about.`,
         '- Stay focused on the goal of the call. Do not volunteer unrelated information.',
         '- If the other party offers a time, restate it back clearly before confirming.',

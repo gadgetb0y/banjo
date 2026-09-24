@@ -104,3 +104,45 @@ describe('the task\'s own constraints reach the model', () => {
     expect(prompt).not.toMatch(/Appointment length:/);
   });
 });
+
+describe('pre-checked windows are shown in local time', () => {
+  // Demo call, 2026-09-23: windows reached the prompt as raw UTC ISO strings
+  // ("2026-09-24T16:00:00.000Z to 2026-09-24T17:30:00.000Z; ..."), while the
+  // same prompt says every time is America/New_York local. Asked for something
+  // after Thursday 3:30, the model offered "around 4:00 or 5:30" — the UTC
+  // slot starts 16:00 and 17:30, read as local. 4:00 was Steve's 4pm call and
+  // 5:30 was outside the day's 9-to-5 window.
+  const thursdaySlots = [
+    { start: '2026-09-24T13:00:00.000Z', end: '2026-09-24T14:30:00.000Z' },
+    { start: '2026-09-24T14:30:00.000Z', end: '2026-09-24T16:00:00.000Z' },
+    { start: '2026-09-24T16:00:00.000Z', end: '2026-09-24T17:30:00.000Z' },
+    { start: '2026-09-24T17:30:00.000Z', end: '2026-09-24T19:00:00.000Z' },
+  ];
+  const fridaySlots = [
+    { start: '2026-09-25T13:00:00.000Z', end: '2026-09-25T14:30:00.000Z' },
+    { start: '2026-09-25T14:30:00.000Z', end: '2026-09-25T16:00:00.000Z' },
+  ];
+
+  it('never hands the model a UTC timestamp', () => {
+    const prompt = buildCallSystemPrompt(bookingTask, contact, [...thursdaySlots, ...fridaySlots]);
+    expect(prompt).not.toMatch(/\d{2}:\d{2}:\d{2}(\.\d{3})?Z/);
+  });
+
+  it('merges back-to-back slots into one local-time range per stretch of free time', () => {
+    const prompt = buildCallSystemPrompt(bookingTask, contact, [...thursdaySlots, ...fridaySlots]);
+    expect(prompt).toContain('Thursday, September 24, 9:00 AM to 3:00 PM');
+    expect(prompt).toContain('Friday, September 25, 9:00 AM to 12:00 PM');
+  });
+
+  it('keeps separate ranges apart when there is a gap between them', () => {
+    const prompt = buildCallSystemPrompt(bookingTask, contact, [thursdaySlots[0]!, thursdaySlots[2]!]);
+    expect(prompt).toContain('Thursday, September 24, 9:00 AM to 10:30 AM');
+    expect(prompt).toContain('Thursday, September 24, 12:00 PM to 1:30 PM');
+  });
+
+  it('tells the model the whole appointment must fit inside a range, including times it suggests itself', () => {
+    const prompt = buildCallSystemPrompt(bookingTask, contact, thursdaySlots);
+    expect(prompt).toMatch(/entirely inside one of these ranges/i);
+    expect(prompt).toMatch(/only suggest start times/i);
+  });
+});

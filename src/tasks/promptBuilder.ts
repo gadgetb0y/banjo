@@ -3,9 +3,34 @@ import { config } from '../config/index.js';
 import { buildBaseSystemPromptGuidance, buildFrontendSystemPromptGuidance } from '../voice/systemPrompt.js';
 import type { Task, TimeWindow } from './schema.js';
 
+/**
+ * Candidate windows arrive as UTC ISO instants, one per appointment-length
+ * slot. They used to go into the prompt exactly like that — beside a timezone
+ * rule saying every time is local. A demo call (2026-09-23), asked for
+ * something after Thursday 3:30, offered "around 4:00 or 5:30": the UTC slot
+ * starts 16:00 and 17:30, read as local. So: local time, spoken-style, with
+ * back-to-back slots merged into the stretch of free time they came from
+ * (a 90-minute grid also hid that 10:00 was as free as 9:00 and 10:30).
+ */
 function formatWindows(windows: TimeWindow[]): string {
   if (windows.length === 0) return '(no pre-checked windows — always use check_my_availability before agreeing to a time)';
-  return windows.map((w) => `${w.start} to ${w.end}`).join('; ');
+
+  const sorted = [...windows].sort((a, b) => Date.parse(a.start) - Date.parse(b.start));
+  const ranges: TimeWindow[] = [];
+  for (const w of sorted) {
+    const last = ranges.at(-1);
+    if (last && Date.parse(w.start) <= Date.parse(last.end)) {
+      if (Date.parse(w.end) > Date.parse(last.end)) last.end = w.end;
+    } else {
+      ranges.push({ ...w });
+    }
+  }
+
+  const day = new Intl.DateTimeFormat('en-US', { timeZone: config.CALENDAR_TIMEZONE, weekday: 'long', month: 'long', day: 'numeric' });
+  const time = new Intl.DateTimeFormat('en-US', { timeZone: config.CALENDAR_TIMEZONE, hour: 'numeric', minute: '2-digit' });
+  // ICU puts a narrow no-break space before AM/PM; plain text reads better.
+  const clock = (iso: string) => time.format(new Date(iso)).replace(/\s/g, ' ');
+  return ranges.map((r) => `${day.format(new Date(r.start))}, ${clock(r.start)} to ${clock(r.end)}`).join('; ');
 }
 
 /**
@@ -69,8 +94,11 @@ You are calling ${contact.displayName} on behalf of ${config.ASSISTANT_PRINCIPAL
 
 Contact context: ${contact.notes ?? '(no notes on file)'}${taskDetails(task)}
 
-You may offer or accept any of these times without checking back with anyone: ${formatWindows(candidateWindows)}.
-If the other party offers a time outside these windows, call check_my_availability(date, time, durationMinutes)
+${config.ASSISTANT_PRINCIPAL_NAME} is free during these ranges (${config.CALENDAR_TIMEZONE} local time): ${formatWindows(candidateWindows)}.
+You may offer or accept any appointment that fits entirely inside one of these ranges, start to finish, without
+checking back with anyone. When you suggest a time yourself, only suggest start times that leave the whole
+appointment inside one of these ranges — never a time you have not seen here or checked.
+If the other party offers a time outside these ranges, call check_my_availability(date, time, durationMinutes)
 to check live before agreeing — do not assume it's free or unavailable.
 
 Once a specific time is agreed, call confirm_appointment with the confirmed start time and duration.

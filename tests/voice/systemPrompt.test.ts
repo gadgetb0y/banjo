@@ -172,3 +172,17 @@ describe('the goodbye is said, not announced', () => {
     expect(buildFrontendSystemPromptGuidance('outbound')).toMatch(/never describe it/i);
   });
 });
+
+describe('a tentative answer is not treated as a yes, even in words', () => {
+  // Demo call, 2026-09-23: to "Yeah, that could probably work" the model said
+  // "Okay, thanks for confirming—let me lock that in", then in the next breath
+  // asked whether it was a definite yes. It didn't book early, but the callee
+  // heard it acknowledge a confirmation she hadn't given.
+  for (const build of [buildBaseSystemPromptGuidance, buildFrontendSystemPromptGuidance]) {
+    it(`${build.name}: tells the model to ask for a firm yes, never thank them for confirming`, () => {
+      const prompt = build('outbound');
+      expect(prompt).toContain('that could probably work');
+      expect(prompt).toMatch(/do not thank them for confirming/i);
+    });
+  }
+});
