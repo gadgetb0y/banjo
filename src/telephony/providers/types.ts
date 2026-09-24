@@ -59,6 +59,12 @@ export interface TelephonyProvider {
 
   hangUp(callId: string): Promise<void>;
 
+  /** Start recording a live call (#8). Optional: a provider without it can't record, and CallSession won't try. */
+  startRecording?(callId: string): Promise<{ recordingId: string }>;
+
+  /** Delete a stored recording; one that is already gone counts as deleted. Used by retention (recordings/retention.ts). */
+  deleteRecording?(recordingId: string): Promise<void>;
+
   on(event: 'event', listener: TelephonyEventListener): void;
   off(event: 'event', listener: TelephonyEventListener): void;
 }

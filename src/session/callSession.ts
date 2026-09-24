@@ -1,4 +1,4 @@
-import { config } from '../config/index.js';
+import { config, RECORDING_NOTICE } from '../config/index.js';
 import { logger } from '../lib/logger.js';
 import type { TelephonyEvent, TelephonyProvider } from '../telephony/providers/types.js';
 import { createVoiceAIProvider } from '../voice/factory.js';
@@ -75,7 +75,8 @@ export type CallSessionStatusPatch =
   | { kind: 'started'; providerCallId: string }
   | { kind: 'answering_machine_detected'; answeredBy: AnsweredBy }
   | { kind: 'ended'; reason: string; disclosure: DisclosureResult }
-  | { kind: 'failed'; reason: string; disclosure: DisclosureResult };
+  | { kind: 'failed'; reason: string; disclosure: DisclosureResult }
+  | { kind: 'recording_started'; recordingId: string };
 
 /**
  * Generic over the shape of context passed to this call's tool handlers
@@ -96,6 +97,13 @@ export interface CallSessionOptions<TCtx = CallContext> {
   frontendSystemPrompt?: string;
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   tools: VoiceTool<any, TCtx>[];
+  /**
+   * Record this call (#8). Recording starts only once Banjo has said the
+   * recording notice (RECORDING_NOTICE) — disclosure is a prompt rule, so
+   * this is what guarantees nothing is recorded before the other party is
+   * told. The other party's greeting and Banjo's opener aren't on it.
+   */
+  recordCalls?: boolean;
   /** Whether CallSession should prompt the model to speak first once the call connects, before any caller input. Inbound: true. Outbound: unset/false — the callee naturally speaks first. */
   greetOnConnect?: boolean;
   /** Originates the call (outbound) or resolves the already-connected call's identity (inbound). */
@@ -140,6 +148,8 @@ export class CallSession<TCtx = CallContext> {
   private transcriptSeq = 0;
   /** The first thing Banjo said — what the disclosure check (#8) judges. */
   private firstAssistantLine: string | undefined;
+  /** Set once a recording has been requested, so it's asked for once per call. */
+  private recordingRequested = false;
   private readonly pipeline: AudioPipeline;
   private readonly outputFormat;
   private readonly toolRegistry: Map<string, VoiceTool<any, TCtx>>;
@@ -284,6 +294,7 @@ export class CallSession<TCtx = CallContext> {
           if (quality === 'empty') break;
           this.recordTranscript(event.role, event.text, quality);
           if (event.role === 'assistant' && this.firstAssistantLine === undefined) this.firstAssistantLine = event.text;
+          if (event.role === 'assistant' && RECORDING_NOTICE.test(event.text)) this.startRecordingIfEnabled();
           if (config.LOG_TRANSCRIPTS) {
             logger.info(
               { callId: this.opts.callId, role: event.role, text: event.text, ...(quality === 'suspect' && { suspect: true }) },
@@ -382,6 +393,16 @@ export class CallSession<TCtx = CallContext> {
     }
     logger.error({ callId: this.opts.callId }, 'Voice AI still silent after a nudge — ending the call');
     void this.fail('assistant_silence_watchdog', new Error('Voice AI produced no response after a user turn, even after an explicit nudge'));
+  }
+
+  private startRecordingIfEnabled(): void {
+    const { telephony, recordCalls, callId } = this.opts;
+    if (!recordCalls || this.recordingRequested || !telephony.startRecording) return;
+    this.recordingRequested = true;
+    telephony
+      .startRecording(callId)
+      .then(({ recordingId }) => this.opts.onStatusChange({ kind: 'recording_started', recordingId }))
+      .catch((err) => logger.error({ err, callId }, 'failed to start call recording — the call continues unrecorded'));
   }
 
   private recordTranscript(role: 'user' | 'assistant', text: string, quality: 'ok' | 'suspect'): void {

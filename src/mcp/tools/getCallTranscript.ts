@@ -22,7 +22,7 @@ export type GetCallTranscriptResult =
   | {
       found: true;
       taskId: string;
-      calls: { callAttemptId: string; startedAt: string; lines: TranscriptLine[]; note?: string }[];
+      calls: { callAttemptId: string; startedAt: string; lines: TranscriptLine[]; note?: string; recordingSid?: string }[];
       notes: string[];
     }
   | { found: false; message: string };
@@ -69,6 +69,7 @@ export async function getCallTranscriptHandler(
       startedAt: formatInZone(attempt.startedAt.toISOString(), tz),
       lines,
       ...(note && { note }),
+      ...(attempt.recordingSid && { recordingSid: attempt.recordingSid }),
     };
   });
 
@@ -81,6 +82,11 @@ export async function getCallTranscriptHandler(
   );
   if (anySuspect) {
     notes.push('Lines marked suspect may not be what was actually said: the transcriber sometimes invents text from line noise.');
+  }
+  if (calls.some((c) => c.recordingSid)) {
+    notes.push(
+      "Calls with a recordingSid were recorded (#8), starting from Banjo's recording notice. Listen in the Twilio console under Monitor → Call recordings.",
+    );
   }
   if (calls.some((c) => c.lines.length > 0)) {
     notes.push("Lines are in the order they were transcribed; the other party's words can land just after Banjo starts replying.");

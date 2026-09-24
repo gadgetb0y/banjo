@@ -27,7 +27,7 @@ const ALL_CONFIG_KEYS = [
   'NOTIFICATION_CHANNEL', 'NOTIFY_TO_PHONE_NUMBER', 'NOTIFY_FROM_PHONE_NUMBER',
   'MCP_API_KEY', 'TOOL_TIMEOUT_MS', 'LOG_TRANSCRIPTS',
   'INBOUND_BOOKING_ENABLED', 'BUSINESS_HOURS_DAYS', 'BUSINESS_HOURS_START', 'BUSINESS_HOURS_END',
-  'INBOUND_DEFAULT_DURATION_MINUTES', 'INBOUND_MAX_LOOKAHEAD_DAYS', 'ASSISTANT_PRINCIPAL_NAME', 'DISCLOSURE_LINE',
+  'INBOUND_DEFAULT_DURATION_MINUTES', 'INBOUND_MAX_LOOKAHEAD_DAYS', 'ASSISTANT_PRINCIPAL_NAME', 'DISCLOSURE_LINE', 'RECORD_CALLS', 'RECORDING_RETENTION_DAYS',
 ];
 
 function setEnv(overrides: Record<string, string | undefined>) {
@@ -163,6 +163,33 @@ describe('config: env schema', () => {
     it('refuses to start with wording that does not say AI', async () => {
       setEnv({ DISCLOSURE_LINE: "Hi, I'm calling on behalf of {name}." });
       await expect(import('../src/config/index.js')).rejects.toThrow(/DISCLOSURE_LINE/);
+    });
+  });
+
+  describe('RECORD_CALLS (#8)', () => {
+    it('is off by default, with a 30-day retention window', async () => {
+      setEnv({});
+      const { config } = await import('../src/config/index.js');
+      expect(config.RECORD_CALLS).toBe(false);
+      expect(config.RECORDING_RETENTION_DAYS).toBe(30);
+    });
+
+    it('with recording on, the opening line carries the recording notice — added if the wording lacks one', async () => {
+      setEnv({ RECORD_CALLS: 'true' });
+      const { disclosureLine } = await import('../src/config/index.js');
+      expect(disclosureLine()).toMatch(/AI assistant.*This call is recorded\.$/);
+    });
+
+    it('does not add a second notice when the wording already mentions recording', async () => {
+      setEnv({ RECORD_CALLS: 'true', DISCLOSURE_LINE: "Hi, I'm {name}'s AI assistant; this call is being recorded." });
+      const { disclosureLine } = await import('../src/config/index.js');
+      expect(disclosureLine().match(/record/gi)).toHaveLength(1);
+    });
+
+    it('with recording off, no notice is added', async () => {
+      setEnv({});
+      const { disclosureLine } = await import('../src/config/index.js');
+      expect(disclosureLine()).not.toMatch(/record/i);
     });
   });
 });

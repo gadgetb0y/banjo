@@ -85,17 +85,19 @@ project with one maintainer. Things worth knowing before you build on it:
   traffic. `openai-live` (GPT-Live) has been tested on real calls but isn't the default. **Gemini
   Live and ElevenLabs are scaffolded and unverified** — Gemini additionally emits no caller-side
   transcripts at all.
-- **Transcripts are saved only if you turn it on, and there's no recording.** With
-  `PERSIST_TRANSCRIPTS=true`, every line of every call goes to Postgres and can be read back with the
-  `get_call_transcript` MCP tool. Transcripts are deleted after `TRANSCRIPT_RETENTION_DAYS` (default 30).
-  It's off by default because it stores what people said to you. Audio is never recorded
-  ([#8](https://github.com/shatch/banjo/issues/8)).
+- **Transcripts and recordings are saved only if you turn them on.** With `PERSIST_TRANSCRIPTS=true`,
+  every line of every call goes to Postgres and can be read back with the `get_call_transcript` MCP tool.
+  With `RECORD_CALLS=true`, outbound calls are recorded (two-track) in your Twilio account. Banjo's opening
+  line gains *"This call is recorded."*, and recording starts only after Banjo has said it, so the other
+  party's greeting and Banjo's opener aren't on the recording. Both are off by default and deleted after
+  30 days (`TRANSCRIPT_RETENTION_DAYS`, `RECORDING_RETENTION_DAYS`). Inbound calls are never recorded.
+  ([#6](https://github.com/shatch/banjo/issues/6), [#8](https://github.com/shatch/banjo/issues/8))
 - **No call transfer.** When a call needs a human, Banjo hangs up and notifies you rather than
   handing the call over. ([#7](https://github.com/shatch/banjo/issues/7))
 - **AI disclosure is a prompt rule, checked after the call, not enforced.** Banjo is told to open every
   call with `DISCLOSURE_LINE` (default: *"Hi, I'm an AI assistant calling on behalf of {name}."*, and it
   must say "AI"). Afterwards, its first line is checked. A miss is recorded on the call attempt and
-  noted in your notification, but it isn't prevented, and there's no recording-consent announcement yet.
+  noted in your notification, but it isn't prevented.
   **If you're in a jurisdiction with AI-disclosure or two-party-consent rules (TCPA/FCC, California
   AB 2905), check your own calls.** ([#8](https://github.com/shatch/banjo/issues/8))
 - **Logs are redacted, not access-controlled.** Phone numbers are logged with only the last 4 digits,

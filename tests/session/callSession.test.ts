@@ -1137,3 +1137,53 @@ describe("CallSession: reports whether the call opened by saying it's an AI (#8)
     expect(await endAfter([])).toMatchObject({ disclosure: 'no_speech' });
   });
 });
+
+describe('CallSession: recording starts only after the recording notice has been said (#8)', () => {
+  beforeEach(() => {
+    voiceAIEmitter.removeAllListeners('event');
+  });
+
+  async function session(recordCalls: boolean, startRecording = vi.fn(async () => ({ recordingId: 'RE1' }))) {
+    const telephony = makeFakeTelephony();
+    const provider = { ...telephony.provider, startRecording };
+    const options = { ...makeFakeCallSessionOptions(provider), recordCalls };
+    const s = new CallSession(options);
+    await s.start();
+    return { options, startRecording };
+  }
+  const say = (role: 'user' | 'assistant', text: string) =>
+    voiceAIEmitter.emit('event', { type: 'transcript', role, text, isFinal: true } satisfies VoiceAIEvent);
+
+  it('starts once, when Banjo has said the notice, and reports the recording id', async () => {
+    const { options, startRecording } = await session(true);
+    say('user', "Claudia's, how can I help?");
+    expect(startRecording).not.toHaveBeenCalled(); // nothing recorded before the notice
+    say('assistant', "Hi, I'm an AI assistant calling on behalf of Steve. This call is recorded.");
+    say('assistant', 'We recorded a lot of rain this week.');
+    await vi.waitFor(() =>
+      expect(options.onStatusChange).toHaveBeenCalledWith({ kind: 'recording_started', recordingId: 'RE1' }),
+    );
+    expect(startRecording).toHaveBeenCalledTimes(1);
+  });
+
+  it('never starts if Banjo never says the notice', async () => {
+    const { startRecording } = await session(true);
+    say('assistant', "Hi, I'm an AI assistant calling on behalf of Steve.");
+    await new Promise((r) => setTimeout(r, 0));
+    expect(startRecording).not.toHaveBeenCalled();
+  });
+
+  it('never starts with recording off', async () => {
+    const { startRecording } = await session(false);
+    say('assistant', 'This call is recorded.');
+    await new Promise((r) => setTimeout(r, 0));
+    expect(startRecording).not.toHaveBeenCalled();
+  });
+
+  it('a failed start is logged, not a failed call', async () => {
+    const { options } = await session(true, vi.fn(async () => { throw new Error('twilio 500'); }));
+    say('assistant', 'This call is recorded.');
+    await new Promise((r) => setTimeout(r, 0));
+    expect(options.onFailure).not.toHaveBeenCalled();
+  });
+});

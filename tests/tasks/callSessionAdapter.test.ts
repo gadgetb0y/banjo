@@ -82,6 +82,19 @@ describe('buildOutboundCallSessionOptions', () => {
     });
   }
 
+  it('stores the recording id on the call attempt when recording starts (#8)', async () => {
+    const options = buildOutboundCallSessionOptions({
+      task: { ...fakeTask, mode: 'booking' } as Task,
+      callAttempt: fakeCallAttempt,
+      contact: fakeContact,
+      telephony: fakeTelephony,
+      calendar: fakeCalendar,
+      systemPrompt: 'irrelevant for this test',
+    });
+    await options.onStatusChange({ kind: 'recording_started', recordingId: 'RE1' });
+    expect(updateCallAttempt).toHaveBeenCalledWith('call-attempt-1', { recordingSid: 'RE1' });
+  });
+
   it('onTranscript saves the line against this call attempt (#6)', async () => {
     const options = buildOutboundCallSessionOptions({
       task: { ...fakeTask, mode: 'booking' } as Task,
