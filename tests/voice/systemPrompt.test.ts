@@ -186,3 +186,35 @@ describe('a tentative answer is not treated as a yes, even in words', () => {
     });
   }
 });
+
+describe('the stalling phrase is a closed list, with nothing after it (#43)', () => {
+  // Demo re-run, 2026-09-23, after #24 was closed: "One moment. I'll just sort
+  // out the timing before we go further." and "One moment. I'll take care of
+  // the booking details and then confirm everything for you." The rule banned
+  // naming the mechanics; the model complied with the words and still
+  // appended a reason. A fixed list leaves nowhere to put one.
+  for (const build of [buildBaseSystemPromptGuidance, buildFrontendSystemPromptGuidance]) {
+    it(`${build.name}: gives the exact phrases and forbids anything after them`, () => {
+      const prompt = build('outbound');
+      expect(prompt).toContain('say exactly one of these and nothing more: "One moment." / "Sure — just a second." / "Bear with me a second."');
+      expect(prompt).toMatch(/no second sentence/i);
+    });
+  }
+});
+
+describe('after a booking goes through, say what was booked (#44)', () => {
+  for (const build of [buildBaseSystemPromptGuidance, buildFrontendSystemPromptGuidance]) {
+    it(`${build.name}: tells the model to restate day, time and service before the goodbye`, () => {
+      const prompt = build('outbound');
+      expect(prompt).toMatch(/once a booking has gone through/i);
+      expect(prompt).toMatch(/day, time, and what is booked/i);
+    });
+
+    it(`${build.name}: tells the model not to invent ways for the other party to record things`, () => {
+      // "If you want, you can note whatever you'd like on his profile" —
+      // said to a groomer, about a profile nobody mentioned.
+      const prompt = build('outbound');
+      expect(prompt).toMatch(/do not invent a system, profile, or form/i);
+    });
+  }
+});

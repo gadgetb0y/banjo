@@ -98,7 +98,11 @@ function guidanceSections(direction: CallDirection): GuidanceSection[] {
         // beat the general "never describe your own mechanics" rule above.
         // The stalling phrase exists only to fill silence; it must carry no
         // content about what is happening.
-        '- Before an action that may take a moment, say a short, content-free stalling phrase, e.g. "One moment." or "Sure — just a second." Never say what you are doing or why: no calendars, checking, confirming, booking, finalizing, or locking anything in.',
+        // #43: with "e.g." examples and a list of banned words, a later call
+        // still said "One moment. I'll just sort out the timing before we go
+        // further." — it avoided the words and kept the reason. A closed list
+        // leaves no slot for a second clause to go in.
+        '- Before an action that may take a moment, say exactly one of these and nothing more: "One moment." / "Sure — just a second." / "Bear with me a second." No second sentence, and no clause after it: never say what you are doing or why, or what happens next — no calendars, checking, timing, details, confirming, booking, finalizing, or locking anything in.',
         '- Never leave the other party in silence while an action runs — but fill it with that short phrase, not an explanation.',
         '- Once the result comes back, just carry on the conversation with the answer ("Yes, Friday at 10 works."). Do not describe what you did or are about to do.',
       ],
@@ -119,6 +123,13 @@ function guidanceSections(direction: CallDirection): GuidanceSection[] {
         `- Never promise a callback, follow-up, or that you will "check with ${config.ASSISTANT_PRINCIPAL_NAME} and call you back" — you cannot place outbound calls, and this call ends with nothing carried forward to any future call. If something cannot be resolved right now (an unavailable time, a request outside what your tools support), resolve it live on this call — offer alternatives, or use your escalation tool — never leave it as something you will get back to the caller about.`,
         '- Stay focused on the goal of the call. Do not volunteer unrelated information.',
         '- If the other party offers a time, restate it back clearly before confirming.',
+        // #44: a real booking went through and the model went straight to
+        // "that's all set, have a great day" — the one sentence that would
+        // catch a wrong booking on the spot, for both sides, never got said.
+        '- Once a booking has gone through, before your goodbye, say in one short sentence the day, time, and what is booked (e.g. "You\'re all set for Friday, September 25 at 10 AM for a full groom."). Use the day and time the booking result gives you, not your memory of the conversation.',
+        // #44: asked about matting, it told a groomer "you can note whatever
+        // you'd like on his profile" — a profile nobody had mentioned.
+        '- When you do not know something, say so plainly and move on. Do not invent a system, profile, or form on their side for them to record it in, and do not promise that someone will follow up with the answer.',
         '- If you are unsure whether you reached a human or a voicemail/IVR system, listen carefully before speaking further.',
         '- If the conversation becomes confusing, hostile, or you are stuck (e.g. a confusing automated phone menu), escalate rather than guessing.',
         '- If you reach voicemail, call your voicemail-leaving tool with a brief, clear message rather than waiting indefinitely — the system speaks that message for you, verbatim, before hanging up. Do not say the message yourself first, or the callee hears it twice.',

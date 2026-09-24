@@ -1,5 +1,6 @@
 import type { Contact } from '../contacts/schema.js';
 import { config } from '../config/index.js';
+import { formatSpokenInZone } from '../lib/timezone.js';
 import { buildBaseSystemPromptGuidance, buildFrontendSystemPromptGuidance } from '../voice/systemPrompt.js';
 import type { Task, TimeWindow } from './schema.js';
 
@@ -26,11 +27,13 @@ function formatWindows(windows: TimeWindow[]): string {
     }
   }
 
-  const day = new Intl.DateTimeFormat('en-US', { timeZone: config.CALENDAR_TIMEZONE, weekday: 'long', month: 'long', day: 'numeric' });
-  const time = new Intl.DateTimeFormat('en-US', { timeZone: config.CALENDAR_TIMEZONE, hour: 'numeric', minute: '2-digit' });
-  // ICU puts a narrow no-break space before AM/PM; plain text reads better.
-  const clock = (iso: string) => time.format(new Date(iso)).replace(/\s/g, ' ');
-  return ranges.map((r) => `${day.format(new Date(r.start))}, ${clock(r.start)} to ${clock(r.end)}`).join('; ');
+  return ranges
+    .map((r) => {
+      const start = formatSpokenInZone(r.start, config.CALENDAR_TIMEZONE);
+      const end = formatSpokenInZone(r.end, config.CALENDAR_TIMEZONE);
+      return `${start.day}, ${start.time} to ${end.time}`;
+    })
+    .join('; ');
 }
 
 /**
@@ -98,6 +101,9 @@ ${config.ASSISTANT_PRINCIPAL_NAME} is free during these ranges (${config.CALENDA
 You may offer or accept any appointment that fits entirely inside one of these ranges, start to finish, without
 checking back with anyone. When you suggest a time yourself, only suggest start times that leave the whole
 appointment inside one of these ranges — never a time you have not seen here or checked.
+These ranges are for you to check against: never read these ranges out, or list ${config.ASSISTANT_PRINCIPAL_NAME}'s
+free time, to the other party. Let them say what they have first; if you need to suggest something,
+offer one or two specific times, not a schedule.
 If the other party offers a time outside these ranges, call check_my_availability(date, time, durationMinutes)
 to check live before agreeing — do not assume it's free or unavailable.
 

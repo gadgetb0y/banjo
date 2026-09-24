@@ -118,3 +118,20 @@ export function formatInZone(utcIso: string, timeZone: string): string {
   const pad = (n: number) => String(n).padStart(2, '0');
   return `${parts.year}-${pad(parts.month)}-${pad(parts.day)}T${pad(parts.hour)}:${pad(parts.minute)}:${pad(parts.second)}`;
 }
+
+/**
+ * How a UTC instant is SAID in `timeZone`: "Thursday, September 24" and
+ * "9:00 AM". For text the call model reads or speaks — candidate ranges in
+ * the prompt, a booking read back after confirm_appointment. Weekday
+ * included on purpose: models get day-of-week arithmetic wrong, and a
+ * read-back with the wrong weekday is exactly the error it exists to catch.
+ */
+export function formatSpokenInZone(utcIso: string, timeZone: string): { day: string; time: string } {
+  const instant = new Date(utcIso);
+  const day = new Intl.DateTimeFormat('en-US', { timeZone, weekday: 'long', month: 'long', day: 'numeric' }).format(instant);
+  // ICU puts a narrow no-break space before AM/PM; plain text reads better.
+  const time = new Intl.DateTimeFormat('en-US', { timeZone, hour: 'numeric', minute: '2-digit' })
+    .format(instant)
+    .replace(/\s/g, ' ');
+  return { day, time };
+}

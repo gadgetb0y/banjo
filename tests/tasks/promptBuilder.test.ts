@@ -146,3 +146,17 @@ describe('pre-checked windows are shown in local time', () => {
     expect(prompt).toMatch(/only suggest start times/i);
   });
 });
+
+describe('the free ranges are for checking, not for reading out (#42)', () => {
+  // Demo re-run, 2026-09-23: unprompted, mid-answer to a question about
+  // clippers — "Steve is free Thursday between 9 and 3, Friday the 25 between
+  // 9 and 4:30, or Saturday the 26 between 9 and 4:30".
+  it('tells the model not to recite the ranges, and to offer at most one or two times', () => {
+    const prompt = buildCallSystemPrompt(bookingTask, contact, [
+      { start: '2026-09-24T13:00:00.000Z', end: '2026-09-24T14:30:00.000Z' },
+    ]);
+    expect(prompt).toMatch(/never read these ranges out/i);
+    expect(prompt).toMatch(/one or two specific times/i);
+    expect(prompt).toMatch(/let them say what they have first/i);
+  });
+});

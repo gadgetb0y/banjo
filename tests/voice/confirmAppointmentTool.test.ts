@@ -81,7 +81,14 @@ describe('confirmAppointmentTool.handler', () => {
       makeContext(calendar),
     );
 
-    expect(result).toMatchObject({ ok: true, confirmedStart: '2026-08-05T18:00:00.000Z' });
+    // 18:00 UTC is 2:00 PM in America/New_York. The model is told every time is
+    // local, so a UTC string here is the 4-hours-off failure waiting to be read
+    // back aloud (#44) — and a spoken form spares it working out the weekday.
+    expect(result).toMatchObject({
+      ok: true,
+      confirmedStart: '2026-08-05T14:00:00',
+      spokenStart: 'Wednesday, August 5 at 2:00 PM',
+    });
     expect(transitionTask).toHaveBeenCalledTimes(1);
     expect(transitionTask).toHaveBeenCalledWith('task-1', 'confirmed', expect.objectContaining({ calendarEventId: 'evt-1' }));
   });
