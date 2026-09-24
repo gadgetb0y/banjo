@@ -76,4 +76,12 @@ describe('get_call_transcript (#6)', () => {
     if (!result.found) throw new Error('unreachable');
     expect(result.notes.join(' ')).toMatch(/deleted after 30 days/);
   });
+
+  it("names the call's recording, and where to listen, when there is one (#8)", async () => {
+    listTranscriptForTask.mockResolvedValue([{ attempt: { ...attempt, recordingSid: 'RE123' }, turns: [line(1, 'user', 'Hi')] }]);
+    const result = await getCallTranscriptHandler({ taskId: TASK_ID }, on);
+    if (!result.found) throw new Error('unreachable');
+    expect(result.calls[0]!.recordingSid).toBe('RE123');
+    expect(result.notes.join(' ')).toMatch(/Twilio console/);
+  });
 });

@@ -563,6 +563,30 @@ export class TwilioProvider implements TelephonyProvider {
     }
   }
 
+  /**
+   * Two-track recording (callee and Banjo on separate channels) on the live
+   * call, via the in-progress-call Recordings API — the method the demo
+   * recordings used, starting ~0.13s after it's asked. Called by CallSession
+   * only after Banjo has said the recording notice (#8).
+   */
+  async startRecording(callId: string): Promise<{ recordingId: string }> {
+    const providerCallId = this.calls.get(callId)?.providerCallId;
+    if (!providerCallId) throw new Error(`startRecording: no live Twilio call for ${callId}`);
+    const recording = await this.client.calls(providerCallId).recordings.create({ recordingChannels: 'dual', recordingTrack: 'both' });
+    logger.info({ callId, recordingId: recording.sid }, 'call recording started');
+    return { recordingId: recording.sid };
+  }
+
+  /** Deletes a recording from Twilio. Already gone (404) counts as deleted, so retention can't get stuck on one. */
+  async deleteRecording(recordingId: string): Promise<void> {
+    try {
+      await this.client.recordings(recordingId).remove();
+    } catch (err) {
+      if ((err as { status?: number }).status === 404) return;
+      throw err;
+    }
+  }
+
   on(event: 'event', listener: TelephonyEventListener): void {
     this.emitter.on(event, listener);
   }

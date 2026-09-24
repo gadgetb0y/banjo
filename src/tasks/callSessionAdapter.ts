@@ -3,6 +3,7 @@ import type { Contact } from '../contacts/schema.js';
 import { getContact } from '../contacts/service.js';
 import type { CallSessionOptions } from '../session/callSession.js';
 import type { CallContext } from '../session/types.js';
+import { config } from '../config/index.js';
 import { logger } from '../lib/logger.js';
 import { buildOutcomeSummary, withDisclosureNote } from '../notifications/channel.js';
 import type { DisclosureResult } from '../session/disclosure.js';
@@ -99,6 +100,9 @@ export function buildOutboundCallSessionOptions(params: {
     systemPrompt,
     frontendSystemPrompt,
     tools: outboundToolsFor(task),
+    // Outbound only: the notice that starts a recording is part of
+    // DISCLOSURE_LINE, which only outbound calls open with (#8).
+    recordCalls: config.RECORD_CALLS,
 
     async beginCall() {
       // No answering-machine detection (#32). Twilio's verdict misread a
@@ -136,6 +140,9 @@ export function buildOutboundCallSessionOptions(params: {
           break;
         case 'answering_machine_detected':
           await updateCallAttempt(callAttempt.id, { answeredBy: patch.answeredBy });
+          break;
+        case 'recording_started':
+          await updateCallAttempt(callAttempt.id, { recordingSid: patch.recordingId });
           break;
         case 'ended':
           // The call is genuinely over here — not when start() returned. See

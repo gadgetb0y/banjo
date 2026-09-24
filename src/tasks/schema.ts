@@ -86,6 +86,9 @@ export const callAttempts = pgTable('call_attempts', {
   // the check. A fact about how the call was conducted, so it lives here
   // rather than in the task's outcome, which is usually settled mid-call.
   disclosed: boolean('disclosed'),
+  // Twilio RecordingSid when RECORD_CALLS recorded this call (#8); cleared
+  // once retention deletes the recording from Twilio (recordings/retention.ts).
+  recordingSid: text('recording_sid'),
   startedAt: timestamp('started_at', { withTimezone: true }).notNull().defaultNow(),
   endedAt: timestamp('ended_at', { withTimezone: true }),
   errorDetail: text('error_detail'),

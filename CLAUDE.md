@@ -53,6 +53,8 @@ The system is two independently-swappable vendor abstraction layers, glued toget
 
 **AI disclosure:** outbound calls must open with `DISCLOSURE_LINE` (config-validated to say "AI"). It's a prompt rule in `src/voice/systemPrompt.ts`, checked afterwards by `session/disclosure.ts` into `call_attempts.disclosed`. Don't weaken the rule's wording or the "AI" validation; they are the only disclosure mechanism.
 
+**Recording:** `RECORD_CALLS` recordings must start only after Banjo has said the recording notice (`RECORDING_NOTICE`, appended to the opener by `disclosureLine()`). Never start recording at answer: disclosure isn't enforced, so this ordering is the consent guarantee.
+
 **Transcripts:** `call_transcript_turns` (`src/transcripts/`) is written only through `CallSessionOptions.onTranscript`, never `transitionTask` (its compare-and-set would drop transcripts of finished calls), and is off unless `PERSIST_TRANSCRIPTS=true`. A failed save must never affect the call. Retention (`TRANSCRIPT_RETENTION_DAYS`) runs even with saving off.
 
 **Owner profile:** `PROMPT_PROFILE_FILE` (`src/tasks/ownerProfile.ts`) is the only user-customizable part of the call prompt: added to outbound prompts after every fixed rule, which it's told it cannot override. Put new customization there, not in a way that lets users replace the rules in `src/voice/systemPrompt.ts`.
