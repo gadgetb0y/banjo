@@ -17,6 +17,11 @@ export type CallSessionState = 'connecting' | 'active' | 'tool-pending' | 'endin
 // live call — almost no gap between "call picked up" and ea already talking.
 const GREETING_DELAY_MS = 500;
 
+// Slack after the recording notice's audio is estimated to have finished
+// playing before recording starts (#8) — the playback estimate is not exact,
+// and starting early is the one thing this must not do.
+const RECORDING_START_MARGIN_MS = 500;
+
 // Bounds how long a tool marked endsCall waits for the current response's
 // 'turn_end' signal before snapshotting the audio-playback estimate (see
 // handleToolCall). Comfortably covers a long trailing confirmation
@@ -148,8 +153,13 @@ export class CallSession<TCtx = CallContext> {
   private transcriptSeq = 0;
   /** The first thing Banjo said — what the disclosure check (#8) judges. */
   private firstAssistantLine: string | undefined;
-  /** Set once a recording has been requested, so it's asked for once per call. */
-  private recordingRequested = false;
+  /**
+   * idle → (notice in Banjo's final line) awaiting_turn_end → (turn_end)
+   * scheduled → started. An interruption before turn_end drops back to idle:
+   * the notice's audio may have been cut off before it was heard.
+   */
+  private recordingState: 'idle' | 'awaiting_turn_end' | 'scheduled' = 'idle';
+  private recordingTimer: ReturnType<typeof setTimeout> | null = null;
   private readonly pipeline: AudioPipeline;
   private readonly outputFormat;
   private readonly toolRegistry: Map<string, VoiceTool<any, TCtx>>;
@@ -294,7 +304,9 @@ export class CallSession<TCtx = CallContext> {
           if (quality === 'empty') break;
           this.recordTranscript(event.role, event.text, quality);
           if (event.role === 'assistant' && this.firstAssistantLine === undefined) this.firstAssistantLine = event.text;
-          if (event.role === 'assistant' && RECORDING_NOTICE.test(event.text)) this.startRecordingIfEnabled();
+          if (event.role === 'assistant' && RECORDING_NOTICE.test(event.text) && this.opts.recordCalls && this.recordingState === 'idle') {
+            this.recordingState = 'awaiting_turn_end';
+          }
           if (config.LOG_TRANSCRIPTS) {
             logger.info(
               { callId: this.opts.callId, role: event.role, text: event.text, ...(quality === 'suspect' && { suspect: true }) },
@@ -315,6 +327,9 @@ export class CallSession<TCtx = CallContext> {
         if (event.role === 'user' && !event.answered) this.armSilenceWatchdogIfNeeded();
         break;
       case 'interrupted':
+        // #8: cut off before its turn ended, the recording notice may never
+        // have reached the other party. Wait for Banjo to say it again.
+        if (this.recordingState === 'awaiting_turn_end') this.recordingState = 'idle';
         // Caller barge-in — flush whatever we've already queued on the phone
         // leg, and reset the playback tracker's high-water mark: the
         // discarded buffered-but-unplayed audio will never actually play,
@@ -344,6 +359,7 @@ export class CallSession<TCtx = CallContext> {
       case 'turn_end':
         this.clearSilenceWatchdog();
         this.responseActive = false;
+        if (this.recordingState === 'awaiting_turn_end') this.scheduleRecordingStart();
         this.turnEndWaiters.splice(0).forEach((resolve) => resolve());
         break;
     }
@@ -395,14 +411,29 @@ export class CallSession<TCtx = CallContext> {
     void this.fail('assistant_silence_watchdog', new Error('Voice AI produced no response after a user turn, even after an explicit nudge'));
   }
 
-  private startRecordingIfEnabled(): void {
-    const { telephony, recordCalls, callId } = this.opts;
-    if (!recordCalls || this.recordingRequested || !telephony.startRecording) return;
-    this.recordingRequested = true;
-    telephony
-      .startRecording(callId)
-      .then(({ recordingId }) => this.opts.onStatusChange({ kind: 'recording_started', recordingId }))
-      .catch((err) => logger.error({ err, callId }, 'failed to start call recording — the call continues unrecorded'));
+  /**
+   * Starts recording once the turn that said the notice has finished PLAYING
+   * (#8). A final transcript arrives when the model has written the line, not
+   * when the phone has played it — on a live call that was ~4s early, before
+   * "This call is recorded." was heard. Late is fine; early is the bug.
+   */
+  private scheduleRecordingStart(): void {
+    const { telephony, callId } = this.opts;
+    if (!telephony.startRecording) return;
+    this.recordingState = 'scheduled';
+    const delay = Math.max(0, this.audioPlaybackTracker.estimatedDoneAt() - Date.now()) + RECORDING_START_MARGIN_MS;
+    this.recordingTimer = setTimeout(() => {
+      this.recordingTimer = null;
+      telephony
+        .startRecording!(callId)
+        .then(({ recordingId }) => this.opts.onStatusChange({ kind: 'recording_started', recordingId }))
+        .catch((err) => logger.error({ err, callId }, 'failed to start call recording — the call continues unrecorded'));
+    }, delay);
+  }
+
+  private cancelPendingRecording(): void {
+    if (this.recordingTimer) clearTimeout(this.recordingTimer);
+    this.recordingTimer = null;
   }
 
   private recordTranscript(role: 'user' | 'assistant', text: string, quality: 'ok' | 'suspect'): void {
@@ -562,6 +593,7 @@ export class CallSession<TCtx = CallContext> {
   private async fail(reason: string, err: unknown): Promise<void> {
     if (this.state === 'ended' || this.state === 'error' || this.state === 'ending') return;
     this.clearSilenceWatchdog();
+    this.cancelPendingRecording();
     logger.error({ err, reason, callId: this.opts.callId }, 'Call session error');
     this.setState('error');
     await this.opts.onStatusChange({ kind: 'failed', reason, disclosure: checkDisclosure(this.firstAssistantLine) });
@@ -617,6 +649,7 @@ export class CallSession<TCtx = CallContext> {
   private async end(reason: string): Promise<void> {
     if (this.state === 'ended' || this.state === 'error' || this.state === 'ending') return;
     this.clearSilenceWatchdog();
+    this.cancelPendingRecording();
     this.setState('ending');
     await this.waitForInFlightToolHandlers();
     await this.opts.onStatusChange({ kind: 'ended', reason, disclosure: checkDisclosure(this.firstAssistantLine) });
