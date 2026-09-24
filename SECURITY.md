@@ -38,9 +38,10 @@ The things most likely to be wrong, roughly in order of how much damage they do:
 - **Credential exposure.** `GOOGLE_OAUTH_REFRESH_TOKEN`, `TWILIO_AUTH_TOKEN` and voice-AI API keys
   leaking into logs, error responses, MCP tool output, or TwiML.
 - **PII in logs.** Phone numbers, caller identity and conversation content. Some of this is *known*
-  and tracked rather than secret: `LOG_TRANSCRIPTS` is off by default, but inbound caller numbers
-  are logged unredacted at `info`, and pino has no `redact` config. Reports that sharpen the picture
-  are welcome; the known gaps are on the roadmap.
+  and tracked rather than secret: `LOG_TRANSCRIPTS` is off by default and logs call text when on;
+  pino's `redact` config (`src/lib/logger.ts`) masks phone-number fields to their last 4 digits and
+  logs voicemail text and raw tool arguments as a length, but a vendor error message can still quote a
+  number. Reports that sharpen the picture are welcome.
 - **Anything that places, redirects or answers a call it shouldn't**, or books/cancels a calendar
   event outside the requesting task.
 
