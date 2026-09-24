@@ -873,6 +873,29 @@ describe('CallSession: silence watchdog — the model going quiet after a user t
     }
   });
 
+  for (const [label, text] of [
+    ['an empty', ''],
+    ['a suspect (wrong-script hallucination)', 'ᱤᱠ'],
+  ] as const) {
+    it(`does not arm for ${label} final user transcript — nobody said anything, so there is nothing to answer (#25)`, async () => {
+      vi.useFakeTimers();
+      try {
+        const telephony = makeFakeTelephony();
+        const session = new CallSession(makeFakeCallSessionOptions(telephony.provider));
+        await session.start();
+
+        voiceAIEmitter.emit('event', { type: 'transcript', role: 'user', text, isFinal: true } satisfies VoiceAIEvent);
+        await vi.advanceTimersByTimeAsync(7000 * 3); // SILENCE_WATCHDOG_MS, then the give-up window
+
+        expect(fakeVoiceAI.triggerResponse).not.toHaveBeenCalled();
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        expect((session as any).silenceWatchdog).toBeNull();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+  }
+
   it('nudges the model with an explicit response trigger if it stays silent for SILENCE_WATCHDOG_MS after a finalized user turn', async () => {
     vi.useFakeTimers();
     try {

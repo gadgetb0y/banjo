@@ -8,6 +8,7 @@ import type { VerbatimDeliveryReport, VoiceAIEvent, VoiceAIProvider } from '../v
 import { createAudioPlaybackTracker, type AudioPlaybackTracker } from './audioPlaybackTracker.js';
 import { negotiateAudioFormats, resolveAudioPipeline, type AudioPipeline } from './audioPipeline.js';
 import type { CallContext } from './types.js';
+import { classifyTranscript } from './transcriptQuality.js';
 
 export type CallSessionState = 'connecting' | 'active' | 'tool-pending' | 'ending' | 'ended' | 'error';
 
@@ -250,8 +251,20 @@ export class CallSession<TCtx = CallContext> {
         // debugging rather than an unconditional info-level log. Redaction/
         // a proper log sink with access controls is still tracked as a
         // further step in docs/ARCHITECTURE.md's Open Risks.
-        if (event.isFinal && config.LOG_TRANSCRIPTS) {
-          logger.info({ callId: this.opts.callId, role: event.role, text: event.text }, 'transcript');
+        if (!event.isFinal) break;
+        {
+          // #25: the transcriber finalises turns nobody spoke. Empty ones are
+          // dropped; suspect ones are logged with a flag so they can't pass
+          // for something the other party said.
+          const quality = classifyTranscript(event.text);
+          if (quality === 'empty') break;
+          if (config.LOG_TRANSCRIPTS) {
+            logger.info(
+              { callId: this.opts.callId, role: event.role, text: event.text, ...(quality === 'suspect' && { suspect: true }) },
+              'transcript',
+            );
+          }
+          if (quality === 'suspect') break;
         }
         // A finalized USER turn is exactly the moment the model is expected
         // to start responding (via OpenAI's server-side VAD auto-response,
@@ -260,7 +273,9 @@ export class CallSession<TCtx = CallContext> {
         // already armed — see armSilenceWatchdogIfNeeded's doc comment. A
         // transcript the provider marks `answered` was already replied to
         // before it went final (full duplex), so there's nothing to wait for.
-        if (event.isFinal && event.role === 'user' && !event.answered) this.armSilenceWatchdogIfNeeded();
+        // Empty and suspect turns never get here (#25): a hallucinated turn on
+        // a silent line is not something the model is expected to answer.
+        if (event.role === 'user' && !event.answered) this.armSilenceWatchdogIfNeeded();
         break;
       case 'interrupted':
         // Caller barge-in — flush whatever we've already queued on the phone
