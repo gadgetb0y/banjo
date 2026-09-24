@@ -7,6 +7,7 @@ import { startGoogleContactsSyncPoller } from './googleContacts/sync.js';
 import { logger } from './lib/logger.js';
 import { startServer } from './server.js';
 import { startOrchestrationPoller } from './tasks/orchestrator.js';
+import { loadOwnerProfile } from './tasks/ownerProfile.js';
 
 logger.info({ nodeEnv: config.NODE_ENV, voiceAiProvider: config.VOICE_AI_PROVIDER }, 'Starting ea');
 
@@ -19,6 +20,14 @@ if (!config.PUBLIC_HOSTNAME) {
   logger.warn(
     'PUBLIC_HOSTNAME is not set — Twilio webhooks and media streams will point at "undefined" and every call will fail. See README Quickstart.',
   );
+}
+
+// A wrong path or an oversized profile stops the deploy here, rather than
+// quietly dropping out of every call's prompt. Re-read per call after this, so
+// edits apply without a restart.
+if (config.PROMPT_PROFILE_FILE) {
+  const profile = loadOwnerProfile(config.PROMPT_PROFILE_FILE);
+  logger.info({ path: config.PROMPT_PROFILE_FILE, chars: profile.length }, 'owner profile loaded');
 }
 
 // Before the server accepts a webhook or the poller touches `tasks`: a missed

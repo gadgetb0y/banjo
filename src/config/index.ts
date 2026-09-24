@@ -103,6 +103,11 @@ const envSchema = z
     // "2026-08-04T14:00:00" with no offset got parsed as UTC.
     CALENDAR_TIMEZONE: z.string().min(1).default('America/New_York'),
 
+    // Optional path to the owner's profile: standing facts and preferences
+    // added to every outbound call prompt, below the fixed rules. See
+    // src/tasks/ownerProfile.ts and banjo-profile.example.md.
+    PROMPT_PROFILE_FILE: z.string().min(1).optional(),
+
     NOTIFICATION_CHANNEL: z.enum(['twilio_sms', 'none']).default('twilio_sms'),
     NOTIFY_TO_PHONE_NUMBER: e164,
     NOTIFY_FROM_PHONE_NUMBER: e164,
