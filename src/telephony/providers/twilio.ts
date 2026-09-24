@@ -9,6 +9,9 @@ import type { TelephonyEvent, TelephonyEventListener, TelephonyProvider } from '
 
 const logger = childLogger({ component: 'telephony:twilio' });
 
+/** How many ended call ids to remember for hangUp(); far above any concurrency Banjo runs at. */
+const RECENTLY_ENDED_LIMIT = 500;
+
 /** Standard DTMF dual-tone frequency pairs (low, high), in Hz. */
 const DTMF_FREQUENCIES: Record<string, [number, number]> = {
   '1': [697, 1209],
@@ -95,6 +98,8 @@ export class TwilioProvider implements TelephonyProvider {
   private readonly client = twilioLib(config.TWILIO_ACCOUNT_SID, config.TWILIO_AUTH_TOKEN);
   private readonly emitter = new EventEmitter();
   private readonly calls = new Map<string, TwilioCallState>();
+  /** Calls forgotten recently, so a repeat hangUp() isn't mistaken for an unknown call. Capped: oldest dropped first. */
+  private readonly recentlyEnded = new Set<string>();
   private readonly inboundRegistrationTimers = new Map<string, NodeJS.Timeout>();
 
   async originateCall(opts: {
@@ -219,7 +224,7 @@ export class TwilioProvider implements TelephonyProvider {
         this.inboundRegistrationTimers.delete(callSid);
         if (this.calls.has(callSid)) {
           logger.warn({ callSid }, 'inbound call never connected a Media Stream within the timeout — unregistering');
-          this.calls.delete(callSid);
+          this.forgetCall(callSid);
         }
       }, INBOUND_STREAM_CONNECT_TIMEOUT_MS).unref(),
     );
@@ -237,7 +242,7 @@ export class TwilioProvider implements TelephonyProvider {
    */
   unregisterInboundCall(callSid: string): void {
     this.clearInboundRegistrationTimeout(callSid);
-    this.calls.delete(callSid);
+    this.forgetCall(callSid);
   }
 
   private clearInboundRegistrationTimeout(callId: string): void {
@@ -385,7 +390,7 @@ export class TwilioProvider implements TelephonyProvider {
           const event: TelephonyEvent = { callId, type: 'ended', reason: 'stop' };
           this.emitter.emit('event', event);
           this.clearInboundRegistrationTimeout(callId);
-          this.calls.delete(callId);
+          this.forgetCall(callId);
           break;
         }
         default:
@@ -410,7 +415,7 @@ export class TwilioProvider implements TelephonyProvider {
       if (!callId) return;
       this.clearInboundRegistrationTimeout(callId);
       if (this.calls.has(callId)) {
-        this.calls.delete(callId);
+        this.forgetCall(callId);
         const event: TelephonyEvent = { callId, type: 'ended', reason: 'socket_closed' };
         this.emitter.emit('event', event);
       }
@@ -522,9 +527,26 @@ export class TwilioProvider implements TelephonyProvider {
     state.ws.send(JSON.stringify({ event: 'clear', streamSid: state.streamSid }));
   }
 
+  /** The only way a call leaves `calls` — remembered in recentlyEnded (see hangUp). */
+  private forgetCall(callId: string): void {
+    this.calls.delete(callId);
+    this.recentlyEnded.add(callId);
+    if (this.recentlyEnded.size > RECENTLY_ENDED_LIMIT) {
+      const oldest = this.recentlyEnded.values().next().value;
+      if (oldest !== undefined) this.recentlyEnded.delete(oldest);
+    }
+  }
+
   async hangUp(callId: string): Promise<void> {
     const state = this.calls.get(callId);
     if (!state?.providerCallId) {
+      // A call this provider already ended: expected, not a problem.
+      // CallSession's teardown hangs up after an ending tool already has, and
+      // used to log this warning on every call.
+      if (!state && this.recentlyEnded.has(callId)) {
+        logger.debug({ callId }, 'hangUp: call already ended');
+        return;
+      }
       logger.warn({ callId }, 'hangUp called with no known providerCallId — call may not have connected yet');
       return;
     }
@@ -537,7 +559,7 @@ export class TwilioProvider implements TelephonyProvider {
       await this.client.calls(state.providerCallId).update({ status: 'completed' });
     } finally {
       this.clearInboundRegistrationTimeout(callId);
-      this.calls.delete(callId);
+      this.forgetCall(callId);
     }
   }
 
