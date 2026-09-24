@@ -218,3 +218,56 @@ describe('confirmAppointmentTool.handler', () => {
     );
   });
 });
+
+describe('what the model is told to do after a booking goes through (#47)', () => {
+  // Live call, 2026-09-23, after #44 added a read-back rule to the system
+  // prompt: right after confirm_appointment succeeded the model said "Great,
+  // thanks for confirming—let me wrap this up." and hung up. No read-back, no
+  // goodbye. At that moment the tool result is what it follows, so the result
+  // carries the next step.
+  function bookingCalendar(): CalendarProvider {
+    return {
+      computeCandidateWindows: vi.fn(async () => []),
+      isFree: vi.fn(async () => true),
+      createEventIdempotent: vi.fn(async () => ({
+        eventId: 'evt-1',
+        confirmedStart: '2026-09-25T14:00:00.000Z',
+        confirmedEnd: '2026-09-25T15:30:00.000Z',
+      })),
+      findEventByIdempotencyKey: vi.fn(async () => undefined),
+      deleteEvent: vi.fn(async () => {}),
+    };
+  }
+
+  async function confirm(mode?: Task['mode']) {
+    const ctx = makeContext(bookingCalendar());
+    ctx.task = { ...task, mode } as Task;
+    return (await confirmAppointmentTool.handler(
+      { confirmedStart: '2026-09-25T10:00:00', durationMinutes: 90, summary: 'Full groom for Banjo' },
+      ctx,
+    )) as { ok: true; nextStep: string };
+  }
+
+  it('booking call: read the booking back with the real day and time, say an actual goodbye, then end_call', async () => {
+    const { nextStep } = await confirm('booking');
+    expect(nextStep).toContain('Friday, September 25 at 10:00 AM');
+    expect(nextStep).toMatch(/goodbye/i);
+    expect(nextStep).toContain('end_call');
+  });
+
+  it('booking call: forbids describing the ending instead of doing it', async () => {
+    const { nextStep } = await confirm('booking');
+    expect(nextStep).toMatch(/never say you are wrapping up/i);
+  });
+
+  it('a task with no mode is a booking call', async () => {
+    expect((await confirm(undefined)).nextStep).toContain('end_call');
+  });
+
+  it('conversation call: read it back, then carry on — a booking there is not the end of the call', async () => {
+    const { nextStep } = await confirm('conversation');
+    expect(nextStep).toContain('Friday, September 25 at 10:00 AM');
+    expect(nextStep).not.toContain('end_call');
+    expect(nextStep).toMatch(/carry on/i);
+  });
+});

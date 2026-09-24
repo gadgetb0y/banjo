@@ -163,6 +163,25 @@ function calendarTitleFrom(goalDescription: string): string {
   return `${trimmed.slice(0, CALENDAR_TITLE_MAX_CHARS - 1).trimEnd()}…`;
 }
 
+/**
+ * What to do right after a booking goes through, in the tool result itself.
+ * The system prompt already asks for a read-back and a spoken goodbye (#44),
+ * and the next live call still ended "Great, thanks for confirming—let me wrap
+ * this up." (#47): at this moment the model follows the result it just got,
+ * not a rule forty lines up. A conversation-mode call carries on afterwards —
+ * a booking made in passing isn't the end of it.
+ */
+function afterBookingStep(mode: string | undefined, spokenStart: string): string {
+  const readBack = `Booked. Tell them in one short sentence what is booked, using this day and time: "You're all set for ${spokenStart}", plus what it is for.`;
+  if (mode === 'conversation') {
+    return `${readBack} Then carry on the conversation — this booking is not the end of the call.`;
+  }
+  return (
+    `${readBack} If they have a question, answer it first. Then, in the same turn, say an actual goodbye to them ` +
+    `(e.g. "Thanks so much — have a great day!") and call end_call. Never say you are wrapping up, finishing, or ending the call — just say goodbye.`
+  );
+}
+
 export const confirmAppointmentTool: VoiceTool<{
   confirmedStart: string;
   durationMinutes: number;
@@ -251,10 +270,12 @@ export const confirmAppointmentTool: VoiceTool<{
       // CALENDAR_TIMEZONE local, and the model reads this back to the other
       // party (#44). Same failure class as the 4-hours-off booking.
       const spoken = formatSpokenInZone(confirmedStartIso, config.CALENDAR_TIMEZONE);
+      const spokenStart = `${spoken.day} at ${spoken.time}`;
       return {
         ok: true,
         confirmedStart: formatInZone(confirmedStartIso, config.CALENDAR_TIMEZONE),
-        spokenStart: `${spoken.day} at ${spoken.time}`,
+        spokenStart,
+        nextStep: afterBookingStep(ctx.task.mode, spokenStart),
       };
     });
   },
