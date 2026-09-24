@@ -98,7 +98,11 @@ function guidanceSections(direction: CallDirection): GuidanceSection[] {
         // beat the general "never describe your own mechanics" rule above.
         // The stalling phrase exists only to fill silence; it must carry no
         // content about what is happening.
-        '- Before an action that may take a moment, say a short, content-free stalling phrase, e.g. "One moment." or "Sure — just a second." Never say what you are doing or why: no calendars, checking, confirming, booking, finalizing, or locking anything in.',
+        // #43: with "e.g." examples and a list of banned words, a later call
+        // still said "One moment. I'll just sort out the timing before we go
+        // further." — it avoided the words and kept the reason. A closed list
+        // leaves no slot for a second clause to go in.
+        '- Before an action that may take a moment, say exactly one of these and nothing more: "One moment." / "Sure — just a second." / "Bear with me a second." No second sentence, and no clause after it: never say what you are doing or why, or what happens next — no calendars, checking, timing, details, confirming, booking, finalizing, or locking anything in.',
         '- Never leave the other party in silence while an action runs — but fill it with that short phrase, not an explanation.',
         '- Once the result comes back, just carry on the conversation with the answer ("Yes, Friday at 10 works."). Do not describe what you did or are about to do.',
       ],
