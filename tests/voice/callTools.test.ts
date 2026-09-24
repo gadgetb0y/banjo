@@ -478,3 +478,18 @@ describe('confirm_appointment guards against confirming too early', () => {
     expect(undoConfirmedAppointmentTool.name).toBe('undo_confirmed_appointment');
   });
 });
+
+describe('ending a call: answer what is open, then an actual goodbye (#55)', () => {
+  // Live conversation call, 2026-09-24: asked "Would you like any [coffee]?",
+  // the model said "Thanks for that—let me respond and then we can wrap up."
+  // and hung up via end_conversation_call — no answer, no goodbye. The tool
+  // description said when to end, never how; #47 fixed this only for
+  // confirm_appointment's result.
+  for (const tool of [endConversationCallTool, endCallTool]) {
+    it(`${tool.name}: says to answer any open question and say a real goodbye first, never narrate the ending`, () => {
+      expect(tool.description).toMatch(/answer any question/i);
+      expect(tool.description).toMatch(/actual goodbye/i);
+      expect(tool.description).toMatch(/never say you are wrapping up/i);
+    });
+  }
+});

@@ -437,10 +437,23 @@ export const escalateAndEndCallTool: VoiceTool<{ reason: string }> = defineVoice
   },
 });
 
+/**
+ * How to end, not just when — shared by the two plain call-ending tools (#55).
+ * A conversation call ended "Thanks for that—let me respond and then we can
+ * wrap up." with the other party's question unanswered: the tool description
+ * is the last thing the model reads before ending, and it only said when.
+ * #47 fixed the same failure after a booking via confirm_appointment's result.
+ */
+const BEFORE_ENDING =
+  ' Before calling this, in the same turn: answer any question the other party just asked, then say an actual ' +
+  'goodbye to them (e.g. "Thanks so much — have a great day!"). Never say you are wrapping up, finishing, or ' +
+  'ending the call, and never say what you are about to do ("let me respond") — just do it.';
+
 export const endCallTool: VoiceTool<{ summary?: string }> = defineVoiceTool({
   name: 'end_call',
   description:
-    'Call this once you have said everything you need to say and are ready to end the call normally — e.g. right after confirm_appointment has succeeded and you have told the caller the confirmed time. This does NOT itself record any outcome; use it only after an outcome-setting tool (confirm_appointment) has already run, or when there is genuinely nothing more to say and no better-fitting tool applies. leave_voicemail_and_end_call, report_negotiation_failed, and escalate_and_end_call already end the call themselves — do not call end_call after those.',
+    'Call this once you have said everything you need to say and are ready to end the call normally — e.g. right after confirm_appointment has succeeded and you have told the caller the confirmed time. This does NOT itself record any outcome; use it only after an outcome-setting tool (confirm_appointment) has already run, or when there is genuinely nothing more to say and no better-fitting tool applies. leave_voicemail_and_end_call, report_negotiation_failed, and escalate_and_end_call already end the call themselves — do not call end_call after those.' +
+    BEFORE_ENDING,
   schema: z.object({
     summary: z.string().optional().describe('Optional short note about how the call concluded.'),
   }),
@@ -496,7 +509,8 @@ export const endConversationCallTool: VoiceTool<{ summary: string }> = defineVoi
     "Use this once this open-ended conversation has reached a natural close — you've said what you called to " +
     "say, and/or the other person has too, and there's nothing more to discuss right now. This is a normal, " +
     'successful way to end a conversational call — it is not an escalation or a failure. Only available on ' +
-    'calls with no booking/negotiation goal.',
+    'calls with no booking/negotiation goal.' +
+    BEFORE_ENDING,
   schema: z.object({
     summary: z.string().describe('A short summary of what was discussed/accomplished on this call.'),
   }),
