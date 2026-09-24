@@ -60,6 +60,27 @@ describe('buildOutboundCallSessionOptions', () => {
     vi.clearAllMocks();
   });
 
+  it('places the call without Twilio answering-machine detection (#32)', async () => {
+    // AMD reported machine_start for a person answering "Claudia's Fabulous
+    // Dog Grooming, this call may be recorded..." — businesses, most of what
+    // Banjo calls, answer with exactly the long greeting it reads as
+    // voicemail. Nothing acted on the verdict, and it was billed per call.
+    const options = buildOutboundCallSessionOptions({
+      task: { ...fakeTask, mode: 'booking' } as Task,
+      callAttempt: fakeCallAttempt,
+      contact: fakeContact,
+      telephony: fakeTelephony,
+      calendar: fakeCalendar,
+      systemPrompt: 'irrelevant for this test',
+    });
+
+    await options.beginCall();
+
+    expect(fakeTelephony.originateCall).toHaveBeenCalledTimes(1);
+    const [opts] = vi.mocked(fakeTelephony.originateCall).mock.calls[0]!;
+    expect(opts.answeringMachineDetection).toBeFalsy();
+  });
+
   it('wires up the base outbound tool set (press_digits + callTools) for a booking-mode task', () => {
     const options = buildOutboundCallSessionOptions({
       task: { ...fakeTask, mode: 'booking' } as Task,

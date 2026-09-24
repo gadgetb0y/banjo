@@ -89,10 +89,14 @@ export function buildOutboundCallSessionOptions(params: {
     tools: outboundToolsFor(task),
 
     async beginCall() {
+      // No answering-machine detection (#32). Twilio's verdict misread a
+      // person answering with a business greeting as a machine, nothing acted
+      // on it, and it was billed per call. The model tells voicemail from a
+      // person by listening. The provider still supports it
+      // (answeringMachineDetection) if something ever needs the signal.
       return telephony.originateCall({
         to: contact.phoneNumber,
         callId: callAttempt.id,
-        answeringMachineDetection: true,
       });
     },
 
