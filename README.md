@@ -16,6 +16,57 @@ be done online — and only picks up the phone when it can't.
 It also answers your number, if you want it to: an optional inbound line where people can book,
 check or reschedule with you, recognizing callers already in your Google Contacts.
 
+## Hear it
+
+▶ **[Listen to a real call (2:11)](assets/banjo-demo.mp4)**: Banjo books a dog grooming appointment. The
+call and the calendar are real; the groomer is role-played. Banjo says it's an AI when asked, uses what it
+knows about the dog, turns down a slot that clashes with a meeting, waits for a firm yes before booking,
+and writes the appointment to the calendar. This is a first pass. It hangs up without reading the booking
+back, which is tracked in [#47](https://github.com/shatch/banjo/issues/47).
+
+<details>
+<summary>Transcript (auto-transcribed, lightly tidied)</summary>
+
+> **Banjo:** Hi, I'm calling on behalf of Steve about booking a grooming appointment for his dog, Banjo. Is this Claudia's Fabulous Dog Grooming?
+>
+> **Claudia:** Yes, sorry about that. Claudia's Fabulous Dog Grooming, this call may be recorded. This is Claudia, how can I help?
+>
+> **Banjo:** Hi Claudia, thanks for taking this. I'm calling on behalf of Steve to book a grooming appointment for his dog, Banjo. A full groom is preferred. He's a new client, and he's friendly, but he doesn't love getting wet and can be nervous with clippers, so going gently would be wonderful. What availability do you have?
+>
+> **Claudia:** Sorry, am I talking to a real person?
+>
+> **Banjo:** I'm an AI assistant calling on behalf of Steve. I can help set this up if you're okay proceeding. Could you share what times you have available for a full groom for Banjo?
+>
+> **Claudia:** Wait, what's the dog's name?
+>
+> **Banjo:** His name is Banjo. He's Steve's dog.
+>
+> **Claudia:** What breed, and roughly how big?
+>
+> **Banjo:** Banjo is a small terrier mix, likely a Cairn Terrier. He's small, friendly, and this would be his first time there.
+>
+> **Claudia:** A full groom, or just a bath?
+>
+> **Banjo:** A full groom is preferred, please. If you need to adjust based on what's best for him, that's fine. We'd just like him cleaned up and trimmed.
+>
+> **Claudia:** I can fit him in Thursday the 24th at 3:30.
+>
+> **Banjo:** One moment. … Thanks, that time won't work on Steve's side. Could we try another option? If it helps, a start time earlier in the day would be better.
+>
+> **Claudia:** Friday, I might be able to squeeze him in at 10 in the morning. Let me look.
+>
+> **Banjo:** Sure, just a second. … Friday at 10 AM should work for Steve. Would you like to book that for Banjo's full groom?
+>
+> **Claudia:** Yeah, that could probably work.
+>
+> **Banjo:** Okay, just to be sure, would you like me to book Friday at 10 AM for Banjo's full groom?
+>
+> **Claudia:** Okay, yes. Friday the 25th at 10 a.m., full groom, 90 minutes. Let's book it.
+>
+> **Banjo:** One moment. … Great, thanks for confirming. Let me wrap this up.
+
+</details>
+
 See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for the full design, [`docs/ROADMAP.md`](docs/ROADMAP.md)
 for what's coming next, [`docs/RUNBOOKS.md`](docs/RUNBOOKS.md) for operational procedures, and
 [`docs/COMPETITIVE_LANDSCAPE.md`](docs/COMPETITIVE_LANDSCAPE.md) for how it compares to other
