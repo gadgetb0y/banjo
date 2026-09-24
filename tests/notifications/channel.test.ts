@@ -22,4 +22,16 @@ describe('buildOutcomeSummary', () => {
     });
     expect(summary).toContain('Booked with Alex');
   });
+
+  it("gives a booking's time in the calendar timezone, not the server's", () => {
+    // The SMS for a real 4pm booking read "9/24/2026, 8:00:00 PM": the
+    // container runs in UTC and the summary used toLocaleString().
+    const summary = buildOutcomeSummary({ displayName: 'John Federico' } as Contact, {
+      kind: 'confirmed',
+      start: '2026-09-24T20:00:00.000Z',
+      durationMinutes: 30,
+    });
+    expect(summary).toContain('Thursday, September 24 at 4:00 PM');
+    expect(summary).not.toContain('8:00');
+  });
 });

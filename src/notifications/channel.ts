@@ -1,3 +1,5 @@
+import { config } from '../config/index.js';
+import { formatSpokenInZone } from '../lib/timezone.js';
 import type { DisclosureResult } from '../session/disclosure.js';
 import type { Contact } from '../contacts/schema.js';
 import type { TaskOutcome } from '../tasks/schema.js';
@@ -14,8 +16,13 @@ export interface NotificationChannel {
  */
 export function buildOutcomeSummary(contact: Contact, outcome: TaskOutcome): string {
   switch (outcome.kind) {
-    case 'confirmed':
-      return `Booked with ${contact.displayName}: ${new Date(outcome.start).toLocaleString()} (${outcome.durationMinutes} min).${outcome.details ? ` ${outcome.details}` : ''}`;
+    case 'confirmed': {
+      // CALENDAR_TIMEZONE, not the server's: a real 4pm booking was texted as
+      // "8:00:00 PM" because the container runs in UTC and this used
+      // toLocaleString().
+      const when = formatSpokenInZone(outcome.start, config.CALENDAR_TIMEZONE);
+      return `Booked with ${contact.displayName}: ${when.day} at ${when.time} (${outcome.durationMinutes} min).${outcome.details ? ` ${outcome.details}` : ''}`;
+    }
     case 'voicemail_left':
       return `Left a voicemail at ${contact.displayName}: "${outcome.message}". Will need a follow-up if they don't call back.`;
     case 'negotiation_failed':
