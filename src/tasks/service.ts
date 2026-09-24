@@ -54,16 +54,17 @@ export async function getTask(id: string): Promise<Task | undefined> {
 }
 
 /**
- * The statuses a task may move INTO `status` from. Normally only the
- * non-terminal ones: a late end_conversation_call or end-of-call failure must
- * not overwrite a 'confirmed' booking. The one exception is 'confirmed' over
- * 'failed' — confirm_appointment records it only after the calendar event is
- * written, and a callee hanging up mid-booking can land the end-of-call
- * 'failed' first (callSessionAdapter.ts's failTaskIfStillNonTerminal).
- * Postgres has to say what the calendar says.
+ * The statuses a task may move INTO any status from: only the non-terminal
+ * ones. A terminal status is final, including after the owner has been
+ * notified of it. There used to be one exception, 'confirmed' over 'failed',
+ * for a booking that finished writing after a hang-up had already failed the
+ * task; CallSession's end()/fail() now wait for running tools within each
+ * tool's own budget, so that race can't happen by ordinary means, and the
+ * leftover case texts the owner instead of rewriting the record (#3,
+ * confirm_appointment in voice/tools/callTools.ts).
  */
-function allowedFromStatuses(status: Task['status']): Task['status'][] {
-  return status === 'confirmed' ? [...NON_TERMINAL_STATUSES, 'failed'] : NON_TERMINAL_STATUSES;
+function allowedFromStatuses(): Task['status'][] {
+  return NON_TERMINAL_STATUSES;
 }
 
 type TransitionPatch = Partial<{
@@ -104,7 +105,7 @@ export async function transitionTask(
   const [row] = await db
     .update(tasks)
     .set({ status, ...patch, updatedAt: new Date() })
-    .where(and(eq(tasks.id, id), inArray(tasks.status, options?.from ?? allowedFromStatuses(status))))
+    .where(and(eq(tasks.id, id), inArray(tasks.status, options?.from ?? allowedFromStatuses())))
     .returning();
   if (row) return row;
   if (options) return undefined;

@@ -61,9 +61,12 @@ const VERBATIM_TOOL_PENDING_BUDGET_MS = 35_000;
 // toolPendingWatchdog's "don't hang forever" philosophy for a stuck tool.
 const SILENCE_WATCHDOG_MS = 7000;
 
-// Beyond TOOL_TIMEOUT_MS, how long end() keeps waiting for a tool handler
-// that was already running when the call ended (see
-// waitForInFlightToolHandlers) — covers the handler's DB write after its
+// The session-level tool-pending watchdog for an ordinary tool call (see
+// handleToolCall) — also that tool's budget when the call ends around it.
+const TOOL_PENDING_WATCHDOG_MS = 15_000;
+
+// Beyond a running tool's own budget, how long end()/fail() keep waiting for
+// it (see waitForInFlightToolHandlers) — covers its DB write after its
 // bounded work returns.
 const IN_FLIGHT_TOOL_WAIT_MARGIN_MS = 1000;
 
@@ -178,8 +181,8 @@ export class CallSession<TCtx = CallContext> {
   // is still awaiting turn_end — sending two collides on the Voice AI side
   // ("already has an active response").
   private responseActive = false;
-  /** Tool handlers still running — end() waits for these (see waitForInFlightToolHandlers). */
-  private readonly inFlightToolHandlers = new Set<Promise<void>>();
+  /** Running tool handlers, each with the time its budget runs out (see toolBudgetMs). */
+  private readonly inFlightToolHandlers = new Map<Promise<void>, number>();
 
   constructor(private readonly opts: CallSessionOptions<TCtx>) {
     this.voiceAI = createVoiceAIProvider();
@@ -278,6 +281,7 @@ export class CallSession<TCtx = CallContext> {
         this.responseActive = true;
         this.trackToolHandler(
           this.handleToolCall(event.call.id, event.call.name, event.call.arguments, event.call.unparsedArguments),
+          this.toolBudgetMs(event.call.name),
         );
         break;
       case 'transcript':
@@ -473,7 +477,7 @@ export class CallSession<TCtx = CallContext> {
     this.toolPendingWatchdog = setTimeout(() => {
       logger.error({ callId: this.opts.callId, toolCallId, name }, 'Tool call watchdog fired — forcing call end');
       void this.fail('tool_pending_watchdog', new Error(`Tool ${name} did not resolve in time`));
-    }, 15_000);
+    }, TOOL_PENDING_WATCHDOG_MS);
 
     const tool = this.toolRegistry.get(name);
     if (!tool) {
@@ -596,6 +600,10 @@ export class CallSession<TCtx = CallContext> {
     this.cancelPendingRecording();
     logger.error({ err, reason, callId: this.opts.callId }, 'Call session error');
     this.setState('error');
+    // Same reason as end(): a booking still being written must land before
+    // 'failed' is recorded and texted (#3). Setting 'error' first means no
+    // new tool call can start while this waits.
+    await this.waitForInFlightToolHandlers();
     await this.opts.onStatusChange({ kind: 'failed', reason, disclosure: checkDisclosure(this.firstAssistantLine) });
     // A dropped telephony/voice-AI leg has no PSTN-level way to auto-resume —
     // the caller would have to call back. Disconnect the other leg promptly
@@ -606,27 +614,41 @@ export class CallSession<TCtx = CallContext> {
     await this.opts.notifyIfTerminal();
   }
 
-  private trackToolHandler(run: Promise<void>): void {
-    this.inFlightToolHandlers.add(run);
+  /**
+   * How long a tool call may legitimately run: the same budget its own
+   * tool-pending watchdog gives it (#3). A verbatim tool first waits up to
+   * TURN_END_WAIT_MS for turn_end, then gets VERBATIM_TOOL_PENDING_BUDGET_MS.
+   */
+  private toolBudgetMs(name: string): number {
+    return this.toolRegistry.get(name)?.verbatimMessage
+      ? TURN_END_WAIT_MS + VERBATIM_TOOL_PENDING_BUDGET_MS
+      : TOOL_PENDING_WATCHDOG_MS;
+  }
+
+  private trackToolHandler(run: Promise<void>, budgetMs: number): void {
+    this.inFlightToolHandlers.set(run, Date.now() + budgetMs);
     run.finally(() => this.inFlightToolHandlers.delete(run)).catch(() => {});
   }
 
   /**
-   * A tool handler still running when the call ends — the callee hanging up
-   * while confirm_appointment writes the calendar event — must record its
-   * outcome before end() records the call's end. Otherwise onStatusChange's
-   * 'ended' lands the task in 'failed' first and notifyIfTerminal texts a
-   * failure for a booking that went through. Bounded: a handler's own work is
-   * capped at TOOL_TIMEOUT_MS by runToolSafely (voice/tools/callTools.ts), so
-   * this never waits longer than that plus a small margin.
+   * A tool handler still running when the call ends or fails — the callee
+   * hanging up while confirm_appointment writes the calendar event — must
+   * record its outcome before the call's end or failure is recorded.
+   * Otherwise 'ended'/'failed' lands the task in 'failed' first and
+   * notifyIfTerminal texts a failure for a booking that went through.
+   *
+   * Bounded by each running tool's own budget (toolBudgetMs), not a flat
+   * TOOL_TIMEOUT_MS: that was shorter than what a call-ending or verbatim
+   * tool is allowed, so a handler inside its budget could be overtaken (#3).
    */
   private async waitForInFlightToolHandlers(): Promise<void> {
     if (this.inFlightToolHandlers.size === 0) return;
+    const latestDeadline = Math.max(...this.inFlightToolHandlers.values());
     let timer: ReturnType<typeof setTimeout> | undefined;
     const bound = new Promise<void>((resolve) => {
-      timer = setTimeout(resolve, config.TOOL_TIMEOUT_MS + IN_FLIGHT_TOOL_WAIT_MARGIN_MS);
+      timer = setTimeout(resolve, Math.max(0, latestDeadline - Date.now()) + IN_FLIGHT_TOOL_WAIT_MARGIN_MS);
     });
-    await Promise.race([Promise.allSettled([...this.inFlightToolHandlers]), bound]);
+    await Promise.race([Promise.allSettled([...this.inFlightToolHandlers.keys()]), bound]);
     clearTimeout(timer);
   }
 

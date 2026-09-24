@@ -4,6 +4,7 @@ import { config } from '../../config/index.js';
 import { childLogger } from '../../lib/logger.js';
 import { formatInZone, formatSpokenInZone, zonedTimeToUtcIso } from '../../lib/timezone.js';
 import { TimeoutError, withTimeout } from '../../lib/withTimeout.js';
+import { sendOwnerSms } from '../../notifications/twilioSms.js';
 import type { CallContext } from '../../session/types.js';
 import { getTask, NON_TERMINAL_STATUSES, transitionTask } from '../../tasks/service.js';
 import type { TelephonyProvider } from '../../telephony/providers/types.js';
@@ -225,6 +226,7 @@ export const confirmAppointmentTool: VoiceTool<{
       // calendar event). Keying off ctx.callAttempt.id guarantees the same
       // key is used for every retry within this call attempt.
       const idempotencyKey = `confirm:${ctx.callAttempt.id}`;
+      const title = input.summary?.trim() || calendarTitleFrom(ctx.task.goalDescription);
       const result = await ctx.calendar.createEventIdempotent({
         idempotencyKey,
         start: startUtcIso,
@@ -233,7 +235,7 @@ export const confirmAppointmentTool: VoiceTool<{
         // table for two at Luigi's. Any evening in the next five days works;
         // ask what they have available...") and used to go straight into the
         // event summary — i.e. into Steve's actual calendar.
-        summary: input.summary?.trim() || calendarTitleFrom(ctx.task.goalDescription),
+        summary: title,
         description: input.details,
       });
 
@@ -258,11 +260,18 @@ export const confirmAppointmentTool: VoiceTool<{
         calendarEventId: result.eventId,
       });
       if (recorded.status !== 'confirmed') {
-        // The calendar event exists regardless, so the booking stands and the
-        // model is told so — but Postgres disagrees, which Steve must hear about.
+        // The call was already recorded as over (and notified) before this
+        // booking finished writing — only possible if it outlasted its
+        // budget, which CallSession waits for (#3). The event exists and the
+        // other party may think it's booked, so the owner is told directly
+        // rather than the task's record being rewritten after the fact.
         log.error(
           { taskId: ctx.task.id, status: recorded.status, calendarEventId: result.eventId },
           'calendar event written, but the task could not be marked confirmed',
+        );
+        const when = formatSpokenInZone(new Date(result.confirmedStart).toISOString(), config.CALENDAR_TIMEZONE);
+        void sendOwnerSms(
+          `Correction: Banjo put "${title}" on your calendar for ${when.day} at ${when.time}, after that call had already been reported as ${recorded.status}. The booking may be real; check with them.`,
         );
       }
       // Local and spoken, never the calendar's own string (UTC, or an offset
