@@ -8,6 +8,7 @@ import { logger } from './lib/logger.js';
 import { startServer } from './server.js';
 import { startOrchestrationPoller } from './tasks/orchestrator.js';
 import { loadOwnerProfile } from './tasks/ownerProfile.js';
+import { startTranscriptRetentionSweeper } from './transcripts/service.js';
 
 logger.info({ nodeEnv: config.NODE_ENV, voiceAiProvider: config.VOICE_AI_PROVIDER }, 'Starting ea');
 
@@ -40,3 +41,4 @@ if (config.RUN_MIGRATIONS_ON_BOOT) {
 startServer();
 startOrchestrationPoller();
 startGoogleContactsSyncPoller();
+startTranscriptRetentionSweeper();

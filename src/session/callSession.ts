@@ -106,6 +106,25 @@ export interface CallSessionOptions<TCtx = CallContext> {
   onFailure(reason: string): Promise<void>;
   /** Fires any final-outcome notification (e.g. SMS) once the call is in a terminal state — a no-op if it isn't. */
   notifyIfTerminal(): Promise<void>;
+  /**
+   * Every finalised, non-empty line, numbered in arrival order (#6). Its own
+   * hook rather than onStatusChange/transitionTask: that path refuses writes
+   * once a task is terminal, which would drop exactly the transcripts most
+   * worth having. Called fire-and-forget — a rejection is logged, never
+   * awaited by the call.
+   */
+  onTranscript(turn: TranscriptTurn): Promise<void>;
+}
+
+export interface TranscriptTurn {
+  /** From 1, per call, across both sides, in the order lines went final. */
+  seq: number;
+  role: 'user' | 'assistant';
+  text: string;
+  quality: 'ok' | 'suspect';
+  voiceProvider: string;
+  /** When CallSession received the final line — the events carry no timestamp of their own. */
+  spokenAt: Date;
 }
 
 /**
@@ -116,6 +135,8 @@ export interface CallSessionOptions<TCtx = CallContext> {
 export class CallSession<TCtx = CallContext> {
   private state: CallSessionState = 'connecting';
   private readonly voiceAI: VoiceAIProvider;
+  /** Last seq handed to onTranscript (#6). */
+  private transcriptSeq = 0;
   private readonly pipeline: AudioPipeline;
   private readonly outputFormat;
   private readonly toolRegistry: Map<string, VoiceTool<any, TCtx>>;
@@ -258,6 +279,7 @@ export class CallSession<TCtx = CallContext> {
           // for something the other party said.
           const quality = classifyTranscript(event.text);
           if (quality === 'empty') break;
+          this.recordTranscript(event.role, event.text, quality);
           if (config.LOG_TRANSCRIPTS) {
             logger.info(
               { callId: this.opts.callId, role: event.role, text: event.text, ...(quality === 'suspect' && { suspect: true }) },
@@ -356,6 +378,13 @@ export class CallSession<TCtx = CallContext> {
     }
     logger.error({ callId: this.opts.callId }, 'Voice AI still silent after a nudge — ending the call');
     void this.fail('assistant_silence_watchdog', new Error('Voice AI produced no response after a user turn, even after an explicit nudge'));
+  }
+
+  private recordTranscript(role: 'user' | 'assistant', text: string, quality: 'ok' | 'suspect'): void {
+    const seq = ++this.transcriptSeq;
+    this.opts
+      .onTranscript({ seq, role, text, quality, voiceProvider: this.voiceAI.name, spokenAt: new Date() })
+      .catch((err) => logger.error({ callId: this.opts.callId, seq, role, textLength: text.length, err }, 'failed to save transcript line'));
   }
 
   /** Wraps voiceAI.triggerResponse() so every self-initiated response (greeting, silence-watchdog nudge) is reflected in responseActive — see its doc comment. */

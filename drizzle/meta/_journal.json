@@ -8,6 +8,13 @@
       "when": 1790018633679,
       "tag": "0000_tough_emma_frost",
       "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "7",
+      "when": 1790256883811,
+      "tag": "0001_green_luke_cage",
+      "breakpoints": true
     }
   ]
 }

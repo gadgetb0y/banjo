@@ -9,6 +9,7 @@ import { logger } from '../lib/logger.js';
 import { placeCallInputSchema, placeCallHandler } from './tools/placeCall.js';
 import { cancelTaskInputSchema, cancelTaskHandler } from './tools/cancelTask.js';
 import { stopCallInputSchema, stopCallHandler } from './tools/stopCall.js';
+import { getCallTranscriptInputSchema, getCallTranscriptHandler } from './tools/getCallTranscript.js';
 import { getTaskStatusInputSchema, getTaskStatusHandler } from './tools/getTaskStatus.js';
 import { findContactInputSchema, findContactHandler } from './tools/findContact.js';
 import { listContactsInputSchema, listContactsHandler } from './tools/listContacts.js';
@@ -99,6 +100,15 @@ export function createMcpServer(): McpServer {
       'a phone call or a recorded online booking.',
     getTaskStatusInputSchema.shape,
     adapt(getTaskStatusHandler),
+  );
+
+  server.tool(
+    'get_call_transcript',
+    'Read what was said on a task\'s phone calls, line by line, when the owner wants to know what the other ' +
+      'party actually said. Only available if this install saves transcripts (PERSIST_TRANSCRIPTS); the result ' +
+      'says so if not. Lines marked suspect may not be what was said.',
+    getCallTranscriptInputSchema.shape,
+    adapt(getCallTranscriptHandler),
   );
 
   server.tool(

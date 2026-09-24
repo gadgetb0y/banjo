@@ -21,6 +21,9 @@ vi.mock('../../src/tasks/service.js', () => ({
   isTerminalStatus: (status: string) => !['pending', 'checking_availability', 'calling', 'negotiating'].includes(status),
 }));
 
+const { saveTranscriptTurn } = vi.hoisted(() => ({ saveTranscriptTurn: vi.fn(async () => {}) }));
+vi.mock('../../src/transcripts/service.js', () => ({ saveTranscriptTurn }));
+
 const { buildOutboundCallSessionOptions } = await import('../../src/tasks/callSessionAdapter.js');
 
 // Minimal fakes mirroring tests/session/callSession.test.ts's style — only
@@ -58,6 +61,20 @@ const fakeCalendar: CalendarProvider = {
 describe('buildOutboundCallSessionOptions', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+  });
+
+  it('onTranscript saves the line against this call attempt (#6)', async () => {
+    const options = buildOutboundCallSessionOptions({
+      task: { ...fakeTask, mode: 'booking' } as Task,
+      callAttempt: fakeCallAttempt,
+      contact: fakeContact,
+      telephony: fakeTelephony,
+      calendar: fakeCalendar,
+      systemPrompt: 'irrelevant for this test',
+    });
+    const turn = { seq: 1, role: 'user' as const, text: 'Hello?', quality: 'ok' as const, voiceProvider: 'openai', spokenAt: new Date() };
+    await options.onTranscript(turn);
+    expect(saveTranscriptTurn).toHaveBeenCalledWith({ callAttemptId: 'call-attempt-1' }, turn);
   });
 
   it('places the call without Twilio answering-machine detection (#32)', async () => {

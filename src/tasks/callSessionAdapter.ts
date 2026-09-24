@@ -12,6 +12,7 @@ import type { VoiceTool } from '../voice/tools/defineVoiceTool.js';
 import { unregisterLiveCall } from './liveCalls.js';
 import { getTask, isTerminalStatus, transitionTask, updateCallAttempt } from './service.js';
 import type { CallAttempt, Task } from './schema.js';
+import { saveTranscriptTurn } from '../transcripts/service.js';
 
 /**
  * Fires the outcome notification for a task that has reached a terminal
@@ -110,6 +111,11 @@ export function buildOutboundCallSessionOptions(params: {
         estimatedAudioDoneAt,
         verbatimDelivery,
       };
+    },
+
+    async onTranscript(turn) {
+      // No-op unless PERSIST_TRANSCRIPTS is on (#6).
+      await saveTranscriptTurn({ callAttemptId: callAttempt.id }, turn);
     },
 
     async onStatusChange(patch) {

@@ -5,6 +5,7 @@ import { updateInboundCall } from './service.js';
 import { inboundTools } from './tools.js';
 import type { InboundCall } from './schema.js';
 import type { InboundCallContext } from './types.js';
+import { saveTranscriptTurn } from '../transcripts/service.js';
 
 /**
  * Inbound counterpart of src/tasks/callSessionAdapter.ts's
@@ -52,6 +53,11 @@ export function buildInboundCallSessionOptions(params: {
         calendar,
         estimatedAudioDoneAt,
       };
+    },
+
+    async onTranscript(turn) {
+      // No-op unless PERSIST_TRANSCRIPTS is on (#6).
+      await saveTranscriptTurn({ inboundCallId: inboundCall.id }, turn);
     },
 
     async onStatusChange(patch) {
