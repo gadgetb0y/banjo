@@ -7,7 +7,7 @@ const transitionTask = vi.fn(async (id: string, status: string) => ({ id, status
 vi.mock('../../src/tasks/service.js', () => ({
   getTask: vi.fn(async () => undefined),
   transitionTask,
-  NON_TERMINAL_STATUSES: ['pending', 'checking_availability', 'calling', 'negotiating'],
+  isTerminalStatus: (status: string) => !['pending', 'checking_availability', 'calling', 'negotiating'].includes(status),
 }));
 
 const { undoConfirmedAppointmentTool } = await import('../../src/voice/tools/callTools.js');

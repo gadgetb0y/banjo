@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-const { getTask, transitionTask, createCallAttempt, getContact, CallSession, logger } = vi.hoisted(() => ({
+const { getTask, transitionTask, createCallAttempt, getContact, CallSession, logger, notifyTaskOutcome } = vi.hoisted(() => ({
+  notifyTaskOutcome: vi.fn(async () => {}),
   getTask: vi.fn(),
   transitionTask: vi.fn(),
   createCallAttempt: vi.fn(),
@@ -15,6 +16,7 @@ vi.mock('../../src/tasks/service.js', () => ({
   createCallAttempt,
   isTaskDue: () => true,
   listNonTerminalTasks: vi.fn(async () => []),
+  listStartableTasks: vi.fn(async () => []),
 }));
 vi.mock('../../src/contacts/service.js', () => ({ getContact }));
 vi.mock('../../src/session/callSession.js', () => ({ CallSession }));
@@ -25,7 +27,7 @@ vi.mock('../../src/calendar/googleCalendarProvider.js', () => ({
   },
 }));
 vi.mock('../../src/telephony/factory.js', () => ({ createTelephonyProvider: vi.fn() }));
-vi.mock('../../src/tasks/callSessionAdapter.js', () => ({ buildOutboundCallSessionOptions: vi.fn() }));
+vi.mock('../../src/tasks/callSessionAdapter.js', () => ({ buildOutboundCallSessionOptions: vi.fn(), notifyTaskOutcome }));
 vi.mock('../../src/tasks/promptBuilder.js', () => ({ buildCallSystemPrompt: vi.fn(), buildCallFrontendPrompt: vi.fn() }));
 
 const { clipWindowsToFuture, triggerOrchestration } = await import('../../src/tasks/orchestrator.js');
@@ -77,6 +79,33 @@ describe('triggerOrchestration: a cancel racing the start of a run', () => {
     await vi.waitFor(() => expect(logger.info).toHaveBeenCalled());
 
     expect(transitionTask).toHaveBeenCalledWith('task-2', 'checking_availability', undefined, { from: ['pending'] });
+    expect(createCallAttempt).not.toHaveBeenCalled();
+    expect(CallSession).not.toHaveBeenCalled();
+  });
+});
+
+describe('a task whose requested times have all passed (#3)', () => {
+  // clipWindowsToFuture returned [] and the call went ahead with no
+  // pre-checked windows — so the model could book any free time at all.
+  it('fails the task and notifies instead of placing an unconstrained call', async () => {
+    getTask.mockResolvedValue({
+      id: 'task-3',
+      channel: 'phone',
+      status: 'pending',
+      contactId: 'contact-1',
+      constraints: { dateWindows: [{ start: '2020-01-01T09:00:00-05:00', end: '2020-01-01T17:00:00-05:00' }] },
+    });
+    getContact.mockResolvedValue({ id: 'contact-1' });
+    transitionTask.mockImplementation(async (id: string, status: string) => ({ id, status }));
+
+    triggerOrchestration('task-3');
+    await vi.waitFor(() => expect(notifyTaskOutcome).toHaveBeenCalledWith('task-3'));
+
+    expect(transitionTask).toHaveBeenCalledWith(
+      'task-3',
+      'failed',
+      expect.objectContaining({ outcome: expect.objectContaining({ kind: 'failed', reason: expect.stringMatching(/already passed/) }) }),
+    );
     expect(createCallAttempt).not.toHaveBeenCalled();
     expect(CallSession).not.toHaveBeenCalled();
   });

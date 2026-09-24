@@ -490,6 +490,14 @@ describe('OpenAILiveProvider: speak-then-verify verbatim delivery', () => {
     provider.sayVerbatim(MESSAGE);
     expect(sent(ws).at(-1).content).toMatch(/one-time cue/i);
   });
+
+  it('quotes the message safely — double quotes in it cannot end the cue early (#3)', async () => {
+    const { provider, ws } = await startSession();
+    provider.sayVerbatim('Ask for "Sam" at the front desk.');
+    const append = sent(ws).at(-1);
+    expect(append.content).toContain(JSON.stringify('Ask for "Sam" at the front desk.'));
+  });
+
 });
 
 describe('OpenAILiveProvider: diagnostics', () => {
