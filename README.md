@@ -140,7 +140,10 @@ yours.
 Banjo needs four things before it can place a real call — get these first:
 
 1. **A Twilio account and phone number.** Sign up at [twilio.com](https://www.twilio.com), buy a phone
-   number capable of voice calls, and note your Account SID, Auth Token, and the number itself.
+   number capable of voice calls, and note your Account SID, Auth Token, and the number itself. For outcome
+   **texts** to a US number, the sending number must also be registered for US A2P 10DLC. Without it, every
+   text is silently blocked by the carrier (Twilio error 30034). See `docs/RUNBOOKS.md`, "SMS notifications
+   aren't arriving".
 2. **A voice AI provider.** OpenAI Realtime is the most battle-tested option here and the recommended
    default — Gemini Live and ElevenLabs Conversational AI are supported but flagged
    `NEEDS VERIFICATION` in a few places (see `docs/ARCHITECTURE.md`'s Open Risks section) since they haven't
