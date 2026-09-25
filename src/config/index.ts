@@ -124,7 +124,13 @@ const envSchema = z
     // src/tasks/ownerProfile.ts and banjo-profile.example.md.
     PROMPT_PROFILE_FILE: z.string().min(1).optional(),
 
-    NOTIFICATION_CHANNEL: z.enum(['twilio_sms', 'none']).default('twilio_sms'),
+    NOTIFICATION_CHANNEL: z.enum(['twilio_sms', 'pushover', 'none']).default('twilio_sms'),
+    // NOTIFICATION_CHANNEL=pushover: the application's API token and the
+    // owner's user (or group) key, from pushover.net. PUSHOVER_DEVICE limits
+    // delivery to one of the owner's devices; unset, every device gets it.
+    PUSHOVER_APP_TOKEN: z.string().min(1).optional(),
+    PUSHOVER_USER_KEY: z.string().min(1).optional(),
+    PUSHOVER_DEVICE: z.string().min(1).optional(),
     NOTIFY_TO_PHONE_NUMBER: e164,
     NOTIFY_FROM_PHONE_NUMBER: e164,
 
@@ -244,6 +250,10 @@ const envSchema = z
       path: ['NOTIFY_TO_PHONE_NUMBER'],
     },
   )
+  .refine((v) => v.NOTIFICATION_CHANNEL !== 'pushover' || !!(v.PUSHOVER_APP_TOKEN && v.PUSHOVER_USER_KEY), {
+    message: 'PUSHOVER_APP_TOKEN and PUSHOVER_USER_KEY are required when NOTIFICATION_CHANNEL=pushover',
+    path: ['PUSHOVER_APP_TOKEN'],
+  })
   .refine((v) => v.BUSINESS_HOURS_START < v.BUSINESS_HOURS_END, {
     message: 'BUSINESS_HOURS_START must be earlier than BUSINESS_HOURS_END',
     path: ['BUSINESS_HOURS_START'],
