@@ -728,7 +728,10 @@ describe('CallSession: the call ending while a tool handler is still running', (
     expect(options.notifyIfTerminal).toHaveBeenCalledTimes(1);
   });
 
-  it('stops waiting after TOOL_TIMEOUT_MS plus a margin if the handler never finishes', async () => {
+  it("stops waiting at the tool's own budget (its watchdog, 15s) plus a margin if the handler never finishes (#3)", async () => {
+    // Was TOOL_TIMEOUT_MS + 1s (9s), shorter than the 15s the tool-pending
+    // watchdog itself allows a handler — so end() could record the call over
+    // a handler that was still inside its budget.
     vi.useFakeTimers();
     try {
       const { telephony, options, order, handler } = sessionWithSlowTool();
@@ -739,13 +742,32 @@ describe('CallSession: the call ending while a tool handler is still running', (
       expect(handler).toHaveBeenCalled();
       telephony.emit({ callId: callAttempt.id, type: 'ended', reason: 'callee hung up' });
 
-      await vi.advanceTimersByTimeAsync(8000); // TOOL_TIMEOUT_MS
+      await vi.advanceTimersByTimeAsync(12_000); // past the old 9s cap, inside the tool's budget
       expect(order).not.toContain('status:ended');
-      await vi.advanceTimersByTimeAsync(1000); // the margin
+      await vi.advanceTimersByTimeAsync(4_000); // 15s budget + 1s margin
       expect(order).toContain('status:ended');
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it('a failure mid-tool also waits for the handler, so a booking still landing is recorded before "failed" (#3)', async () => {
+    // A telephony error (or the tool-pending watchdog) during
+    // confirm_appointment used to record 'failed' — and text a failure —
+    // while the calendar write was still going.
+    const { telephony, options, order, handler, finish } = sessionWithSlowTool();
+    await new CallSession(options).start();
+
+    voiceAIEmitter.emit('event', { type: 'tool_call', call: { id: 'call-1', name: 'slow_tool', arguments: {} } } satisfies VoiceAIEvent);
+    await vi.waitFor(() => expect(handler).toHaveBeenCalled());
+    telephony.emit({ callId: callAttempt.id, type: 'error', error: new Error('media stream dropped') });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(order).toEqual(['status:started']);
+
+    finish();
+    await vi.waitFor(() => expect(order).toContain('status:failed'));
+    expect(order).toEqual(['status:started', 'handler finished', 'status:failed']);
+    await vi.waitFor(() => expect(options.notifyIfTerminal).toHaveBeenCalledTimes(1));
   });
 });
 
@@ -1135,5 +1157,112 @@ describe("CallSession: reports whether the call opened by saying it's an AI (#8)
 
   it('no_speech: Banjo never spoke', async () => {
     expect(await endAfter([])).toMatchObject({ disclosure: 'no_speech' });
+  });
+});
+
+describe('CallSession: recording starts only after the recording notice has been heard (#8)', () => {
+  // Live test, 2026-09-24: recording was started when the opener's TEXT went
+  // final, 2s after "Hello?" — the model writes faster than it speaks, and
+  // the recording's own audio showed Banjo still mid-opener, before "This
+  // call is recorded." was heard. So: wait for the turn to end and its audio
+  // to finish playing. Late is fine; early is the bug.
+  beforeEach(() => {
+    voiceAIEmitter.removeAllListeners('event');
+  });
+
+  async function session(recordCalls: boolean, startRecording = vi.fn(async () => ({ recordingId: 'RE1' }))) {
+    const telephony = makeFakeTelephony();
+    const provider = { ...telephony.provider, startRecording };
+    const options = { ...makeFakeCallSessionOptions(provider), recordCalls };
+    const s = new CallSession(options);
+    await s.start();
+    return { options, startRecording };
+  }
+  const emit = (event: VoiceAIEvent) => voiceAIEmitter.emit('event', event);
+  const say = (role: 'user' | 'assistant', text: string) => emit({ type: 'transcript', role, text, isFinal: true });
+  /** Banjo's speech on its way to the phone: 8 bytes per ms of mu-law. */
+  const speak = (ms: number) => emit({ type: 'audio_chunk', chunk: { data: Buffer.alloc(ms * 8), sampleRate: 8000 } });
+
+  it('waits for the turn to end AND its audio to finish playing, then starts once', async () => {
+    vi.useFakeTimers();
+    try {
+      const { options, startRecording } = await session(true);
+      say('user', "Claudia's, how can I help?");
+      speak(6000); // a ~6s opener, queued to the phone
+      say('assistant', "Hi, I'm an AI assistant calling on behalf of Steve. This call is recorded.");
+      await vi.advanceTimersByTimeAsync(1000);
+      expect(startRecording).not.toHaveBeenCalled(); // text is final, audio is still playing
+
+      emit({ type: 'turn_end' });
+      await vi.advanceTimersByTimeAsync(4000); // ~5s in: still playing
+      expect(startRecording).not.toHaveBeenCalled();
+
+      await vi.advanceTimersByTimeAsync(2000); // played out, plus the margin
+      expect(startRecording).toHaveBeenCalledTimes(1);
+      await vi.waitFor(() =>
+        expect(options.onStatusChange).toHaveBeenCalledWith({ kind: 'recording_started', recordingId: 'RE1' }),
+      );
+
+      say('assistant', 'We recorded a lot of rain this week.');
+      emit({ type: 'turn_end' });
+      await vi.advanceTimersByTimeAsync(2000);
+      expect(startRecording).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('cancels if Banjo is interrupted before its turn ends — the notice may never have been heard', async () => {
+    vi.useFakeTimers();
+    try {
+      const { startRecording } = await session(true);
+      speak(6000);
+      say('assistant', 'This call is recorded.');
+      emit({ type: 'interrupted' });
+      emit({ type: 'turn_end' });
+      await vi.advanceTimersByTimeAsync(10_000);
+      expect(startRecording).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('never starts if Banjo never says the notice', async () => {
+    vi.useFakeTimers();
+    try {
+      const { startRecording } = await session(true);
+      say('assistant', "Hi, I'm an AI assistant calling on behalf of Steve.");
+      emit({ type: 'turn_end' });
+      await vi.advanceTimersByTimeAsync(5000);
+      expect(startRecording).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('never starts with recording off', async () => {
+    vi.useFakeTimers();
+    try {
+      const { startRecording } = await session(false);
+      say('assistant', 'This call is recorded.');
+      emit({ type: 'turn_end' });
+      await vi.advanceTimersByTimeAsync(5000);
+      expect(startRecording).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('a failed start is logged, not a failed call', async () => {
+    vi.useFakeTimers();
+    try {
+      const { options } = await session(true, vi.fn(async () => { throw new Error('twilio 500'); }));
+      say('assistant', 'This call is recorded.');
+      emit({ type: 'turn_end' });
+      await vi.advanceTimersByTimeAsync(5000);
+      expect(options.onFailure).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

@@ -158,3 +158,21 @@ number is the part of `GOOGLE_OAUTH_CLIENT_ID` before the first `-`):
 - Enabled APIs: https://console.cloud.google.com/apis/dashboard
 - Google Calendar API: https://console.cloud.google.com/apis/library/calendar-json.googleapis.com
 - People API: https://console.cloud.google.com/apis/library/people.googleapis.com
+
+## SMS notifications aren't arriving
+
+**Symptom:** no outcome texts arrive, and the log shows `notification SMS blocked by the carrier` with `errorCode: 30034`. Before this check existed, nothing was logged at all: Twilio *accepts* the message, so the send succeeds, and the carrier blocks it afterwards. In Twilio's console (Monitor → Messaging) these show as **Undelivered, 30034**.
+
+**Cause:** US carriers block texts to US numbers from a standard local number (10DLC) that isn't registered for **A2P 10DLC**. Voice calls on the same number are unaffected. See [Twilio error 30034](https://www.twilio.com/docs/api/errors/30034).
+
+### Fix: register as a Sole Proprietor (one person, one number)
+
+1. Twilio console → **Messaging → Regulatory Compliance → A2P 10DLC** (or search the console for "A2P 10DLC").
+2. Register a **Sole Proprietor brand** for yourself. It asks for your name, address and a mobile number for a one-time verification text. Brand approval is usually quick; Twilio emails when it's done.
+3. Create a **Sole Proprietor campaign**. Describe it plainly: *notifications to the account owner about the outcome of phone calls their assistant placed; recipient is the owner only.* Sample message: a real Banjo summary, e.g. "Booked with Luigi's: Friday, September 25 at 7:00 PM (90 min)."
+4. Add `NOTIFY_FROM_PHONE_NUMBER` to the campaign's Messaging Service sender pool. A Sole Proprietor campaign allows exactly one number.
+5. Wait for campaign approval (Twilio quotes up to about 5 business days), then send a test: place any short call and check the text arrives. The log stays quiet on success.
+
+Costs, per Twilio's help center (check current pricing): a small one-time brand fee, a one-time campaign vetting fee, and a monthly campaign fee. See [A2P 10DLC pricing](https://help.twilio.com/articles/1260803965530-What-pricing-and-fees-are-associated-with-the-A2P-10DLC-service-).
+
+**Alternatives:** a **toll-free** number with toll-free verification also works for US texts, and notifications can be turned off with `NOTIFICATION_CHANNEL=none`. The task outcome is always available from `get_task_status` either way.

@@ -148,6 +148,10 @@ can verify it was actually said, on the provider that implements it.
 
 ### Recording
 
+> **Shipped** (#8, third PR): `RECORD_CALLS`, off by default. A two-track Twilio recording starts only
+> after Banjo has said the recording notice, which is appended to `DISCLOSURE_LINE`. Deleted after
+> `RECORDING_RETENTION_DAYS` (30) by a daily sweep. Outbound only.
+
 Nothing exists today: `calls.create` passes no `record` param and no audio is written anywhere.
 Add it opt-in, with a retention window and a deletion job in the same change — a recording feature
 without expiry is a liability generator. Recording consent is jurisdiction-dependent and the

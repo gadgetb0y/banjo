@@ -4,8 +4,9 @@ import { config } from '../../config/index.js';
 import { childLogger } from '../../lib/logger.js';
 import { formatInZone, formatSpokenInZone, zonedTimeToUtcIso } from '../../lib/timezone.js';
 import { TimeoutError, withTimeout } from '../../lib/withTimeout.js';
+import { sendOwnerSms } from '../../notifications/twilioSms.js';
 import type { CallContext } from '../../session/types.js';
-import { getTask, NON_TERMINAL_STATUSES, transitionTask } from '../../tasks/service.js';
+import { isTerminalStatus, transitionTask } from '../../tasks/service.js';
 import type { TelephonyProvider } from '../../telephony/providers/types.js';
 import type { ToolDefinition } from '../types.js';
 import { defineVoiceTool, toToolDefinition, type VoiceTool } from './defineVoiceTool.js';
@@ -216,6 +217,20 @@ export const confirmAppointmentTool: VoiceTool<{
       // rather than double-converted.
       const startUtcIso = zonedTimeToUtcIso(input.confirmedStart, config.CALENDAR_TIMEZONE);
 
+      // Checked BEFORE the calendar write (ctx.task is re-fetched per tool
+      // call). A task already recorded as over used to get the event written
+      // first and the refusal discovered only at the status write — an
+      // orphaned event, recorded nowhere but a log line (#3). The narrower
+      // race, where the call ends while the write is in flight, is handled
+      // below.
+      if (isTerminalStatus(ctx.task.status)) {
+        return {
+          ok: false as const,
+          error: 'call_already_ended' as const,
+          message: 'This call has already been recorded as over, so nothing was booked.',
+        };
+      }
+
       // Idempotency key is derived server-side from the call attempt id and
       // is NEVER accepted as a model-supplied argument. LLMs are unreliable
       // at generating and consistently reusing idempotency keys across
@@ -225,6 +240,7 @@ export const confirmAppointmentTool: VoiceTool<{
       // calendar event). Keying off ctx.callAttempt.id guarantees the same
       // key is used for every retry within this call attempt.
       const idempotencyKey = `confirm:${ctx.callAttempt.id}`;
+      const title = input.summary?.trim() || calendarTitleFrom(ctx.task.goalDescription);
       const result = await ctx.calendar.createEventIdempotent({
         idempotencyKey,
         start: startUtcIso,
@@ -233,7 +249,7 @@ export const confirmAppointmentTool: VoiceTool<{
         // table for two at Luigi's. Any evening in the next five days works;
         // ask what they have available...") and used to go straight into the
         // event summary — i.e. into Steve's actual calendar.
-        summary: input.summary?.trim() || calendarTitleFrom(ctx.task.goalDescription),
+        summary: title,
         description: input.details,
       });
 
@@ -258,11 +274,18 @@ export const confirmAppointmentTool: VoiceTool<{
         calendarEventId: result.eventId,
       });
       if (recorded.status !== 'confirmed') {
-        // The calendar event exists regardless, so the booking stands and the
-        // model is told so — but Postgres disagrees, which Steve must hear about.
+        // The call was already recorded as over (and notified) before this
+        // booking finished writing — only possible if it outlasted its
+        // budget, which CallSession waits for (#3). The event exists and the
+        // other party may think it's booked, so the owner is told directly
+        // rather than the task's record being rewritten after the fact.
         log.error(
           { taskId: ctx.task.id, status: recorded.status, calendarEventId: result.eventId },
           'calendar event written, but the task could not be marked confirmed',
+        );
+        const when = formatSpokenInZone(new Date(result.confirmedStart).toISOString(), config.CALENDAR_TIMEZONE);
+        void sendOwnerSms(
+          `Correction: Banjo put "${title}" on your calendar for ${when.day} at ${when.time}, after that call had already been reported as ${recorded.status}. The booking may be real; check with them.`,
         );
       }
       // Local and spoken, never the calendar's own string (UTC, or an offset
@@ -355,6 +378,15 @@ export const undoConfirmedAppointmentTool: VoiceTool<{ reason: string }> = defin
   },
 });
 
+/**
+ * Longest voicemail message leave_voicemail_and_end_call accepts. The message
+ * is spoken verbatim within SPEAK_VERBATIM_TIMEOUT_MS, and on openai-live it
+ * rides in a session.instructions.append capped at 500 tokens — so an
+ * unbounded one could be cut off mid-way or fail outright. ~500 characters is
+ * well over a typical 20–30 second voicemail.
+ */
+export const VOICEMAIL_MESSAGE_MAX_CHARS = 500;
+
 export const leaveVoicemailAndEndCallTool: VoiceTool<{ message: string }> = defineVoiceTool({
   name: 'leave_voicemail_and_end_call',
   description:
@@ -363,6 +395,7 @@ export const leaveVoicemailAndEndCallTool: VoiceTool<{ message: string }> = defi
     message: z
       .string()
       .min(1)
+      .max(VOICEMAIL_MESSAGE_MAX_CHARS)
       .describe(
         'The exact voicemail message to deliver — concise and natural, including a callback number if one was given to you. This is spoken to the callee verbatim by the system; do not say it yourself beforehand.',
       ),
@@ -479,9 +512,12 @@ export const endCallTool: VoiceTool<{ summary?: string }> = defineVoiceTool({
       // the model's end_call summary was a plain conversation recap, not
       // an escalation reason. Route conversation-mode tasks through the
       // same outcome end_conversation_call would have recorded instead.
-      const current = await getTask(ctx.task.id);
-      if (current && NON_TERMINAL_STATUSES.includes(current.status)) {
-        if (current.mode === 'conversation') {
+      //
+      // ctx.task is re-fetched for each tool call, so no second read here;
+      // the status check only skips the usual case (end_call right after
+      // confirm_appointment) — transitionTask's own guard covers any race.
+      if (!isTerminalStatus(ctx.task.status)) {
+        if (ctx.task.mode === 'conversation') {
           await transitionTask(ctx.task.id, 'conversation_completed', {
             outcome: {
               kind: 'conversation_completed',

@@ -11,12 +11,12 @@ const transitionTask = vi.fn(async (id: string, status: string) => ({ id, status
 vi.mock('../../src/tasks/service.js', () => ({
   getTask: vi.fn(async () => undefined),
   transitionTask,
-  NON_TERMINAL_STATUSES: ['negotiating'],
+  isTerminalStatus: (status: string) => status !== 'negotiating',
 }));
 
 const { confirmAppointmentTool } = await import('../../src/voice/tools/callTools.js');
 
-const task = { id: 'task-1', goalDescription: 'Book a haircut' } as Task;
+const task = { id: 'task-1', status: 'negotiating', goalDescription: 'Book a haircut' } as Task;
 const callAttempt = { id: 'call-attempt-1' } as CallAttempt;
 
 function makeContext(calendar: CalendarProvider): CallContext {

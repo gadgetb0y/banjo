@@ -187,6 +187,18 @@ const envSchema = z
     // explicitly; the default is a retention window, not an absence of one.
     TRANSCRIPT_RETENTION_DAYS: z.coerce.number().int().min(0).default(30),
 
+    // Record outbound calls, two-track, in your Twilio account (#8). Off by
+    // default. With it on, the opening line gains a recording notice (see
+    // disclosureLine) and recording starts only once Banjo has said it — so
+    // nothing is recorded before the other party is told.
+    RECORD_CALLS: z
+      .enum(['true', 'false'])
+      .default('false')
+      .transform((v) => v === 'true'),
+    // Recordings older than this are deleted from Twilio (at boot, then daily),
+    // even with RECORD_CALLS off. 0 keeps them forever — set explicitly.
+    RECORDING_RETENTION_DAYS: z.coerce.number().int().min(0).default(30),
+
     // Kill switch for the inbound voice booking line (see
     // docs/superpowers/specs/2026-08-07-inbound-voice-booking-design.md) —
     // off by default so the public phone line only goes live once every
@@ -273,9 +285,17 @@ const envSchema = z
 
 export const config = envSchema.parse(process.env);
 
-/** DISCLOSURE_LINE with {name} filled in — the sentence every outbound call opens with. */
+/** A recording notice, as a word: "recorded", "recording". Shared with session/callSession.ts, which starts recording once Banjo has said it. */
+export const RECORDING_NOTICE = /\brecord(ed|ing)?\b/i;
+
+/**
+ * DISCLOSURE_LINE with {name} filled in — the sentence every outbound call
+ * opens with. With RECORD_CALLS on it also carries a recording notice, added
+ * here unless the owner's wording already has one (#8).
+ */
 export function disclosureLine(): string {
-  return config.DISCLOSURE_LINE.replaceAll('{name}', config.ASSISTANT_PRINCIPAL_NAME);
+  const line = config.DISCLOSURE_LINE.replaceAll('{name}', config.ASSISTANT_PRINCIPAL_NAME);
+  return config.RECORD_CALLS && !RECORDING_NOTICE.test(line) ? `${line} This call is recorded.` : line;
 }
 export type AppConfig = typeof config;
 

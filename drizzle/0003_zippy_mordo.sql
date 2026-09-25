@@ -1,0 +1,1 @@
+ALTER TABLE "call_attempts" ADD COLUMN "recording_sid" text;

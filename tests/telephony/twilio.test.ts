@@ -410,3 +410,34 @@ describe('TwilioProvider media-stream socket close without a prior stop frame', 
     expect(events).toEqual([]);
   });
 });
+
+describe('TwilioProvider recording (#8)', () => {
+  it('startRecording starts a two-track recording on the live call', async () => {
+    const provider = new TwilioProvider();
+    provider.registerInboundCall('CA-inbound-1', '+15555550100');
+    const create = vi.fn(async () => ({ sid: 'RE123' }));
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    Object.defineProperty((provider as any).client, 'calls', { value: vi.fn(() => ({ recordings: { create } })), configurable: true });
+
+    await expect(provider.startRecording('CA-inbound-1')).resolves.toEqual({ recordingId: 'RE123' });
+    expect(create).toHaveBeenCalledWith({ recordingChannels: 'dual', recordingTrack: 'both' });
+  });
+
+  it('startRecording refuses a call it has no Twilio id for', async () => {
+    await expect(new TwilioProvider().startRecording('nope')).rejects.toThrow();
+  });
+
+  it('deleteRecording removes it, and treats "already gone" (404) as done', async () => {
+    const provider = new TwilioProvider();
+    const remove = vi.fn(async () => true);
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    Object.defineProperty((provider as any).client, 'recordings', { value: vi.fn(() => ({ remove })), configurable: true });
+    await provider.deleteRecording('RE123');
+    expect(remove).toHaveBeenCalled();
+
+    remove.mockRejectedValueOnce(Object.assign(new Error('not found'), { status: 404 }));
+    await expect(provider.deleteRecording('RE-gone')).resolves.toBeUndefined();
+    remove.mockRejectedValueOnce(Object.assign(new Error('boom'), { status: 500 }));
+    await expect(provider.deleteRecording('RE-err')).rejects.toThrow('boom');
+  });
+});

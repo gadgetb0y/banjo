@@ -1,4 +1,4 @@
-import { config } from '../config/index.js';
+import { config, RECORDING_NOTICE } from '../config/index.js';
 import { logger } from '../lib/logger.js';
 import type { TelephonyEvent, TelephonyProvider } from '../telephony/providers/types.js';
 import { createVoiceAIProvider } from '../voice/factory.js';
@@ -16,6 +16,11 @@ export type CallSessionState = 'connecting' | 'active' | 'tool-pending' | 'endin
 // Firing the greeting the instant the Media Stream connects felt abrupt on a
 // live call — almost no gap between "call picked up" and ea already talking.
 const GREETING_DELAY_MS = 500;
+
+// Slack after the recording notice's audio is estimated to have finished
+// playing before recording starts (#8) — the playback estimate is not exact,
+// and starting early is the one thing this must not do.
+const RECORDING_START_MARGIN_MS = 500;
 
 // Bounds how long a tool marked endsCall waits for the current response's
 // 'turn_end' signal before snapshotting the audio-playback estimate (see
@@ -56,9 +61,12 @@ const VERBATIM_TOOL_PENDING_BUDGET_MS = 35_000;
 // toolPendingWatchdog's "don't hang forever" philosophy for a stuck tool.
 const SILENCE_WATCHDOG_MS = 7000;
 
-// Beyond TOOL_TIMEOUT_MS, how long end() keeps waiting for a tool handler
-// that was already running when the call ended (see
-// waitForInFlightToolHandlers) — covers the handler's DB write after its
+// The session-level tool-pending watchdog for an ordinary tool call (see
+// handleToolCall) — also that tool's budget when the call ends around it.
+const TOOL_PENDING_WATCHDOG_MS = 15_000;
+
+// Beyond a running tool's own budget, how long end()/fail() keep waiting for
+// it (see waitForInFlightToolHandlers) — covers its DB write after its
 // bounded work returns.
 const IN_FLIGHT_TOOL_WAIT_MARGIN_MS = 1000;
 
@@ -75,7 +83,8 @@ export type CallSessionStatusPatch =
   | { kind: 'started'; providerCallId: string }
   | { kind: 'answering_machine_detected'; answeredBy: AnsweredBy }
   | { kind: 'ended'; reason: string; disclosure: DisclosureResult }
-  | { kind: 'failed'; reason: string; disclosure: DisclosureResult };
+  | { kind: 'failed'; reason: string; disclosure: DisclosureResult }
+  | { kind: 'recording_started'; recordingId: string };
 
 /**
  * Generic over the shape of context passed to this call's tool handlers
@@ -96,6 +105,13 @@ export interface CallSessionOptions<TCtx = CallContext> {
   frontendSystemPrompt?: string;
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   tools: VoiceTool<any, TCtx>[];
+  /**
+   * Record this call (#8). Recording starts only once Banjo has said the
+   * recording notice (RECORDING_NOTICE) — disclosure is a prompt rule, so
+   * this is what guarantees nothing is recorded before the other party is
+   * told. The other party's greeting and Banjo's opener aren't on it.
+   */
+  recordCalls?: boolean;
   /** Whether CallSession should prompt the model to speak first once the call connects, before any caller input. Inbound: true. Outbound: unset/false — the callee naturally speaks first. */
   greetOnConnect?: boolean;
   /** Originates the call (outbound) or resolves the already-connected call's identity (inbound). */
@@ -140,6 +156,13 @@ export class CallSession<TCtx = CallContext> {
   private transcriptSeq = 0;
   /** The first thing Banjo said — what the disclosure check (#8) judges. */
   private firstAssistantLine: string | undefined;
+  /**
+   * idle → (notice in Banjo's final line) awaiting_turn_end → (turn_end)
+   * scheduled → started. An interruption before turn_end drops back to idle:
+   * the notice's audio may have been cut off before it was heard.
+   */
+  private recordingState: 'idle' | 'awaiting_turn_end' | 'scheduled' = 'idle';
+  private recordingTimer: ReturnType<typeof setTimeout> | null = null;
   private readonly pipeline: AudioPipeline;
   private readonly outputFormat;
   private readonly toolRegistry: Map<string, VoiceTool<any, TCtx>>;
@@ -158,8 +181,8 @@ export class CallSession<TCtx = CallContext> {
   // is still awaiting turn_end — sending two collides on the Voice AI side
   // ("already has an active response").
   private responseActive = false;
-  /** Tool handlers still running — end() waits for these (see waitForInFlightToolHandlers). */
-  private readonly inFlightToolHandlers = new Set<Promise<void>>();
+  /** Running tool handlers, each with the time its budget runs out (see toolBudgetMs). */
+  private readonly inFlightToolHandlers = new Map<Promise<void>, number>();
 
   constructor(private readonly opts: CallSessionOptions<TCtx>) {
     this.voiceAI = createVoiceAIProvider();
@@ -258,6 +281,7 @@ export class CallSession<TCtx = CallContext> {
         this.responseActive = true;
         this.trackToolHandler(
           this.handleToolCall(event.call.id, event.call.name, event.call.arguments, event.call.unparsedArguments),
+          this.toolBudgetMs(event.call.name),
         );
         break;
       case 'transcript':
@@ -284,6 +308,9 @@ export class CallSession<TCtx = CallContext> {
           if (quality === 'empty') break;
           this.recordTranscript(event.role, event.text, quality);
           if (event.role === 'assistant' && this.firstAssistantLine === undefined) this.firstAssistantLine = event.text;
+          if (event.role === 'assistant' && RECORDING_NOTICE.test(event.text) && this.opts.recordCalls && this.recordingState === 'idle') {
+            this.recordingState = 'awaiting_turn_end';
+          }
           if (config.LOG_TRANSCRIPTS) {
             logger.info(
               { callId: this.opts.callId, role: event.role, text: event.text, ...(quality === 'suspect' && { suspect: true }) },
@@ -304,6 +331,9 @@ export class CallSession<TCtx = CallContext> {
         if (event.role === 'user' && !event.answered) this.armSilenceWatchdogIfNeeded();
         break;
       case 'interrupted':
+        // #8: cut off before its turn ended, the recording notice may never
+        // have reached the other party. Wait for Banjo to say it again.
+        if (this.recordingState === 'awaiting_turn_end') this.recordingState = 'idle';
         // Caller barge-in — flush whatever we've already queued on the phone
         // leg, and reset the playback tracker's high-water mark: the
         // discarded buffered-but-unplayed audio will never actually play,
@@ -333,6 +363,7 @@ export class CallSession<TCtx = CallContext> {
       case 'turn_end':
         this.clearSilenceWatchdog();
         this.responseActive = false;
+        if (this.recordingState === 'awaiting_turn_end') this.scheduleRecordingStart();
         this.turnEndWaiters.splice(0).forEach((resolve) => resolve());
         break;
     }
@@ -384,6 +415,31 @@ export class CallSession<TCtx = CallContext> {
     void this.fail('assistant_silence_watchdog', new Error('Voice AI produced no response after a user turn, even after an explicit nudge'));
   }
 
+  /**
+   * Starts recording once the turn that said the notice has finished PLAYING
+   * (#8). A final transcript arrives when the model has written the line, not
+   * when the phone has played it — on a live call that was ~4s early, before
+   * "This call is recorded." was heard. Late is fine; early is the bug.
+   */
+  private scheduleRecordingStart(): void {
+    const { telephony, callId } = this.opts;
+    if (!telephony.startRecording) return;
+    this.recordingState = 'scheduled';
+    const delay = Math.max(0, this.audioPlaybackTracker.estimatedDoneAt() - Date.now()) + RECORDING_START_MARGIN_MS;
+    this.recordingTimer = setTimeout(() => {
+      this.recordingTimer = null;
+      telephony
+        .startRecording!(callId)
+        .then(({ recordingId }) => this.opts.onStatusChange({ kind: 'recording_started', recordingId }))
+        .catch((err) => logger.error({ err, callId }, 'failed to start call recording — the call continues unrecorded'));
+    }, delay);
+  }
+
+  private cancelPendingRecording(): void {
+    if (this.recordingTimer) clearTimeout(this.recordingTimer);
+    this.recordingTimer = null;
+  }
+
   private recordTranscript(role: 'user' | 'assistant', text: string, quality: 'ok' | 'suspect'): void {
     const seq = ++this.transcriptSeq;
     this.opts
@@ -421,7 +477,7 @@ export class CallSession<TCtx = CallContext> {
     this.toolPendingWatchdog = setTimeout(() => {
       logger.error({ callId: this.opts.callId, toolCallId, name }, 'Tool call watchdog fired — forcing call end');
       void this.fail('tool_pending_watchdog', new Error(`Tool ${name} did not resolve in time`));
-    }, 15_000);
+    }, TOOL_PENDING_WATCHDOG_MS);
 
     const tool = this.toolRegistry.get(name);
     if (!tool) {
@@ -541,8 +597,13 @@ export class CallSession<TCtx = CallContext> {
   private async fail(reason: string, err: unknown): Promise<void> {
     if (this.state === 'ended' || this.state === 'error' || this.state === 'ending') return;
     this.clearSilenceWatchdog();
+    this.cancelPendingRecording();
     logger.error({ err, reason, callId: this.opts.callId }, 'Call session error');
     this.setState('error');
+    // Same reason as end(): a booking still being written must land before
+    // 'failed' is recorded and texted (#3). Setting 'error' first means no
+    // new tool call can start while this waits.
+    await this.waitForInFlightToolHandlers();
     await this.opts.onStatusChange({ kind: 'failed', reason, disclosure: checkDisclosure(this.firstAssistantLine) });
     // A dropped telephony/voice-AI leg has no PSTN-level way to auto-resume —
     // the caller would have to call back. Disconnect the other leg promptly
@@ -553,27 +614,41 @@ export class CallSession<TCtx = CallContext> {
     await this.opts.notifyIfTerminal();
   }
 
-  private trackToolHandler(run: Promise<void>): void {
-    this.inFlightToolHandlers.add(run);
+  /**
+   * How long a tool call may legitimately run: the same budget its own
+   * tool-pending watchdog gives it (#3). A verbatim tool first waits up to
+   * TURN_END_WAIT_MS for turn_end, then gets VERBATIM_TOOL_PENDING_BUDGET_MS.
+   */
+  private toolBudgetMs(name: string): number {
+    return this.toolRegistry.get(name)?.verbatimMessage
+      ? TURN_END_WAIT_MS + VERBATIM_TOOL_PENDING_BUDGET_MS
+      : TOOL_PENDING_WATCHDOG_MS;
+  }
+
+  private trackToolHandler(run: Promise<void>, budgetMs: number): void {
+    this.inFlightToolHandlers.set(run, Date.now() + budgetMs);
     run.finally(() => this.inFlightToolHandlers.delete(run)).catch(() => {});
   }
 
   /**
-   * A tool handler still running when the call ends — the callee hanging up
-   * while confirm_appointment writes the calendar event — must record its
-   * outcome before end() records the call's end. Otherwise onStatusChange's
-   * 'ended' lands the task in 'failed' first and notifyIfTerminal texts a
-   * failure for a booking that went through. Bounded: a handler's own work is
-   * capped at TOOL_TIMEOUT_MS by runToolSafely (voice/tools/callTools.ts), so
-   * this never waits longer than that plus a small margin.
+   * A tool handler still running when the call ends or fails — the callee
+   * hanging up while confirm_appointment writes the calendar event — must
+   * record its outcome before the call's end or failure is recorded.
+   * Otherwise 'ended'/'failed' lands the task in 'failed' first and
+   * notifyIfTerminal texts a failure for a booking that went through.
+   *
+   * Bounded by each running tool's own budget (toolBudgetMs), not a flat
+   * TOOL_TIMEOUT_MS: that was shorter than what a call-ending or verbatim
+   * tool is allowed, so a handler inside its budget could be overtaken (#3).
    */
   private async waitForInFlightToolHandlers(): Promise<void> {
     if (this.inFlightToolHandlers.size === 0) return;
+    const latestDeadline = Math.max(...this.inFlightToolHandlers.values());
     let timer: ReturnType<typeof setTimeout> | undefined;
     const bound = new Promise<void>((resolve) => {
-      timer = setTimeout(resolve, config.TOOL_TIMEOUT_MS + IN_FLIGHT_TOOL_WAIT_MARGIN_MS);
+      timer = setTimeout(resolve, Math.max(0, latestDeadline - Date.now()) + IN_FLIGHT_TOOL_WAIT_MARGIN_MS);
     });
-    await Promise.race([Promise.allSettled([...this.inFlightToolHandlers]), bound]);
+    await Promise.race([Promise.allSettled([...this.inFlightToolHandlers.keys()]), bound]);
     clearTimeout(timer);
   }
 
@@ -596,6 +671,7 @@ export class CallSession<TCtx = CallContext> {
   private async end(reason: string): Promise<void> {
     if (this.state === 'ended' || this.state === 'error' || this.state === 'ending') return;
     this.clearSilenceWatchdog();
+    this.cancelPendingRecording();
     this.setState('ending');
     await this.waitForInFlightToolHandlers();
     await this.opts.onStatusChange({ kind: 'ended', reason, disclosure: checkDisclosure(this.firstAssistantLine) });

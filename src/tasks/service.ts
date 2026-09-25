@@ -1,4 +1,4 @@
-import { and, desc, eq, inArray } from 'drizzle-orm';
+import { and, desc, eq, inArray, isNull, lte, or } from 'drizzle-orm';
 import { db } from '../db/index.js';
 import { logger } from '../lib/logger.js';
 import {
@@ -54,16 +54,17 @@ export async function getTask(id: string): Promise<Task | undefined> {
 }
 
 /**
- * The statuses a task may move INTO `status` from. Normally only the
- * non-terminal ones: a late end_conversation_call or end-of-call failure must
- * not overwrite a 'confirmed' booking. The one exception is 'confirmed' over
- * 'failed' — confirm_appointment records it only after the calendar event is
- * written, and a callee hanging up mid-booking can land the end-of-call
- * 'failed' first (callSessionAdapter.ts's failTaskIfStillNonTerminal).
- * Postgres has to say what the calendar says.
+ * The statuses a task may move INTO any status from: only the non-terminal
+ * ones. A terminal status is final, including after the owner has been
+ * notified of it. There used to be one exception, 'confirmed' over 'failed',
+ * for a booking that finished writing after a hang-up had already failed the
+ * task; CallSession's end()/fail() now wait for running tools within each
+ * tool's own budget, so that race can't happen by ordinary means, and the
+ * leftover case texts the owner instead of rewriting the record (#3,
+ * confirm_appointment in voice/tools/callTools.ts).
  */
-function allowedFromStatuses(status: Task['status']): Task['status'][] {
-  return status === 'confirmed' ? [...NON_TERMINAL_STATUSES, 'failed'] : NON_TERMINAL_STATUSES;
+function allowedFromStatuses(): Task['status'][] {
+  return NON_TERMINAL_STATUSES;
 }
 
 type TransitionPatch = Partial<{
@@ -104,7 +105,7 @@ export async function transitionTask(
   const [row] = await db
     .update(tasks)
     .set({ status, ...patch, updatedAt: new Date() })
-    .where(and(eq(tasks.id, id), inArray(tasks.status, options?.from ?? allowedFromStatuses(status))))
+    .where(and(eq(tasks.id, id), inArray(tasks.status, options?.from ?? allowedFromStatuses())))
     .returning();
   if (row) return row;
   if (options) return undefined;
@@ -126,11 +127,7 @@ export async function transitionTask(
  * racing a just-starting run still stops it before dialing.
  */
 export async function cancelPendingTask(id: string): Promise<Task | undefined> {
-  const [row] = await db
-    .update(tasks)
-    .set({ status: 'cancelled', updatedAt: new Date() })
-    .where(and(eq(tasks.id, id), inArray(tasks.status, ['pending', 'checking_availability'])))
-    .returning();
+  const row = await transitionTask(id, 'cancelled', undefined, { from: ['pending', 'checking_availability'] });
   return row ?? getTask(id);
 }
 
@@ -167,6 +164,24 @@ export async function listNonTerminalTasks(): Promise<Task[]> {
 }
 
 /**
+ * Tasks the orchestration poller should start now: not yet on a call
+ * ('pending', or 'checking_availability' left behind by a restart) and due
+ * (isTaskDue, as SQL). Filtered in the query so a 15s tick doesn't load every
+ * call in progress and every call scheduled for next week.
+ */
+export async function listStartableTasks(now: Date = new Date()): Promise<Task[]> {
+  return db
+    .select()
+    .from(tasks)
+    .where(
+      and(
+        inArray(tasks.status, ['pending', 'checking_availability']),
+        or(isNull(tasks.scheduledFor), lte(tasks.scheduledFor, now)),
+      ),
+    );
+}
+
+/**
  * Whether a task's scheduled time (place_call's scheduledFor), if any, has
  * arrived. Checked by both the in-process trigger and the orchestration
  * poller, so a scheduled call starts on the first poller tick at or after its
@@ -197,7 +212,7 @@ export async function latestCallAttemptFor(taskId: string): Promise<CallAttempt 
 
 export async function updateCallAttempt(
   id: string,
-  patch: Partial<Pick<CallAttempt, 'status' | 'providerCallId' | 'answeredBy' | 'endedAt' | 'errorDetail' | 'disclosed'>>,
+  patch: Partial<Pick<CallAttempt, 'status' | 'providerCallId' | 'answeredBy' | 'endedAt' | 'errorDetail' | 'disclosed' | 'recordingSid'>>,
 ): Promise<CallAttempt> {
   const [row] = await db.update(callAttempts).set(patch).where(eq(callAttempts.id, id)).returning();
   if (!row) throw new Error(`Call attempt not found: ${id}`);

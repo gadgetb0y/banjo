@@ -8,7 +8,7 @@ vi.mock('../../src/tasks/service.js', () => ({
   transitionTask,
   listNonTerminalTasks,
   latestCallAttemptFor,
-  NON_TERMINAL_STATUSES: ['pending', 'checking_availability', 'calling', 'negotiating'],
+  isTerminalStatus: (status: string) => !['pending', 'checking_availability', 'calling', 'negotiating'].includes(status),
 }));
 
 const findEventByIdempotencyKey = vi.fn();

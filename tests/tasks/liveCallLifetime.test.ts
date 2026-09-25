@@ -25,7 +25,7 @@ vi.mock('../../src/tasks/service.js', () => ({
   isTaskDue: () => true,
   listNonTerminalTasks: vi.fn(async () => []),
   latestCallAttemptFor: vi.fn(async () => undefined),
-  NON_TERMINAL_STATUSES: ['pending', 'checking_availability', 'calling', 'negotiating'],
+  isTerminalStatus: (status: string) => !['pending', 'checking_availability', 'calling', 'negotiating'].includes(status),
 }));
 vi.mock('../../src/contacts/service.js', () => ({ getContact: vi.fn(async () => ({ id: 'c1', phoneNumber: '+15551234567' })) }));
 vi.mock('../../src/telephony/factory.js', () => ({ createTelephonyProvider: () => ({}) }));

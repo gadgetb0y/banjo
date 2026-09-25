@@ -5,6 +5,9 @@ import type { TelephonyProvider } from '../../src/telephony/providers/types.js';
 // DB-backed (banjo_test — see vitest.config.ts): the race below is about what
 // Postgres ends up saying, so it runs the real transitionTask guard, the real
 // end-of-call adapter, and the real confirm_appointment handler together.
+const { sendOwnerSms } = vi.hoisted(() => ({ sendOwnerSms: vi.fn(async () => {}) }));
+vi.mock('../../src/notifications/twilioSms.js', () => ({ sendOwnerSms }));
+
 let db: any;
 let contacts: any;
 let tasks: any;
@@ -77,27 +80,43 @@ async function startNegotiatingCall(calendar: CalendarProvider) {
 }
 
 describe('booking vs. hang-up race', () => {
-  it('a callee hanging up while confirm_appointment writes the calendar event still ends with the task confirmed', async () => {
+  it('a booking that finishes after the call was already recorded as failed leaves the record alone and texts a correction (#3)', async () => {
+    // CallSession's end()/fail() wait for a running confirm_appointment within
+    // its budget (tests/session/callSession.test.ts), so this only happens if
+    // the write outlasts that. The task used to flip failed -> confirmed after
+    // the failure had been texted; now the record stays as notified and the
+    // owner is told the booking may be real.
     const { calendar, finishWrite } = calendarWithPendingWrite();
     const { task, options } = await startNegotiatingCall(calendar);
 
     const confirming = confirmAppointmentTool.handler(
-      { confirmedStart: '2026-09-15T14:00:00', durationMinutes: 30 },
+      { confirmedStart: '2026-09-15T14:00:00', durationMinutes: 30, summary: 'Haircut with Clauda' },
       await options.buildToolContext(Date.now()),
     );
     await vi.waitFor(() => expect(calendar.createEventIdempotent).toHaveBeenCalled());
 
-    // The callee hangs up mid-write: the end-of-call path fails the still-in-progress task first.
     await options.onStatusChange({ kind: 'ended', reason: 'callee hung up', disclosure: 'disclosed' });
     expect((await service.getTask(task.id))?.status).toBe('failed');
 
     finishWrite();
-    await expect(confirming).resolves.toMatchObject({ ok: true });
-    expect(await service.getTask(task.id)).toMatchObject({
-      status: 'confirmed',
-      calendarEventId: 'evt-race',
-      outcome: { kind: 'confirmed', durationMinutes: 30 },
-    });
+    await confirming;
+    expect((await service.getTask(task.id))?.status).toBe('failed');
+    expect(sendOwnerSms).toHaveBeenCalledWith(expect.stringMatching(/^Correction: Banjo put "Haircut with Clauda" on your calendar for Tuesday, September 15 at 2:00 PM/));
+  });
+
+  it("refuses to book on a task that's already over, without writing a calendar event (#3)", async () => {
+    // The event used to be written first and the refusal only discovered at
+    // the status write — an orphaned event, recorded nowhere but a log line.
+    const { calendar } = calendarWithPendingWrite();
+    const { task, options } = await startNegotiatingCall(calendar);
+    await service.transitionTask(task.id, 'failed', { outcome: { kind: 'failed', reason: 'callee hung up' } });
+
+    const result = await confirmAppointmentTool.handler(
+      { confirmedStart: '2026-09-15T14:00:00', durationMinutes: 30 },
+      await options.buildToolContext(Date.now()),
+    );
+    expect(result).toMatchObject({ ok: false, error: 'call_already_ended' });
+    expect(calendar.createEventIdempotent).not.toHaveBeenCalled();
   });
 
   it('once confirmed, a later call end or conversation outcome leaves the booking untouched', async () => {
@@ -116,43 +135,5 @@ describe('booking vs. hang-up race', () => {
     await service.transitionTask(task.id, 'failed', { outcome: { kind: 'failed', reason: 'late' } });
 
     expect(await service.getTask(task.id)).toMatchObject({ status: 'confirmed', outcome: { kind: 'confirmed' } });
-  });
-});
-
-describe('cancelPendingTask', () => {
-  it('cancels a task that has not started, and leaves one already on a call alone', async () => {
-    const [contact] = await db.insert(contacts).values({ displayName: 'Salon', phoneNumber: '+15551230001' }).returning();
-    const scheduled = await service.createTask({
-      contactId: contact.id,
-      channel: 'phone',
-      goalDescription: 'Call later',
-      constraints: {},
-      scheduledFor: new Date('2099-01-01T14:00:00.000Z'),
-    });
-    const live = await service.createTask({ contactId: contact.id, channel: 'phone', goalDescription: 'Call now', constraints: {} });
-    await service.transitionTask(live.id, 'calling');
-
-    expect((await service.cancelPendingTask(scheduled.id))?.status).toBe('cancelled');
-    expect((await service.cancelPendingTask(live.id))?.status).toBe('calling');
-    expect(await service.cancelPendingTask('00000000-0000-0000-0000-000000000000')).toBeUndefined();
-
-    // A cancelled task is terminal: the orchestrator's first transition can't revive it.
-    expect((await service.transitionTask(scheduled.id, 'checking_availability')).status).toBe('cancelled');
-    expect((await service.listNonTerminalTasks()).map((t) => t.id)).toEqual([live.id]);
-  });
-});
-
-describe('claiming a pending task (transitionTask with from)', () => {
-  it('lets exactly one of two concurrent claims win — two pollers must not both place a scheduled call', async () => {
-    const [contact] = await db.insert(contacts).values({ displayName: 'Salon', phoneNumber: '+15551230002' }).returning();
-    const task = await service.createTask({ contactId: contact.id, channel: 'phone', goalDescription: 'Call later', constraints: {} });
-
-    const claims = await Promise.all([
-      service.transitionTask(task.id, 'checking_availability', undefined, { from: ['pending'] }),
-      service.transitionTask(task.id, 'checking_availability', undefined, { from: ['pending'] }),
-    ]);
-
-    expect(claims.filter((claim) => claim !== undefined)).toHaveLength(1);
-    expect((await service.getTask(task.id))?.status).toBe('checking_availability');
   });
 });

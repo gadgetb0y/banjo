@@ -7,7 +7,15 @@ import { buildOutboundCallSessionOptions, notifyTaskOutcome } from './callSessio
 import { buildCallFrontendPrompt, buildCallSystemPrompt } from './promptBuilder.js';
 import { readOwnerProfile } from './ownerProfile.js';
 import { getLiveCall, registerLiveCall, unregisterLiveCall } from './liveCalls.js';
-import { createCallAttempt, getTask, isTaskDue, latestCallAttemptFor, listNonTerminalTasks, transitionTask } from './service.js';
+import {
+  createCallAttempt,
+  getTask,
+  isTaskDue,
+  latestCallAttemptFor,
+  listNonTerminalTasks,
+  listStartableTasks,
+  transitionTask,
+} from './service.js';
 import type { TimeWindow } from './schema.js';
 
 const calendar = createCalendarProvider();
@@ -75,8 +83,20 @@ async function runTask(taskId: string): Promise<void> {
     );
     return;
   }
+  // Every requested window can be over by the time a scheduled call runs.
+  // Calling anyway used to go ahead with no pre-checked windows at all, so
+  // the model could book any free time (#3) — fail and tell the owner instead.
+  const requestedWindows = task.constraints.dateWindows ?? [];
+  const dateWindows = requestedWindows.length ? clipWindowsToFuture(requestedWindows) : defaultLookaheadWindow();
+  if (!dateWindows.length) {
+    const failed = await transitionTask(task.id, 'failed', {
+      outcome: { kind: 'failed', reason: 'Every time requested for this call had already passed by the time it was due, so no call was placed.' },
+    });
+    if (failed.status === 'failed') await notifyTaskOutcome(task.id);
+    return;
+  }
   const candidateWindows = await calendar.computeCandidateWindows({
-    dateWindows: task.constraints.dateWindows?.length ? clipWindowsToFuture(task.constraints.dateWindows) : defaultLookaheadWindow(),
+    dateWindows,
     durationMinutes: task.constraints.durationMinutes ?? 30,
   });
   const calling = await transitionTask(task.id, 'calling', { candidateWindows });
@@ -235,13 +255,9 @@ export async function sweepStaleCalls(): Promise<void> {
  */
 export function startOrchestrationPoller(): void {
   setInterval(() => {
-    listNonTerminalTasks()
-      .then((pending) => {
-        for (const t of pending) {
-          if ((t.status === 'pending' || t.status === 'checking_availability') && isTaskDue(t)) {
-            triggerOrchestration(t.id);
-          }
-        }
+    listStartableTasks()
+      .then((startable) => {
+        for (const t of startable) triggerOrchestration(t.id);
       })
       .catch((err) => logger.error({ err }, 'Orchestration poller failed'));
 
