@@ -1,4 +1,4 @@
-import { GoogleCalendarProvider } from '../calendar/googleCalendarProvider.js';
+import { createCalendarProvider } from '../calendar/factory.js';
 import { getContact } from '../contacts/service.js';
 import { logger } from '../lib/logger.js';
 import { CallSession } from '../session/callSession.js';
@@ -10,7 +10,7 @@ import { getLiveCall, registerLiveCall, unregisterLiveCall } from './liveCalls.j
 import { createCallAttempt, getTask, isTaskDue, latestCallAttemptFor, listNonTerminalTasks, transitionTask } from './service.js';
 import type { TimeWindow } from './schema.js';
 
-const calendar = new GoogleCalendarProvider();
+const calendar = createCalendarProvider();
 
 // Tracks tasks currently being driven, so a duplicate poller tick (or a
 // duplicate MCP place_call for the same task) can't kick off two orchestration
