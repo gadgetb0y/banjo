@@ -147,6 +147,33 @@ describe('config: env schema', () => {
     expect(mod.contactsSyncIntervalHours()).toBe(1);
   });
 
+  it('treats empty optional settings as unset, as .env.example ships them', async () => {
+    setEnv({
+      NOTIFICATION_CHANNEL: 'pushover',
+      PUSHOVER_APP_TOKEN: 'app-token',
+      PUSHOVER_USER_KEY: 'user-key',
+      PUSHOVER_DEVICE: '',
+      NOTIFY_TO_PHONE_NUMBER: '',
+      NOTIFY_FROM_PHONE_NUMBER: '',
+      DAV_USERNAME: '',
+      CALDAV_CALENDAR_URL: '',
+    });
+    const { config } = await import('../src/config/index.js');
+    expect(config.NOTIFY_TO_PHONE_NUMBER).toBeUndefined();
+    expect(config.PUSHOVER_DEVICE).toBeUndefined();
+    expect(config.CALDAV_CALENDAR_URL).toBeUndefined();
+  });
+
+  it('still rejects a non-empty phone number that is not E.164', async () => {
+    setEnv({ NOTIFY_TO_PHONE_NUMBER: '5551234567' });
+    await expect(import('../src/config/index.js')).rejects.toThrow(/E\.164/);
+  });
+
+  it('an empty value does not satisfy a setting the chosen provider requires', async () => {
+    setEnv({ NOTIFICATION_CHANNEL: 'pushover', PUSHOVER_APP_TOKEN: 'app-token', PUSHOVER_USER_KEY: '' });
+    await expect(import('../src/config/index.js')).rejects.toThrow(/PUSHOVER_USER_KEY/);
+  });
+
   it('fails fast when NOTIFICATION_CHANNEL=pushover is missing its user key', async () => {
     setEnv({ NOTIFICATION_CHANNEL: 'pushover', PUSHOVER_APP_TOKEN: 'app-token' });
     await expect(import('../src/config/index.js')).rejects.toThrow(/PUSHOVER_USER_KEY/);

@@ -8,10 +8,19 @@ import { z } from 'zod';
  * from a NOTIFY_FROM_PHONE_NUMBER missing its `+`) so a typo is caught at
  * startup with a clear message instead of during a real phone call.
  */
-const e164 = z
-  .string()
-  .regex(/^\+[1-9]\d{1,14}$/, 'must be in E.164 format, e.g. +15551234567 (leading +, no spaces/dashes)')
-  .optional();
+/**
+ * An optional setting where an empty value (`NOTIFY_TO_PHONE_NUMBER=`, as
+ * .env.example ships it) means unset, rather than failing `schema`. Without
+ * this, anyone not using SMS had to comment the empty lines out before
+ * Banjo would boot.
+ */
+function optionalSetting<T extends z.ZodTypeAny>(schema: T) {
+  return z.preprocess((value) => (value === '' ? undefined : value), schema.optional());
+}
+
+const e164 = optionalSetting(
+  z.string().regex(/^\+[1-9]\d{1,14}$/, 'must be in E.164 format, e.g. +15551234567 (leading +, no spaces/dashes)'),
+);
 
 /**
  * Single source of truth for process configuration. Parsed once, at import
@@ -119,15 +128,15 @@ const envSchema = z
     // One account's sign-in for both CalDAV and CardDAV — for Fastmail, the
     // account's email address and an app password with calendar and
     // contacts access.
-    DAV_USERNAME: z.string().min(1).optional(),
-    DAV_PASSWORD: z.string().min(1).optional(),
+    DAV_USERNAME: optionalSetting(z.string()),
+    DAV_PASSWORD: optionalSetting(z.string()),
     // The one calendar collection to read and write, e.g.
     // https://caldav.fastmail.com/dav/calendars/user/you@fastmail.com/<calendar-id>/
     // `npm run dav:check` lists an account's calendars and address books with their URLs.
-    CALDAV_CALENDAR_URL: z.string().url().optional(),
+    CALDAV_CALENDAR_URL: optionalSetting(z.string().url()),
     // The one address book to sync, e.g.
     // https://carddav.fastmail.com/dav/addressbooks/user/you@fastmail.com/Default/
-    CARDDAV_ADDRESSBOOK_URL: z.string().url().optional(),
+    CARDDAV_ADDRESSBOOK_URL: optionalSetting(z.string().url()),
 
     GOOGLE_OAUTH_CLIENT_ID: z.string().optional(),
     GOOGLE_OAUTH_CLIENT_SECRET: z.string().optional(),
@@ -151,9 +160,9 @@ const envSchema = z
     // NOTIFICATION_CHANNEL=pushover: the application's API token and the
     // owner's user (or group) key, from pushover.net. PUSHOVER_DEVICE limits
     // delivery to one of the owner's devices; unset, every device gets it.
-    PUSHOVER_APP_TOKEN: z.string().min(1).optional(),
-    PUSHOVER_USER_KEY: z.string().min(1).optional(),
-    PUSHOVER_DEVICE: z.string().min(1).optional(),
+    PUSHOVER_APP_TOKEN: optionalSetting(z.string()),
+    PUSHOVER_USER_KEY: optionalSetting(z.string()),
+    PUSHOVER_DEVICE: optionalSetting(z.string()),
     NOTIFY_TO_PHONE_NUMBER: e164,
     NOTIFY_FROM_PHONE_NUMBER: e164,
 
