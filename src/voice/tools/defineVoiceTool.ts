@@ -34,9 +34,11 @@ export interface VoiceTool<TInput = unknown, TCtx = CallContext> {
    * leave_voicemail_and_end_call with the real message as an argument that
    * was never itself spoken — the callee heard only the preamble. Omit for
    * tools whose argument (e.g. an escalation "reason") is metadata for
-   * Steve, not content meant for the other party's ears.
+   * Steve, not content meant for the other party's ears. Each string is its
+   * own forced turn, spoken in order (#71: the voicemail's disclosure opener,
+   * then its message).
    */
-  verbatimMessage?: (input: TInput) => string;
+  verbatimMessage?: (input: TInput) => string[];
   /**
    * How long this tool's handler may run, for a tool whose work cannot be cut
    * off part-way (transfer_to_owner, telephony/transfer.ts: once its redirect

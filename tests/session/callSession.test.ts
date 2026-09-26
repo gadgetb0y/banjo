@@ -482,7 +482,7 @@ describe('CallSession: audio-aware hang-up wiring', () => {
         schema: z.object({ message: z.string() }),
         handler,
         endsCall: true,
-        verbatimMessage: (input: { message: string }) => input.message,
+        verbatimMessage: (input: { message: string }) => [input.message],
       },
     ];
     const session = new CallSession(options);
@@ -528,7 +528,7 @@ describe('CallSession: audio-aware hang-up wiring', () => {
           schema: z.object({ message: z.string() }),
           handler: vi.fn(async () => ({ ok: true })),
           endsCall: true,
-          verbatimMessage: (input: { message: string }) => input.message,
+          verbatimMessage: (input: { message: string }) => [input.message],
         },
       ];
       const session = new CallSession(options);
@@ -544,14 +544,14 @@ describe('CallSession: audio-aware hang-up wiring', () => {
       await handleToolCallPromise;
 
       expect(verbatimDeliveryReport).toHaveBeenCalledTimes(1);
-      expect(vi.mocked(options.buildToolContext).mock.calls[0]![1]).toBe(report);
+      expect(vi.mocked(options.buildToolContext).mock.calls[0]![1]).toEqual(report);
     } finally {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       delete (fakeVoiceAI as any).verbatimDeliveryReport;
     }
   });
 
-  it('for a tool with verbatimMessage on a provider without verbatimDeliveryReport, passes no report — the handler keeps its trust-the-provider path', async () => {
+  it('for a tool with verbatimMessage on a provider without verbatimDeliveryReport, passes a report built from its own transcript (#71)', async () => {
     const telephony = makeFakeTelephony();
     const options = makeFakeCallSessionOptions(telephony.provider);
     options.tools = [
@@ -561,7 +561,7 @@ describe('CallSession: audio-aware hang-up wiring', () => {
         schema: z.object({ message: z.string() }),
         handler: vi.fn(async () => ({ ok: true })),
         endsCall: true,
-        verbatimMessage: (input: { message: string }) => input.message,
+        verbatimMessage: (input: { message: string }) => [input.message],
       },
     ];
     const session = new CallSession(options);
@@ -571,10 +571,11 @@ describe('CallSession: audio-aware hang-up wiring', () => {
     const handleToolCallPromise = (session as any).handleToolCall('call-1', 'leave_voicemail_and_end_call', { message: 'hi' });
     voiceAIEmitter.emit('event', { type: 'turn_end' } satisfies VoiceAIEvent);
     await new Promise((resolve) => setTimeout(resolve, 0));
+    voiceAIEmitter.emit('event', { type: 'transcript', role: 'assistant', text: 'Hi.', isFinal: true } satisfies VoiceAIEvent);
     voiceAIEmitter.emit('event', { type: 'turn_end' } satisfies VoiceAIEvent);
     await handleToolCallPromise;
 
-    expect(vi.mocked(options.buildToolContext).mock.calls[0]![1]).toBeUndefined();
+    expect(vi.mocked(options.buildToolContext).mock.calls[0]![1]).toEqual({ intended: 'hi', spoken: 'Hi.', matched: true });
   });
 
   it('for a tool without verbatimMessage, never reads a verbatim delivery report', async () => {
@@ -610,7 +611,7 @@ describe('CallSession: audio-aware hang-up wiring', () => {
           schema: z.object({ message: z.string() }),
           handler: vi.fn(async () => ({ ok: true })),
           endsCall: true,
-          verbatimMessage: (input: { message: string }) => input.message,
+          verbatimMessage: (input: { message: string }) => [input.message],
         },
       ];
       const session = new CallSession(options);
@@ -1502,6 +1503,185 @@ describe('CallSession: while a call-ending tool is running, nothing else can end
       expect(endCallHandler).toHaveBeenCalledTimes(1);
       expect(telephony.provider.hangUp).toHaveBeenCalledWith(callAttempt.id);
       expect(order).not.toContain('status:failed');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
+describe('CallSession: voicemail delivery (#71)', () => {
+  // Live, 2026-09-25, on openai: (a) the forced turn said "All set — the
+  // message is being delivered by the system…" instead of the message, and
+  // the task still recorded voicemail_left; (b) a live "Hello?" barged in
+  // while the message was still queued on the phone, flushing it, and the
+  // task still recorded voicemail_left; (c) with the recording notice in the
+  // same turn as the message, recording was scheduled for after the whole
+  // message had played — when the call was already hanging up.
+  beforeEach(() => {
+    voiceAIEmitter.removeAllListeners('event');
+  });
+
+  const emit = (event: VoiceAIEvent) => voiceAIEmitter.emit('event', event);
+  const say = (text: string) => emit({ type: 'transcript', role: 'assistant', text, isFinal: true });
+  /** Banjo's speech on its way to the phone: 8 bytes per ms of mu-law. */
+  const speak = (ms: number) => emit({ type: 'audio_chunk', chunk: { data: Buffer.alloc(ms * 8), sampleRate: 8000 } });
+  const OPENER = "Hi, I'm an AI assistant calling on behalf of Steve. This call is recorded.";
+  const MESSAGE = 'Please call Steve back at 555-1234.';
+
+  async function voicemailSession(recordCalls = false) {
+    const telephony = makeFakeTelephony();
+    const startRecording = vi.fn(async () => ({ recordingId: 'RE1' }));
+    const options = { ...makeFakeCallSessionOptions({ ...telephony.provider, startRecording }), recordCalls };
+    const handler = vi.fn(async () => ({ ok: true }));
+    options.tools = [
+      {
+        name: 'leave_voicemail_and_end_call',
+        description: 'test-only voicemail tool',
+        schema: z.object({ message: z.string() }),
+        handler,
+        endsCall: true,
+        verbatimMessage: (input: { message: string }) => [OPENER, input.message],
+      },
+    ];
+    const session = new CallSession(options);
+    await session.start();
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const done: Promise<void> = (session as any).handleToolCall('call-1', 'leave_voicemail_and_end_call', { message: MESSAGE });
+    const report = () => vi.mocked(options.buildToolContext).mock.calls[0]![1];
+    return { options, handler, startRecording, done, report, telephony };
+  }
+
+  it('speaks each part as its own forced turn, in order, each after the previous turn ends', async () => {
+    vi.useFakeTimers();
+    try {
+      const { done, handler } = await voicemailSession();
+      emit({ type: 'turn_end' }); // the endsCall wait
+      await vi.advanceTimersByTimeAsync(0);
+      expect(fakeVoiceAI.sayVerbatim).toHaveBeenCalledTimes(1);
+      expect(fakeVoiceAI.sayVerbatim).toHaveBeenLastCalledWith(OPENER);
+
+      say(OPENER);
+      emit({ type: 'turn_end' });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(fakeVoiceAI.sayVerbatim).toHaveBeenCalledTimes(2);
+      expect(fakeVoiceAI.sayVerbatim).toHaveBeenLastCalledWith(MESSAGE);
+      expect(handler).not.toHaveBeenCalled();
+
+      say(MESSAGE);
+      emit({ type: 'turn_end' });
+      await done;
+      expect(handler).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('reports a match when what was said contains every part', async () => {
+    vi.useFakeTimers();
+    try {
+      const { done, report } = await voicemailSession();
+      emit({ type: 'turn_end' });
+      await vi.advanceTimersByTimeAsync(0);
+      say(OPENER);
+      emit({ type: 'turn_end' });
+      await vi.advanceTimersByTimeAsync(0);
+      say(MESSAGE);
+      emit({ type: 'turn_end' });
+      await done;
+      expect(report()).toEqual({ intended: `${OPENER} ${MESSAGE}`, spoken: `${OPENER} ${MESSAGE}`, matched: true });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('reports no match when the forced turn said something else — the live narration', async () => {
+    vi.useFakeTimers();
+    try {
+      const { done, report } = await voicemailSession();
+      emit({ type: 'turn_end' });
+      await vi.advanceTimersByTimeAsync(0);
+      say(OPENER);
+      emit({ type: 'turn_end' });
+      await vi.advanceTimersByTimeAsync(0);
+      say("All set — the message is being delivered by the system, and the call will end once it's finished.");
+      emit({ type: 'turn_end' });
+      await done;
+      expect(report()).toMatchObject({ matched: false });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('waits for the message to finish playing, and reports no match if the other side barged in before it had', async () => {
+    vi.useFakeTimers();
+    try {
+      const { done, report, options } = await voicemailSession();
+      emit({ type: 'turn_end' });
+      await vi.advanceTimersByTimeAsync(0);
+      say(OPENER);
+      speak(3000);
+      emit({ type: 'turn_end' });
+      await vi.advanceTimersByTimeAsync(0);
+      say(MESSAGE);
+      speak(10_000); // written in a moment, ~13s left to play
+      emit({ type: 'turn_end' });
+      await vi.advanceTimersByTimeAsync(5000);
+      expect(options.buildToolContext).not.toHaveBeenCalled(); // still playing
+
+      emit({ type: 'interrupted' }); // "Hello?" — the queued message is flushed
+      await vi.advanceTimersByTimeAsync(0);
+      await done;
+      expect(report()).toMatchObject({ matched: false });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('once the message has played, hands buildToolContext a playback estimate that is already due', async () => {
+    vi.useFakeTimers();
+    try {
+      const { done, report, options } = await voicemailSession();
+      emit({ type: 'turn_end' });
+      await vi.advanceTimersByTimeAsync(0);
+      say(OPENER);
+      speak(3000);
+      emit({ type: 'turn_end' });
+      await vi.advanceTimersByTimeAsync(0);
+      say(MESSAGE);
+      speak(10_000);
+      emit({ type: 'turn_end' });
+      await vi.advanceTimersByTimeAsync(14_000);
+      await done;
+      expect(report()).toMatchObject({ matched: true });
+      expect(vi.mocked(options.buildToolContext).mock.calls[0]![0]).toBeLessThanOrEqual(Date.now());
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('starts recording once the opener has played, while the message is still playing — before the hang-up', async () => {
+    vi.useFakeTimers();
+    try {
+      const { done, startRecording, handler } = await voicemailSession(true);
+      emit({ type: 'turn_end' });
+      await vi.advanceTimersByTimeAsync(0);
+      say(OPENER);
+      speak(3000);
+      emit({ type: 'turn_end' });
+      await vi.advanceTimersByTimeAsync(0);
+      say(MESSAGE);
+      speak(10_000);
+      emit({ type: 'turn_end' });
+      await vi.advanceTimersByTimeAsync(2000);
+      expect(startRecording).not.toHaveBeenCalled(); // the notice is still playing
+
+      await vi.advanceTimersByTimeAsync(2000); // opener played, plus the margin
+      expect(startRecording).toHaveBeenCalledTimes(1);
+      expect(handler).not.toHaveBeenCalled(); // the message is still playing: no hang-up yet
+
+      await vi.advanceTimersByTimeAsync(10_000);
+      await done;
+      expect(handler).toHaveBeenCalledTimes(1);
     } finally {
       vi.useRealTimers();
     }

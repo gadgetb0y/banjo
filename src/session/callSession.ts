@@ -5,6 +5,7 @@ import { createVoiceAIProvider } from '../voice/factory.js';
 import { toToolDefinition, type VoiceTool } from '../voice/tools/defineVoiceTool.js';
 import type { ToolDefinition } from '../voice/types.js';
 import type { VerbatimDeliveryReport, VoiceAIEvent, VoiceAIProvider } from '../voice/types.js';
+import { verbatimMatches } from '../voice/verbatimMatch.js';
 import { createAudioPlaybackTracker, type AudioPlaybackTracker } from './audioPlaybackTracker.js';
 import { negotiateAudioFormats, resolveAudioPipeline, type AudioPipeline } from './audioPipeline.js';
 import type { CallContext } from './types.js';
@@ -35,18 +36,29 @@ const TURN_END_WAIT_MS = 4000;
 // shouldn't hang a hang-up tool forever, mirroring TURN_END_WAIT_MS's
 // rationale above. Sized generously relative to TURN_END_WAIT_MS because,
 // unlike a short trailing confirmation sentence, this covers reading an
-// entire voicemail message aloud from scratch.
+// entire voicemail message aloud from scratch. One budget for all of a
+// tool's parts together, not one each.
 const SPEAK_VERBATIM_TIMEOUT_MS = 20_000;
+
+// How long CallSession waits, after the last forced turn ends, for its audio
+// to finish playing before the delivery is judged (#71). The model writes a
+// message faster than it plays: on a live voicemail most of it was still
+// queued on the phone when a barge-in flushed it. A 500-character message
+// (VOICEMAIL_MESSAGE_MAX_CHARS) is ~35s of speech. Audio still unplayed after
+// this is not verified: the hang-up that follows would cut it off.
+const VERBATIM_PLAYBACK_WAIT_MS = 40_000;
 
 // toolPendingWatchdog's normal budget (below) comfortably covers a fast tool
 // handler, but a tool with verbatimMessage additionally waits through (in
 // sequence) the pre-existing TURN_END_WAIT_MS, then up to
-// SPEAK_VERBATIM_TIMEOUT_MS for the forced speech itself, then the handler's
-// own hangUpAfterSpeaking wait (up to MAX_HANGUP_WAIT_MS in
-// voice/tools/callTools.ts, currently 6000ms) — comfortably exceeding the
-// normal 15s budget. Re-armed with this larger budget specifically for those
-// tools (see handleToolCall) rather than raising the default for every tool.
-const VERBATIM_TOOL_PENDING_BUDGET_MS = 35_000;
+// SPEAK_VERBATIM_TIMEOUT_MS for the forced speech itself, then up to
+// VERBATIM_PLAYBACK_WAIT_MS for it to play, then the handler's own
+// hangUpAfterSpeaking wait (up to MAX_HANGUP_WAIT_MS in
+// voice/tools/callTools.ts, currently 6000ms, though by then little is left
+// to play) — comfortably exceeding the normal 15s budget. Re-armed with this
+// larger budget specifically for those tools (see handleToolCall) rather
+// than raising the default for every tool.
+const VERBATIM_TOOL_PENDING_BUDGET_MS = SPEAK_VERBATIM_TIMEOUT_MS + VERBATIM_PLAYBACK_WAIT_MS + 10_000;
 
 // Caught on a live call: after a finalized user transcript, OpenAI's
 // Realtime API — which we rely on to auto-trigger a response via its own
@@ -163,6 +175,13 @@ export class CallSession<TCtx = CallContext> {
    */
   private recordingState: 'idle' | 'awaiting_turn_end' | 'scheduled' = 'idle';
   private recordingTimer: ReturnType<typeof setTimeout> | null = null;
+  /**
+   * Set while a tool's verbatimMessage is being delivered, from the first
+   * sayVerbatim() until its audio has played (#71): Banjo's final transcript
+   * lines for the current part, and whether the other side barged in, which
+   * flushes whatever was still queued on the phone.
+   */
+  private verbatimDelivery: { spoken: string[]; interrupted: boolean; wake: () => void } | null = null;
   private readonly pipeline: AudioPipeline;
   private readonly outputFormat;
   private readonly toolRegistry: Map<string, VoiceTool<any, TCtx>>;
@@ -318,6 +337,7 @@ export class CallSession<TCtx = CallContext> {
           const quality = classifyTranscript(event.text);
           if (quality === 'empty') break;
           this.recordTranscript(event.role, event.text, quality);
+          if (event.role === 'assistant') this.verbatimDelivery?.spoken.push(event.text);
           if (event.role === 'assistant' && this.firstAssistantLine === undefined) this.firstAssistantLine = event.text;
           if (event.role === 'assistant' && RECORDING_NOTICE.test(event.text) && this.opts.recordCalls && this.recordingState === 'idle') {
             this.recordingState = 'awaiting_turn_end';
@@ -345,6 +365,10 @@ export class CallSession<TCtx = CallContext> {
         // #8: cut off before its turn ended, the recording notice may never
         // have reached the other party. Wait for Banjo to say it again.
         if (this.recordingState === 'awaiting_turn_end') this.recordingState = 'idle';
+        if (this.verbatimDelivery) {
+          this.verbatimDelivery.interrupted = true;
+          this.verbatimDelivery.wake();
+        }
         // Caller barge-in — flush whatever we've already queued on the phone
         // leg, and reset the playback tracker's high-water mark: the
         // discarded buffered-but-unplayed audio will never actually play,
@@ -565,12 +589,8 @@ export class CallSession<TCtx = CallContext> {
         // session-level watchdog with a larger budget before starting it, so
         // a real message doesn't get killed as if it were a stuck handler.
         this.armToolPendingWatchdog(toolCallId, name, VERBATIM_TOOL_PENDING_BUDGET_MS);
-        await this.speakVerbatim(tool.verbatimMessage(parsed.data));
-        // Only a provider that can't guarantee verbatim playback reports what
-        // was actually said (openai-live); undefined leaves the handler on its
-        // original trust-the-provider path.
-        verbatimDelivery = this.voiceAI.verbatimDeliveryReport?.();
-        if (verbatimDelivery && !verbatimDelivery.matched) {
+        verbatimDelivery = await this.deliverVerbatim(tool.verbatimMessage(parsed.data));
+        if (!verbatimDelivery.matched) {
           logger.warn({ callId: this.opts.callId, toolCallId, name }, 'Verbatim message delivery did not match the intended text');
         }
       }
@@ -606,14 +626,55 @@ export class CallSession<TCtx = CallContext> {
   }
 
   /**
-   * Forces `text` to be spoken verbatim (VoiceAIProvider.sayVerbatim) and
-   * waits for that response to finish (its 'turn_end') before resolving —
-   * see VoiceTool.verbatimMessage's doc comment for why a tool needs this
-   * rather than trusting the model already said the right words earlier.
+   * Forces each part to be spoken verbatim (VoiceAIProvider.sayVerbatim), one
+   * turn each, waiting for each turn to end, then for the audio to finish
+   * playing — see VoiceTool.verbatimMessage's doc comment for why a tool
+   * needs this rather than trusting the model already said the right words
+   * earlier. Reports what was said on every provider (#71): the provider's
+   * own report where it has one (openai-live), otherwise Banjo's transcript
+   * for the turn. A barge-in, or audio still unplayed when the wait runs out,
+   * means the callee did not hear it all, whatever the transcript says.
    */
-  private speakVerbatim(text: string): Promise<void> {
-    this.voiceAI.sayVerbatim(text);
-    return this.waitForTurnEnd(SPEAK_VERBATIM_TIMEOUT_MS);
+  private async deliverVerbatim(parts: string[]): Promise<VerbatimDeliveryReport> {
+    const delivery = { spoken: [] as string[], interrupted: false, wake: () => {} };
+    this.verbatimDelivery = delivery;
+    try {
+      const deadline = Date.now() + SPEAK_VERBATIM_TIMEOUT_MS;
+      const reports: VerbatimDeliveryReport[] = [];
+      for (const part of parts) {
+        delivery.spoken = [];
+        this.voiceAI.sayVerbatim(part);
+        await this.waitForTurnEnd(Math.max(0, deadline - Date.now()));
+        const spoken = delivery.spoken.join(' ');
+        reports.push(this.voiceAI.verbatimDeliveryReport?.() ?? { intended: part, spoken, matched: verbatimMatches(part, spoken) });
+      }
+      const playedOut = await this.waitForVerbatimPlayback(delivery);
+      return {
+        intended: parts.join(' '),
+        spoken: reports.map((r) => r.spoken).filter(Boolean).join(' '),
+        matched: reports.every((r) => r.matched) && !delivery.interrupted && playedOut,
+      };
+    } finally {
+      this.verbatimDelivery = null;
+    }
+  }
+
+  /** True once everything sent has played; false if interrupted first, or still playing after VERBATIM_PLAYBACK_WAIT_MS. */
+  private waitForVerbatimPlayback(delivery: { interrupted: boolean; wake: () => void }): Promise<boolean> {
+    const remainingMs = this.audioPlaybackTracker.estimatedDoneAt() - Date.now();
+    if (delivery.interrupted) return Promise.resolve(false);
+    if (remainingMs <= 0) return Promise.resolve(true);
+    if (remainingMs > VERBATIM_PLAYBACK_WAIT_MS) {
+      logger.warn({ callId: this.opts.callId, remainingMs }, 'Verbatim message would still be playing at the hang-up');
+      return Promise.resolve(false);
+    }
+    return new Promise((resolve) => {
+      const timer = setTimeout(() => resolve(!delivery.interrupted), remainingMs);
+      delivery.wake = () => {
+        clearTimeout(timer);
+        resolve(false);
+      };
+    });
   }
 
   /**

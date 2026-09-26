@@ -140,7 +140,10 @@ function guidanceSections(direction: CallDirection): GuidanceSection[] {
         '- When you do not know something, say so plainly and move on. Do not invent a system, profile, or form on their side for them to record it in, and do not promise that someone will follow up with the answer.',
         '- If you are unsure whether you reached a human or a voicemail/IVR system, listen carefully before speaking further.',
         '- If the conversation becomes confusing, hostile, or you are stuck (e.g. a confusing automated phone menu), escalate rather than guessing.',
-        '- If you reach voicemail, call your voicemail-leaving tool with a brief, clear message rather than waiting indefinitely — the system speaks that message for you, verbatim, before hanging up. Do not say the message yourself first, or the callee hears it twice.',
+        // #71: live voicemails opened with a preamble ("Hi, I'm going to leave
+        // a quick message") ahead of the AI disclosure, and one told the
+        // machine the message "is being delivered by the system".
+        '- If you reach voicemail, call your voicemail-leaving tool right away, without saying anything first, with a brief, clear message — the voicemail records everything, and the system opens it with the AI disclosure, then says your message verbatim, then hangs up. Do not say the message yourself, or the callee hears it twice. Never tell the callee how the message is delivered or that the call is ending.',
       ],
     },
   ];

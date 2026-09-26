@@ -295,3 +295,15 @@ describe('transfer guidance (#7)', () => {
     }
   });
 });
+
+describe('voicemail (#71)', () => {
+  // Live, 2026-09-25: both voicemails opened with a preamble before the AI
+  // disclosure, and one told the machine "the message is being delivered by
+  // the system, and the call will end once it's finished."
+  it('says nothing before the voicemail tool, since the system opens the voicemail with the disclosure', () => {
+    for (const guidance of [buildBaseSystemPromptGuidance('outbound'), buildFrontendSystemPromptGuidance('outbound')]) {
+      expect(guidance).toContain('call your voicemail-leaving tool right away, without saying anything first');
+      expect(guidance).toContain('Never tell the callee how the message is delivered');
+    }
+  });
+});
