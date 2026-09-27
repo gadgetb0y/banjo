@@ -86,3 +86,21 @@ export function verbatimMatches(intended: string, spoken: string): boolean {
   }
   return false;
 }
+
+/**
+ * `message` minus a repeat, at its start, of any whole `leads` — which the
+ * callee has just heard. The system speaks the AI disclosure ahead of a
+ * voicemail (#71), and a model told to leave it out of its message may
+ * repeat it anyway. Only a whole lead goes, ending at a sentence break: a
+ * message that merely starts like one ("…on behalf of Dr. Smith's patient")
+ * is kept as it is, so no fragment of it is ever left behind.
+ */
+export function withoutRepeatedLead(message: string, leads: string[]): string {
+  const wanted = leads.map((lead) => normalizeForVerbatimMatch(lead).join(' '));
+  const sentenceEnds = [...message.matchAll(new RegExp(SENTENCE_BREAK.source, 'gu'))].map((m) => m.index + m[0].length);
+  let cut = 0;
+  for (const end of [...sentenceEnds, message.length]) {
+    if (wanted.includes(normalizeForVerbatimMatch(message.slice(0, end)).join(' '))) cut = end;
+  }
+  return message.slice(cut).trim();
+}

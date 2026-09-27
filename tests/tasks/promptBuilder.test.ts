@@ -207,3 +207,12 @@ describe("the owner's profile: customizable, below the fixed rules", () => {
     }
   });
 });
+
+describe('voicemail (#71)', () => {
+  it('tells the model to call the voicemail tool without saying anything first, and to leave the disclosure to the system', () => {
+    const prompt = buildCallSystemPrompt(bookingTask, contact, []);
+    expect(prompt).toContain('call leave_voicemail_and_end_call right away, without saying anything first');
+    expect(prompt).toContain('Leave the AI disclosure out of the message');
+    expect(prompt).not.toContain('the system speaks that message for you, verbatim,\nbefore hanging up');
+  });
+});

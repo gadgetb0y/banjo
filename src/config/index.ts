@@ -288,7 +288,12 @@ export const RECORDING_NOTICE = /\brecord(ed|ing)?\b/i;
  * here unless the owner's wording already has one (#8).
  */
 export function disclosureLine(): string {
-  const line = config.DISCLOSURE_LINE.replaceAll('{name}', config.ASSISTANT_PRINCIPAL_NAME);
+  const line = disclosureLineWithoutNotice();
   return config.RECORD_CALLS && !RECORDING_NOTICE.test(line) ? `${line} This call is recorded.` : line;
+}
+
+/** DISCLOSURE_LINE with {name} filled in, without the recording notice disclosureLine() may add. */
+export function disclosureLineWithoutNotice(): string {
+  return config.DISCLOSURE_LINE.replaceAll('{name}', config.ASSISTANT_PRINCIPAL_NAME);
 }
 export type AppConfig = typeof config;

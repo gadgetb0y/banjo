@@ -31,6 +31,6 @@ export interface CallContext {
   calendar: CalendarProvider;
   /** audioPlaybackTracker.estimatedDoneAt() (session/audioPlaybackTracker.ts) at the moment this context was built — the estimated wall-clock time by which every audio chunk sent so far will have finished playing on the phone leg. Used by hangUpAfterSpeaking (voice/tools/callTools.ts) to wait for trailing speech to finish before hanging up. */
   estimatedAudioDoneAt: number;
-  /** Set only for a tool with verbatimMessage, on a provider that reports verbatim delivery (VoiceAIProvider.verbatimDeliveryReport): what was actually spoken versus what was intended. Undefined means the provider can't verify and is trusted, as before. */
+  /** Set for every tool with verbatimMessage (CallSession.deliverVerbatim, #71): what was actually spoken versus what was intended, and whether it all played without a barge-in. Undefined for any other tool. */
   verbatimDelivery?: VerbatimDeliveryReport;
 }
