@@ -556,7 +556,7 @@ describe('leave_voicemail_and_end_call: the AI disclosure opens the voicemail (#
     expect(segments(`${opener.replace("'", '’').toLowerCase()} Please call back.`)).toEqual([opener, 'Please call back.']);
   });
 
-  it('drops only whole sentences the opener already said, never the message itself', () => {
+  it('drops only a whole repeat of the opener, never the message itself', () => {
     expect(segments('Hi, please call Alex back.')).toEqual([opener, 'Hi, please call Alex back.']);
     expect(segments(`Please call back. ${opener}`)).toEqual([opener, `Please call back. ${opener}`]);
   });

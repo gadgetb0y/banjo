@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import { SlotUnavailableError } from '../../calendar/types.js';
-import { config, disclosureLine } from '../../config/index.js';
+import { config, disclosureLine, disclosureLineWithoutNotice } from '../../config/index.js';
 import { childLogger } from '../../lib/logger.js';
 import { formatInZone, formatSpokenInZone, zonedTimeToUtcIso } from '../../lib/timezone.js';
 import { TimeoutError, withTimeout } from '../../lib/withTimeout.js';
@@ -422,7 +422,7 @@ export const leaveVoicemailAndEndCallTool: VoiceTool<{ message: string }> = defi
   // the callee heard rather than what the model was asked to say.
   verbatimMessage: (input) => {
     const opener = disclosureLine();
-    const message = withoutRepeatedLead(input.message, opener);
+    const message = withoutRepeatedLead(input.message, [opener, disclosureLineWithoutNotice()]);
     return message ? [opener, message] : [opener];
   },
   handler: async (input, ctx) => {

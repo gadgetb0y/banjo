@@ -14,6 +14,18 @@ import { classifyTranscript } from './transcriptQuality.js';
 
 export type CallSessionState = 'connecting' | 'active' | 'tool-pending' | 'ending' | 'ended' | 'error';
 
+/** A verbatimMessage being delivered (#71): see CallSession.deliverVerbatim. */
+interface VerbatimDelivery {
+  /** Banjo's final transcript lines for the part being spoken. */
+  spoken: string[];
+  /** The callee may not have heard it all: a barge-in flushed queued audio, someone answered, or the call is ending. */
+  cutOff: boolean;
+  /** True once the first part has ended — from then on a user line is a reply, not the greeting finalizing late. */
+  listeningForReply: boolean;
+  /** Ends whatever wait deliverVerbatim is in. */
+  wake: () => void;
+}
+
 // Firing the greeting the instant the Media Stream connects felt abrupt on a
 // live call — almost no gap between "call picked up" and ea already talking.
 const GREETING_DELAY_MS = 500;
@@ -175,13 +187,10 @@ export class CallSession<TCtx = CallContext> {
    */
   private recordingState: 'idle' | 'awaiting_turn_end' | 'scheduled' = 'idle';
   private recordingTimer: ReturnType<typeof setTimeout> | null = null;
-  /**
-   * Set while a tool's verbatimMessage is being delivered, from the first
-   * sayVerbatim() until its audio has played (#71): Banjo's final transcript
-   * lines for the current part, and whether the other side barged in, which
-   * flushes whatever was still queued on the phone.
-   */
-  private verbatimDelivery: { spoken: string[]; interrupted: boolean; wake: () => void } | null = null;
+  /** When the audio that carried the recording notice is estimated to finish playing — a barge-in before then may have flushed it (#71). */
+  private recordingNoticePlayedAt = 0;
+  /** Set while a tool's verbatimMessage is being delivered, from the first sayVerbatim() until its audio has played (#71) — see VerbatimDelivery. */
+  private verbatimDelivery: VerbatimDelivery | null = null;
   private readonly pipeline: AudioPipeline;
   private readonly outputFormat;
   private readonly toolRegistry: Map<string, VoiceTool<any, TCtx>>;
@@ -338,6 +347,11 @@ export class CallSession<TCtx = CallContext> {
           if (quality === 'empty') break;
           this.recordTranscript(event.role, event.text, quality);
           if (event.role === 'assistant') this.verbatimDelivery?.spoken.push(event.text);
+          // openai-live never emits 'interrupted', so someone answering
+          // mid-message shows up only as their words (#22). Not before the
+          // opener has ended: a voicemail greeting's own transcript can
+          // finalize after delivery has begun.
+          if (event.role === 'user' && quality === 'ok' && this.verbatimDelivery?.listeningForReply) this.cutOffVerbatimDelivery();
           if (event.role === 'assistant' && this.firstAssistantLine === undefined) this.firstAssistantLine = event.text;
           if (event.role === 'assistant' && RECORDING_NOTICE.test(event.text) && this.opts.recordCalls && this.recordingState === 'idle') {
             this.recordingState = 'awaiting_turn_end';
@@ -365,10 +379,15 @@ export class CallSession<TCtx = CallContext> {
         // #8: cut off before its turn ended, the recording notice may never
         // have reached the other party. Wait for Banjo to say it again.
         if (this.recordingState === 'awaiting_turn_end') this.recordingState = 'idle';
-        if (this.verbatimDelivery) {
-          this.verbatimDelivery.interrupted = true;
-          this.verbatimDelivery.wake();
+        // #71: the turn can end well before its audio has played (the model
+        // writes faster than it speaks), so the flush may also take a notice
+        // whose recording is already scheduled. Once it has played, keep it:
+        // the callee heard it and simply answered quickly.
+        if (this.recordingState === 'scheduled' && this.recordingTimer && Date.now() < this.recordingNoticePlayedAt) {
+          this.cancelPendingRecording();
+          this.recordingState = 'idle';
         }
+        this.cutOffVerbatimDelivery();
         // Caller barge-in — flush whatever we've already queued on the phone
         // leg, and reset the playback tracker's high-water mark: the
         // discarded buffered-but-unplayed audio will never actually play,
@@ -462,7 +481,8 @@ export class CallSession<TCtx = CallContext> {
     const { telephony, callId } = this.opts;
     if (!telephony.startRecording) return;
     this.recordingState = 'scheduled';
-    const delay = Math.max(0, this.audioPlaybackTracker.estimatedDoneAt() - Date.now()) + RECORDING_START_MARGIN_MS;
+    this.recordingNoticePlayedAt = this.audioPlaybackTracker.estimatedDoneAt();
+    const delay = Math.max(0, this.recordingNoticePlayedAt - Date.now()) + RECORDING_START_MARGIN_MS;
     this.recordingTimer = setTimeout(() => {
       this.recordingTimer = null;
       telephony
@@ -636,45 +656,64 @@ export class CallSession<TCtx = CallContext> {
    * means the callee did not hear it all, whatever the transcript says.
    */
   private async deliverVerbatim(parts: string[]): Promise<VerbatimDeliveryReport> {
-    const delivery = { spoken: [] as string[], interrupted: false, wake: () => {} };
+    let stop = () => {};
+    const stopped = new Promise<void>((resolve) => (stop = resolve));
+    const delivery: VerbatimDelivery = { spoken: [], cutOff: false, listeningForReply: false, wake: stop };
     this.verbatimDelivery = delivery;
     try {
       const deadline = Date.now() + SPEAK_VERBATIM_TIMEOUT_MS;
       const reports: VerbatimDeliveryReport[] = [];
       for (const part of parts) {
+        // Nothing more is said once the callee may not hear it all anyway:
+        // the call is ending, the other side barged in, or an earlier part
+        // used up the time, and the hang-up would cut this one off (#71).
+        if (delivery.cutOff || this.isEnding() || Date.now() >= deadline) break;
         delivery.spoken = [];
         this.voiceAI.sayVerbatim(part);
-        await this.waitForTurnEnd(Math.max(0, deadline - Date.now()));
+        await Promise.race([this.waitForTurnEnd(deadline - Date.now()), stopped]);
         const spoken = delivery.spoken.join(' ');
         reports.push(this.voiceAI.verbatimDeliveryReport?.() ?? { intended: part, spoken, matched: verbatimMatches(part, spoken) });
+        delivery.listeningForReply = true;
       }
-      const playedOut = await this.waitForVerbatimPlayback(delivery);
+      const playedOut = reports.length === parts.length && !delivery.cutOff && (await this.waitForVerbatimPlayback(delivery));
       return {
         intended: parts.join(' '),
         spoken: reports.map((r) => r.spoken).filter(Boolean).join(' '),
-        matched: reports.every((r) => r.matched) && !delivery.interrupted && playedOut,
+        matched: playedOut && reports.every((r) => r.matched) && !delivery.cutOff,
       };
     } finally {
       this.verbatimDelivery = null;
     }
   }
 
-  /** True once everything sent has played; false if interrupted first, or still playing after VERBATIM_PLAYBACK_WAIT_MS. */
-  private waitForVerbatimPlayback(delivery: { interrupted: boolean; wake: () => void }): Promise<boolean> {
+  /** True once everything sent has played; false if cut off first, or still playing after VERBATIM_PLAYBACK_WAIT_MS. */
+  private waitForVerbatimPlayback(delivery: VerbatimDelivery): Promise<boolean> {
     const remainingMs = this.audioPlaybackTracker.estimatedDoneAt() - Date.now();
-    if (delivery.interrupted) return Promise.resolve(false);
     if (remainingMs <= 0) return Promise.resolve(true);
     if (remainingMs > VERBATIM_PLAYBACK_WAIT_MS) {
       logger.warn({ callId: this.opts.callId, remainingMs }, 'Verbatim message would still be playing at the hang-up');
       return Promise.resolve(false);
     }
     return new Promise((resolve) => {
-      const timer = setTimeout(() => resolve(!delivery.interrupted), remainingMs);
+      const timer = setTimeout(() => resolve(!delivery.cutOff), remainingMs);
+      const stop = delivery.wake;
       delivery.wake = () => {
         clearTimeout(timer);
+        stop();
         resolve(false);
       };
     });
+  }
+
+  /** The callee may not hear the rest of a verbatim delivery: a barge-in flushed it, they answered, or the call is ending. */
+  private cutOffVerbatimDelivery(): void {
+    if (!this.verbatimDelivery) return;
+    this.verbatimDelivery.cutOff = true;
+    this.verbatimDelivery.wake();
+  }
+
+  private isEnding(): boolean {
+    return this.state === 'ending' || this.state === 'ended' || this.state === 'error';
   }
 
   /**
@@ -714,6 +753,7 @@ export class CallSession<TCtx = CallContext> {
     if (this.state === 'ended' || this.state === 'error' || this.state === 'ending') return;
     this.clearSilenceWatchdog();
     this.cancelPendingRecording();
+    this.cutOffVerbatimDelivery();
     logger.error({ err, reason, callId: this.opts.callId }, 'Call session error');
     this.setState('error');
     // Same reason as end(): a booking still being written must land before
@@ -793,6 +833,7 @@ export class CallSession<TCtx = CallContext> {
     this.clearSilenceWatchdog();
     this.cancelPendingRecording();
     this.setState('ending');
+    this.cutOffVerbatimDelivery();
     await this.waitForInFlightToolHandlers();
     await this.opts.onStatusChange({ kind: 'ended', reason, disclosure: checkDisclosure(this.firstAssistantLine) });
     await this.voiceAI.disconnect().catch(() => {});
