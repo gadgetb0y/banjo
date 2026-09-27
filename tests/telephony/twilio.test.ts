@@ -462,7 +462,8 @@ describe('TwilioProvider.transferCall (#7)', () => {
     expect(twiml).toMatch(/<Dial[^>]*timeout="20"/);
     expect(twiml).toMatch(/<Dial[^>]*answerOnBridge="true"/);
     expect(twiml).toMatch(/action="https:\/\/[^"]+\/telephony\/twilio\/transfer-callback\?callId=CA-1"/);
-    expect(twiml).toContain('<Number>+15557654321</Number>');
+    // #74: the principal's leg is screened before it is bridged.
+    expect(twiml).toMatch(/<Number url="https:\/\/[^"]+\/telephony\/twilio\/transfer-screen\?callId=CA-1">\+15557654321<\/Number>/);
     expect(twiml).toMatch(/<\/Dial><\/Response>$/);
   });
 
@@ -542,5 +543,34 @@ describe('TwilioProvider.buildTransferCallbackTwiml (#7)', () => {
     } finally {
       config.TRANSFER_FALLBACK_MESSAGE = original;
     }
+  });
+});
+
+describe('TwilioProvider: transfer screening (#74)', () => {
+  // Live, 2026-09-26: the principal let the transfer ring, their carrier
+  // voicemail picked up inside the dial timeout, and Twilio reported the dial
+  // 'completed' — recorded as answered, the caller bridged into voicemail and
+  // never told they weren't reached. Only a press of 1 counts as answered.
+  it('asks the principal to press 1, then hangs up their leg if they do not', () => {
+    const twiml = new TwilioProvider().buildTransferScreenTwiml('CA-9');
+    expect(twiml).toMatch(/<Gather[^>]*numDigits="1"/);
+    expect(twiml).toMatch(/<Gather[^>]*action="https:\/\/[^"]+\/telephony\/twilio\/transfer-screen-result\?callId=CA-9"/);
+    expect(twiml).toMatch(/<Say[^>]*>[^<]*[Pp]ress 1[^<]*<\/Say><\/Gather>/);
+    expect(twiml).toMatch(/<\/Gather><Hangup\/><\/Response>$/);
+  });
+
+  it('bridges on a 1, and remembers it once for the transfer callback', () => {
+    const provider = new TwilioProvider();
+    const twiml = provider.acceptTransferScreen('CA-10', '1');
+    expect(twiml).not.toContain('Hangup');
+    expect(provider.takeTransferAccepted('CA-10')).toBe(true);
+    expect(provider.takeTransferAccepted('CA-10')).toBe(false);
+  });
+
+  it.each([['2'], [''], ['*']])('hangs up the principal\'s leg on %j, and does not count it as accepted', (digits) => {
+    const provider = new TwilioProvider();
+    const twiml = provider.acceptTransferScreen('CA-11', digits);
+    expect(twiml).toContain('<Hangup/>');
+    expect(provider.takeTransferAccepted('CA-11')).toBe(false);
   });
 });

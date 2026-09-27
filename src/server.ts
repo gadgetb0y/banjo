@@ -34,6 +34,9 @@ interface TwilioHttpHooks {
   unregisterInboundCall(callSid: string): void;
   handleInboundMediaStreamConnection(ws: WebSocket): void;
   buildTransferCallbackTwiml(result: TransferResult): string;
+  buildTransferScreenTwiml(callId: string): string;
+  acceptTransferScreen(callId: string, digits: string): string;
+  takeTransferAccepted(callId: string): boolean;
 }
 
 /**
@@ -107,12 +110,17 @@ app.post('/telephony/twilio/amd-callback', async (c) => {
   return c.body(null, 204);
 });
 
-/** Twilio's DialCallStatus, as recorded on call_attempts.transfer_result. Anything unknown counts as failed. */
-function transferResultFrom(dialCallStatus: unknown): TransferResult {
+/**
+ * Twilio's DialCallStatus, as recorded on call_attempts.transfer_result.
+ * Anything unknown counts as failed. A dial the principal's line picked up
+ * counts as answered only if they accepted it at the screen (#74): their
+ * voicemail picks up too, and Twilio reports that as completed.
+ */
+function transferResultFrom(dialCallStatus: unknown, accepted: boolean): TransferResult {
   switch (dialCallStatus) {
     case 'completed':
     case 'answered':
-      return 'answered';
+      return accepted ? 'answered' : 'no_answer';
     case 'no-answer':
       return 'no_answer';
     case 'busy':
@@ -135,7 +143,7 @@ app.post('/telephony/twilio/transfer-callback', async (c) => {
     return c.body(null, 403);
   }
   const callId = c.req.query('callId') ?? '';
-  const result = transferResultFrom(body.DialCallStatus);
+  const result = transferResultFrom(body.DialCallStatus, telephony.takeTransferAccepted(callId));
   try {
     const recorded = await recordTransferResult(callId, result);
     logger.info({ callId, result, recorded }, 'transfer dial ended');
@@ -143,6 +151,31 @@ app.post('/telephony/twilio/transfer-callback', async (c) => {
     logger.error({ err, callId, result }, 'could not record the transfer result');
   }
   return c.body(telephony.buildTransferCallbackTwiml(result), 200, { 'Content-Type': 'text/xml' });
+});
+
+/** The <Number url> of a transfer (#74): the screening prompt, run on the principal's leg once it picks up. */
+app.post('/telephony/twilio/transfer-screen', async (c) => {
+  const body = await c.req.parseBody();
+  if (!isValidTwilioSignature(c, body as Record<string, string>)) {
+    logger.warn({ path: c.req.path }, 'rejected Twilio webhook with invalid or missing signature');
+    return c.body(null, 403);
+  }
+  const callId = c.req.query('callId') ?? '';
+  logger.info({ callId }, 'transfer reached the principal — screening');
+  return c.body(telephony.buildTransferScreenTwiml(callId), 200, { 'Content-Type': 'text/xml' });
+});
+
+/** The screening prompt's <Gather action> (#74): the principal's key press, if any. */
+app.post('/telephony/twilio/transfer-screen-result', async (c) => {
+  const body = await c.req.parseBody();
+  if (!isValidTwilioSignature(c, body as Record<string, string>)) {
+    logger.warn({ path: c.req.path }, 'rejected Twilio webhook with invalid or missing signature');
+    return c.body(null, 403);
+  }
+  const callId = c.req.query('callId') ?? '';
+  const digits = typeof body.Digits === 'string' ? body.Digits : '';
+  logger.info({ callId, accepted: digits === '1' }, 'transfer screen answered');
+  return c.body(telephony.acceptTransferScreen(callId, digits), 200, { 'Content-Type': 'text/xml' });
 });
 
 /**
