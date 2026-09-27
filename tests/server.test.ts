@@ -398,10 +398,20 @@ describe('POST /telephony/twilio/transfer-callback (#7)', () => {
     expect(recordTransferResult).toHaveBeenCalledWith('attempt-1', 'answered');
   });
 
-  it("counts a completed dial as answered when Twilio says it bridged, even if this process never saw the key press — a restart, or another process (#74)", async () => {
+  it("does not trust DialBridged yet: unaccepted stays no_answer even if Twilio says bridged — it may mean the voicemail picked up (#74)", async () => {
     takeTransferAccepted.mockReturnValueOnce(false);
     await post('?callId=attempt-1', { DialCallStatus: 'completed', DialBridged: 'true' });
-    expect(recordTransferResult).toHaveBeenCalledWith('attempt-1', 'answered');
+    expect(recordTransferResult).toHaveBeenCalledWith('attempt-1', 'no_answer');
+  });
+
+  it('logs both acceptance signals even when recording the result fails (#74)', async () => {
+    recordTransferResult.mockRejectedValueOnce(new Error('db down'));
+    fakeLog.info.mockClear();
+    await post('?callId=attempt-1', { DialCallStatus: 'completed', DialBridged: 'false' });
+    expect(fakeLog.info).toHaveBeenCalledWith(
+      expect.objectContaining({ callId: 'attempt-1', acceptedHere: true, bridged: false, dialCallStatus: 'completed' }),
+      expect.any(String),
+    );
   });
 
   it.each([['no-answer'], ['busy'], ['failed']])('reads the screen result even for DialCallStatus=%s, so a late 1 is not left behind (#74)', async (dialStatus) => {

@@ -89,8 +89,8 @@ function generateSilencePcm16(durationMs: number): Buffer {
 const TRANSFER_SCREEN_PROMPT = 'Your AI assistant is transferring a call to you. Press 1 to take it.';
 /** Seconds the screen waits for a key after the prompt, per Twilio <Gather>. */
 const TRANSFER_SCREEN_TIMEOUT_S = 5;
-/** How long an accepted screen waits for its transfer callback before it's swept; a bridged call rarely lasts this long, and DialBridged covers one that does. */
-const ACCEPTED_TRANSFER_TTL_MS = 60 * 60_000;
+/** How long an accepted screen waits for its transfer callback (which comes when the bridged call ends) before it's swept: Twilio's default <Dial> timeLimit, 4 hours. */
+const ACCEPTED_TRANSFER_TTL_MS = 4 * 60 * 60_000;
 
 /**
  * Twilio telephony adapter: REST call origination via the `twilio` SDK, plus
@@ -110,8 +110,9 @@ export class TwilioProvider implements TelephonyProvider {
   /**
    * Transfers whose principal pressed 1 at the screening prompt (#74), and
    * when, until the transfer callback takes the entry. Per process, like
-   * `calls`; the callback also trusts Twilio's own DialBridged, which
-   * survives a restart. An entry whose callback never comes is swept after
+   * `calls`: a restart between the press and the callback reports an
+   * accepted transfer as no_answer, and the caller hears the fallback line
+   * after the call. An entry whose callback never comes is swept after
    * ACCEPTED_TRANSFER_TTL_MS.
    */
   private readonly acceptedTransfers = new Map<string, number>();

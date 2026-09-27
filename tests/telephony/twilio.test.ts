@@ -584,11 +584,15 @@ describe('TwilioProvider: transfer screening (#74)', () => {
     expect(provider.takeTransferAccepted('CA-12')).toBe(true);
   });
 
-  it('forgets an acceptance whose transfer callback never came, after an hour', () => {
+  it('forgets an acceptance whose transfer callback never came, after four hours', () => {
     vi.useFakeTimers();
     try {
       const provider = new TwilioProvider();
       provider.acceptTransferScreen('CA-14', '1');
+      vi.advanceTimersByTime(3 * 60 * 60_000);
+      provider.acceptTransferScreen('CA-16', '1');
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      expect((provider as any).acceptedTransfers.has('CA-14')).toBe(true); // a long bridged call keeps its entry
       vi.advanceTimersByTime(61 * 60_000);
       provider.acceptTransferScreen('CA-15', '1'); // any later acceptance sweeps stale ones
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
