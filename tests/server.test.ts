@@ -45,10 +45,16 @@ vi.mock('../src/telephony/factory.js', () => ({
     handleMediaStreamConnection,
     handleInboundMediaStreamConnection,
     buildTransferCallbackTwiml,
+    buildTransferScreenTwiml,
+    acceptTransferScreen,
+    takeTransferAccepted,
   }),
 }));
 
 const recordTransferResult = vi.fn(async (_callId: string, _result: string) => true);
+const buildTransferScreenTwiml = vi.fn((_callId: string) => '<Response><Gather/><Hangup/></Response>');
+const acceptTransferScreen = vi.fn((_callId: string, _digits: string) => '<Response/>');
+const takeTransferAccepted = vi.fn((_callId: string) => true);
 vi.mock('../src/tasks/service.js', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../src/tasks/service.js')>()),
   recordTransferResult: (callId: string, result: string) => recordTransferResult(callId, result),
@@ -386,6 +392,41 @@ describe('POST /telephony/twilio/transfer-callback (#7)', () => {
     expect(buildTransferCallbackTwiml).toHaveBeenCalledWith(result);
   });
 
+  it('counts a completed dial as answered when the principal accepted it at the screen (#74)', async () => {
+    takeTransferAccepted.mockReturnValueOnce(true);
+    await post('?callId=attempt-1', { DialCallStatus: 'completed' });
+    expect(recordTransferResult).toHaveBeenCalledWith('attempt-1', 'answered');
+  });
+
+  it("does not trust DialBridged yet: unaccepted stays no_answer even if Twilio says bridged — it may mean the voicemail picked up (#74)", async () => {
+    takeTransferAccepted.mockReturnValueOnce(false);
+    await post('?callId=attempt-1', { DialCallStatus: 'completed', DialBridged: 'true' });
+    expect(recordTransferResult).toHaveBeenCalledWith('attempt-1', 'no_answer');
+  });
+
+  it('logs both acceptance signals even when recording the result fails (#74)', async () => {
+    recordTransferResult.mockRejectedValueOnce(new Error('db down'));
+    fakeLog.info.mockClear();
+    await post('?callId=attempt-1', { DialCallStatus: 'completed', DialBridged: 'false' });
+    expect(fakeLog.info).toHaveBeenCalledWith(
+      expect.objectContaining({ callId: 'attempt-1', acceptedHere: true, bridged: false, dialCallStatus: 'completed' }),
+      expect.any(String),
+    );
+  });
+
+  it.each([['no-answer'], ['busy'], ['failed']])('reads the screen result even for DialCallStatus=%s, so a late 1 is not left behind (#74)', async (dialStatus) => {
+    await post('?callId=attempt-1', { DialCallStatus: dialStatus });
+    expect(takeTransferAccepted).toHaveBeenCalledWith('attempt-1');
+  });
+
+  it("counts a completed dial the principal never accepted as no_answer — their voicemail picked up (#74)", async () => {
+    takeTransferAccepted.mockReturnValueOnce(false);
+    await post('?callId=attempt-1', { DialCallStatus: 'completed' });
+    expect(takeTransferAccepted).toHaveBeenCalledWith('attempt-1');
+    expect(recordTransferResult).toHaveBeenCalledWith('attempt-1', 'no_answer');
+    expect(buildTransferCallbackTwiml).toHaveBeenCalledWith('no_answer');
+  });
+
   it('still answers with TwiML when recording the result throws, so the caller is not left in silence', async () => {
     recordTransferResult.mockRejectedValueOnce(new Error('db down'));
     const res = await post('?callId=attempt-1', { DialCallStatus: 'no-answer' });
@@ -398,6 +439,7 @@ describe('POST /telephony/twilio/transfer-callback (#7)', () => {
     const res = await post('?callId=attempt-1', { DialCallStatus: 'completed' }, 'bad-signature');
     expect(res.status).toBe(403);
     expect(recordTransferResult).not.toHaveBeenCalled();
+    expect(takeTransferAccepted).not.toHaveBeenCalled(); // a forged callback can't consume a real acceptance
   });
 });
 
@@ -411,4 +453,42 @@ it('does not log the outbound TwiML body (#7)', async () => {
   const logged = fakeLog.info.mock.calls.map(([obj]) => obj);
   expect(logged.some((obj) => obj && typeof obj === 'object' && 'callId' in obj && 'twimlLength' in obj)).toBe(true);
   expect(logged.every((obj) => !(obj && typeof obj === 'object' && 'twiml' in obj))).toBe(true);
+});
+
+describe('transfer screening routes (#74)', () => {
+  const post = (path: string, body: Record<string, string>, signature = 'valid-signature') =>
+    app.request(path, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'X-Twilio-Signature': signature },
+      body: new URLSearchParams(body).toString(),
+    });
+
+  it('serves the screening prompt for the call', async () => {
+    const res = await post('/telephony/twilio/transfer-screen?callId=attempt-1', {});
+    expect(res.status).toBe(200);
+    expect(res.headers.get('Content-Type')).toContain('text/xml');
+    expect(buildTransferScreenTwiml).toHaveBeenCalledWith('attempt-1');
+  });
+
+  it("passes the principal's key press on", async () => {
+    const res = await post('/telephony/twilio/transfer-screen-result?callId=attempt-1', { Digits: '1' });
+    expect(res.status).toBe(200);
+    expect(acceptTransferScreen).toHaveBeenCalledWith('attempt-1', '1');
+  });
+
+  it('treats a missing key press as none', async () => {
+    await post('/telephony/twilio/transfer-screen-result?callId=attempt-1', {});
+    expect(acceptTransferScreen).toHaveBeenCalledWith('attempt-1', '');
+  });
+
+  it.each([['/telephony/twilio/transfer-screen?callId=attempt-1'], ['/telephony/twilio/transfer-screen-result?callId=attempt-1']])(
+    'rejects an unsigned request to %s',
+    async (path) => {
+      validateRequest.mockReturnValueOnce(false);
+      const res = await post(path, { Digits: '1' }, 'bad-signature');
+      expect(res.status).toBe(403);
+      expect(acceptTransferScreen).not.toHaveBeenCalled();
+      expect(buildTransferScreenTwiml).not.toHaveBeenCalled();
+    },
+  );
 });

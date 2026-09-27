@@ -169,13 +169,13 @@ saying that connecting the caller is its backend's job, again only when the flag
 `<Connect><Stream>` is terminal TwiML: the Media Streams WebSocket *is* the call, so there's no
 TwiML continuation inside the call to `<Dial>` into. A transfer has to be a REST redirect of the
 live call instead — `client.calls(sid).update({ twiml })` — the same call shape `hangUp()` already
-uses. `TwilioProvider.transferCall()` builds `<Dial timeout="20" answerOnBridge="true" action=".../transfer-callback?callId=…"><Number>{to}</Number></Dial>`. Nothing follows the `<Dial>` in that
+uses. `TwilioProvider.transferCall()` builds `<Dial timeout="20" answerOnBridge="true" action=".../transfer-callback?callId=…"><Number url=".../transfer-screen?callId=…">{to}</Number></Dial>` (the screen is described below). Nothing follows the `<Dial>` in that
 TwiML: with an `action` URL, Twilio never reaches verbs after it and instead runs whatever TwiML the
 callback returns, so the fallback line has to live there rather than after the `<Dial>`.
 
 **The callback** (`POST /telephony/twilio/transfer-callback`, `src/server.ts`) is where the dial's
 outcome actually arrives — after the `<Dial>` ends, via `DialCallStatus`. It maps that to a
-`transfer_result` (`answered | no_answer | busy | failed`), records it on `call_attempts` for
+`transfer_result` (`answered | no_answer | busy | failed`; a picked-up dial counts as `answered` only if the principal accepted it at the screen), records it on `call_attempts` for
 outbound calls (inbound calls have no `call_attempts` row, so it just logs), and returns
 `<Hangup/>` when answered or the XML-escaped fallback `<Say>{TRANSFER_FALLBACK_MESSAGE}</Say><Hangup/>`
 otherwise. This is also why there's no `transfer_completed`/`transfer_failed` arm on
@@ -183,6 +183,8 @@ otherwise. This is also why there's no `transfer_completed`/`transfer_failed` ar
 `CallSession` that placed the transfer is already gone and has no listener left to notify. A failed
 *redirect* (the REST call itself, not the eventual dial outcome) is a different, immediate failure —
 `transferCall()` throws, and the tool returns `transfer_failed` to the model directly.
+
+**Screening (#74).** A carrier voicemail answers a dial just like a person. On the 2026-09-26 live test, the principal let the transfer ring, their voicemail picked up inside the 20s timeout, and Twilio reported the dial `completed`. The result was recorded as `answered`, and the caller was bridged into voicemail without ever hearing the fallback line. So the `<Number>` carries a `url` (`POST /telephony/twilio/transfer-screen`) that runs on the principal's leg once it picks up, before it is bridged, while the caller keeps hearing ringing (`answerOnBridge`). It says "Your AI assistant is transferring a call to you. Press 1 to take it." twice in a one-digit `<Gather>`. A 1 (`/transfer-screen-result`) is remembered in `TwilioProvider.acceptedTransfers`, and the reply is just "Connecting.", which ends the screen, so Twilio bridges the call. Any other key, or silence, which is what a voicemail greeting gives, falls through to `<Hangup/>` on the principal's leg only. The callback counts a `completed`/`answered` dial as `answered` only if that transfer was accepted, and as `no_answer` otherwise, so the caller hears `TRANSFER_FALLBACK_MESSAGE`. A transfer counts as accepted only if this process saw the key press (`takeTransferAccepted`, read once). Twilio's `DialBridged` would survive a restart and hold across processes, but its docs don't say whether a voicemail picking up before the screen hangs up counts as bridged. If it does, trusting it brings this bug back, so it is logged but not trusted. Revisit once a live call shows its value for both an accepted and a voicemail transfer. The record is kept in memory because inbound transfers have no `call_attempts` row. So a restart between the key press and the callback reports an accepted transfer as `no_answer`, and the caller hears the fallback line after the bridged call. An entry whose callback never arrives is swept after 4 hours, Twilio's default `<Dial>` time limit. The principal's voicemail still records the prompt before the hang-up.
 
 `transferCall()` stops any running recording before redirecting: the callee agreed to a recorded
 call with Banjo, not to recording the principal's bridged conversation, and stopping it is also the
