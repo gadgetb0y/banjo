@@ -1947,6 +1947,48 @@ describe('CallSession: a barge-in around the recording notice (#71)', () => {
     }
   });
 
+  async function bargeInAt(text: string, turnMs: number, atMs: number) {
+    const telephony = makeFakeTelephony();
+    const startRecording = vi.fn(async () => ({ recordingId: 'RE1' }));
+    const s = new CallSession({ ...makeFakeCallSessionOptions({ ...telephony.provider, startRecording }), recordCalls: true });
+    await s.start();
+    voiceAIEmitter.emit('event', { type: 'audio_chunk', chunk: { data: Buffer.alloc(turnMs * 8), sampleRate: 8000 } });
+    voiceAIEmitter.emit('event', { type: 'transcript', role: 'assistant', text, isFinal: true });
+    voiceAIEmitter.emit('event', { type: 'turn_end' });
+    await vi.advanceTimersByTimeAsync(atMs);
+    voiceAIEmitter.emit('event', { type: 'interrupted' });
+    await vi.advanceTimersByTimeAsync(turnMs);
+    return startRecording;
+  }
+
+  it('times the notice by its own sentence, not an earlier "record" in the same turn', async () => {
+    vi.useFakeTimers();
+    try {
+      const startRecording = await bargeInAt(
+        "I'm calling about Banjo's record. Hi, I'm an AI assistant calling on behalf of Steve. This call is recorded.",
+        9000,
+        4000, // past "record." but well before "…is recorded." has played
+      );
+      expect(startRecording).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('treats the notice as ending the turn when digits come before it — a number takes far longer to say than its characters suggest', async () => {
+    vi.useFakeTimers();
+    try {
+      const startRecording = await bargeInAt(
+        'Call Steve at 555-1234. This call is recorded. I am calling to book a haircut for Banjo on Friday.',
+        9000,
+        6000,
+      );
+      expect(startRecording).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('when the notice ends its turn, any barge-in before recording starts cancels it — the estimate runs early, so it may have flushed "…is recorded."', async () => {
     vi.useFakeTimers();
     try {

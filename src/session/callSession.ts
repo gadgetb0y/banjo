@@ -895,11 +895,16 @@ export class CallSession<TCtx = CallContext> {
 /**
  * How far through `text`, by characters, the sentence carrying the recording
  * notice ends (0–1): a rough stand-in for how far through the turn's audio
- * the notice has finished playing.
+ * the notice has finished playing. Every estimate here errs late, toward
+ * treating a barge-in as having flushed the notice: it times the LAST
+ * "record" in the line (an earlier "Banjo's record" isn't the notice), and
+ * gives up (1, the turn's end) when digits come first, since a phone number
+ * takes far longer to say than its characters suggest.
  */
 function noticeFraction(text: string): number {
-  const match = RECORDING_NOTICE.exec(text);
-  if (!match || text.length === 0) return 1;
+  const matches = [...text.matchAll(new RegExp(RECORDING_NOTICE.source, 'gi'))];
+  const match = matches[matches.length - 1];
+  if (!match || /\d/.test(text.slice(0, match.index))) return 1;
   const sentenceEnd = text.slice(match.index).search(/[.!?]/);
   return sentenceEnd === -1 ? 1 : (match.index + sentenceEnd + 1) / text.length;
 }
