@@ -1734,8 +1734,10 @@ describe('CallSession: voicemail delivery (#71)', () => {
     }
   });
 
-  it('reports no delivery when someone answers during the message — a live reply, not the greeting', async () => {
+  it('reports no delivery when someone answers during the message, on a provider with no barge-in events (openai-live)', async () => {
     vi.useFakeTimers();
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (fakeVoiceAI as any).emitsInterruptions = false;
     try {
       const { done, report } = await voicemailSession();
       await throughOpener();
@@ -1747,6 +1749,63 @@ describe('CallSession: voicemail delivery (#71)', () => {
       await vi.advanceTimersByTimeAsync(0);
       await done;
       expect(report()).toMatchObject({ matched: false });
+    } finally {
+      vi.useRealTimers();
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      delete (fakeVoiceAI as any).emitsInterruptions;
+    }
+  });
+
+  it("ignores a user line before the opener has played, on a provider with no barge-in events — likely the greeting's late transcript", async () => {
+    vi.useFakeTimers();
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (fakeVoiceAI as any).emitsInterruptions = false;
+    try {
+      const { done, report } = await voicemailSession();
+      await throughOpener(3000); // generated, still playing
+      emit({ type: 'transcript', role: 'user', text: 'Leave a message after the tone.', isFinal: true });
+      say(MESSAGE);
+      emit({ type: 'turn_end' });
+      await vi.advanceTimersByTimeAsync(4000);
+      await done;
+      expect(report()).toMatchObject({ matched: true });
+    } finally {
+      vi.useRealTimers();
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      delete (fakeVoiceAI as any).emitsInterruptions;
+    }
+  });
+
+  it('ignores user lines on a provider that reports barge-ins itself — a real reply shows up as an interruption there, a transcriber hallucination does not', async () => {
+    vi.useFakeTimers();
+    try {
+      const { done, report } = await voicemailSession();
+      await throughOpener(0);
+      say(MESSAGE);
+      speak(10_000);
+      emit({ type: 'turn_end' });
+      await vi.advanceTimersByTimeAsync(4000);
+      emit({ type: 'transcript', role: 'user', text: 'Thank you.', isFinal: true }); // post-beep hiss, transcribed (#25)
+      await vi.advanceTimersByTimeAsync(7000);
+      await done;
+      expect(report()).toMatchObject({ matched: true });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('leaves no turn-end wait behind once delivery is cut off', async () => {
+    vi.useFakeTimers();
+    try {
+      const { done, telephony } = await voicemailSession();
+      const session = vi.mocked(fakeVoiceAI.sayVerbatim);
+      emit({ type: 'turn_end' });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(session).toHaveBeenCalledTimes(1);
+      telephony.emit({ type: 'ended', callId: 'call-attempt-1', reason: 'stop' });
+      await vi.advanceTimersByTimeAsync(0);
+      await done;
+      expect(vi.getTimerCount()).toBe(0);
     } finally {
       vi.useRealTimers();
     }
@@ -1837,12 +1896,37 @@ describe('CallSession: voicemail delivery (#71)', () => {
   });
 });
 
-describe('CallSession: a barge-in just after the notice has played keeps the recording (#71)', () => {
+describe('CallSession: a barge-in around the recording notice (#71)', () => {
   beforeEach(() => {
     voiceAIEmitter.removeAllListeners('event');
   });
 
-  it('still starts — the notice was heard, the callee just answered quickly', async () => {
+  it('keeps the recording when the callee backchannels after the notice, while the rest of the opening turn is still playing', async () => {
+    vi.useFakeTimers();
+    try {
+      const telephony = makeFakeTelephony();
+      const startRecording = vi.fn(async () => ({ recordingId: 'RE1' }));
+      const s = new CallSession({ ...makeFakeCallSessionOptions({ ...telephony.provider, startRecording }), recordCalls: true });
+      await s.start();
+      // ~9s turn; the notice ends about 60% of the way through its words.
+      voiceAIEmitter.emit('event', { type: 'audio_chunk', chunk: { data: Buffer.alloc(9000 * 8), sampleRate: 8000 } });
+      voiceAIEmitter.emit('event', {
+        type: 'transcript',
+        role: 'assistant',
+        text: "Hi, I'm an AI assistant calling on behalf of Steve. This call is recorded. I'm calling to book a haircut for Banjo.",
+        isFinal: true,
+      });
+      voiceAIEmitter.emit('event', { type: 'turn_end' });
+      await vi.advanceTimersByTimeAsync(7500); // the purpose sentence is playing
+      voiceAIEmitter.emit('event', { type: 'interrupted' }); // "Mm-hm."
+      await vi.advanceTimersByTimeAsync(3000);
+      expect(startRecording).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('once a scheduled start is cancelled, never starts on some later line that merely says "recorded"', async () => {
     vi.useFakeTimers();
     try {
       const telephony = makeFakeTelephony();
@@ -1852,12 +1936,34 @@ describe('CallSession: a barge-in just after the notice has played keeps the rec
       voiceAIEmitter.emit('event', { type: 'audio_chunk', chunk: { data: Buffer.alloc(3000 * 8), sampleRate: 8000 } });
       voiceAIEmitter.emit('event', { type: 'transcript', role: 'assistant', text: "Hi, I'm an AI assistant. This call is recorded.", isFinal: true });
       voiceAIEmitter.emit('event', { type: 'turn_end' });
-      await vi.advanceTimersByTimeAsync(3200); // played out, still inside the start margin
-      voiceAIEmitter.emit('event', { type: 'interrupted' }); // "Oh, hi!"
       await vi.advanceTimersByTimeAsync(1000);
-      expect(startRecording).toHaveBeenCalledTimes(1);
+      voiceAIEmitter.emit('event', { type: 'interrupted' }); // the notice is flushed
+      voiceAIEmitter.emit('event', { type: 'transcript', role: 'assistant', text: "Got it, I've recorded that.", isFinal: true });
+      voiceAIEmitter.emit('event', { type: 'turn_end' });
+      await vi.advanceTimersByTimeAsync(5000);
+      expect(startRecording).not.toHaveBeenCalled();
     } finally {
       vi.useRealTimers();
     }
   });
+
+  it('when the notice ends its turn, any barge-in before recording starts cancels it — the estimate runs early, so it may have flushed "…is recorded."', async () => {
+    vi.useFakeTimers();
+    try {
+      const telephony = makeFakeTelephony();
+      const startRecording = vi.fn(async () => ({ recordingId: 'RE1' }));
+      const s = new CallSession({ ...makeFakeCallSessionOptions({ ...telephony.provider, startRecording }), recordCalls: true });
+      await s.start();
+      voiceAIEmitter.emit('event', { type: 'audio_chunk', chunk: { data: Buffer.alloc(3000 * 8), sampleRate: 8000 } });
+      voiceAIEmitter.emit('event', { type: 'transcript', role: 'assistant', text: "Hi, I'm an AI assistant. This call is recorded.", isFinal: true });
+      voiceAIEmitter.emit('event', { type: 'turn_end' });
+      await vi.advanceTimersByTimeAsync(3200); // estimated played out, still inside the margin
+      voiceAIEmitter.emit('event', { type: 'interrupted' }); // "Oh, hi!"
+      await vi.advanceTimersByTimeAsync(1000);
+      expect(startRecording).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
 });

@@ -190,6 +190,8 @@ function toLiveTools(tools: ToolDefinition[]): unknown[] {
 
 export class OpenAILiveProvider implements VoiceAIProvider {
   readonly name = 'openai-live';
+  /** No interruption event exists on this wire (open risk #15). */
+  readonly emitsInterruptions = false;
 
   private ws: WebSocket | undefined;
   private emitter = new EventEmitter();

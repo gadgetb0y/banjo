@@ -131,6 +131,13 @@ export interface VoiceAIProvider {
    * instead of trusting that an earlier, unconstrained model turn happened
    * to say the exact right words before the tool call reported it delivered.
    */
+  /**
+   * Optional; false for a provider that never emits 'interrupted' on a
+   * barge-in (openai-live — full duplex, no interruption event). CallSession
+   * then treats the callee's words during a verbatim delivery as the sign
+   * they answered (#71). Absent means it does emit them.
+   */
+  readonly emitsInterruptions?: boolean;
   sayVerbatim(text: string): void;
   /**
    * Optional. A provider that cannot guarantee verbatim delivery (openai-live
