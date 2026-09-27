@@ -89,6 +89,8 @@ function generateSilencePcm16(durationMs: number): Buffer {
 const TRANSFER_SCREEN_PROMPT = 'Your AI assistant is transferring a call to you. Press 1 to take it.';
 /** Seconds the screen waits for a key after the prompt, per Twilio <Gather>. */
 const TRANSFER_SCREEN_TIMEOUT_S = 5;
+/** How long an accepted screen waits for its transfer callback before it's swept; a bridged call rarely lasts this long, and DialBridged covers one that does. */
+const ACCEPTED_TRANSFER_TTL_MS = 60 * 60_000;
 
 /**
  * Twilio telephony adapter: REST call origination via the `twilio` SDK, plus
@@ -106,12 +108,13 @@ export class TwilioProvider implements TelephonyProvider {
   private readonly emitter = new EventEmitter();
   private readonly calls = new Map<string, TwilioCallState>();
   /**
-   * Transfers whose principal pressed 1 at the screening prompt (#74), until
-   * the transfer callback takes the entry. Per process, like `calls`: a
-   * restart between the press and the callback reports an accepted transfer
-   * as no_answer, and the caller hears the fallback line after the call.
+   * Transfers whose principal pressed 1 at the screening prompt (#74), and
+   * when, until the transfer callback takes the entry. Per process, like
+   * `calls`; the callback also trusts Twilio's own DialBridged, which
+   * survives a restart. An entry whose callback never comes is swept after
+   * ACCEPTED_TRANSFER_TTL_MS.
    */
-  private readonly acceptedTransfers = new Set<string>();
+  private readonly acceptedTransfers = new Map<string, number>();
   /** Calls forgotten recently, so a repeat hangUp() isn't mistaken for an unknown call. Capped: oldest dropped first. */
   private readonly recentlyEnded = new Set<string>();
   private readonly inboundRegistrationTimers = new Map<string, NodeJS.Timeout>();
@@ -639,11 +642,17 @@ export class TwilioProvider implements TelephonyProvider {
     return response.toString();
   }
 
-  /** The principal's answer to the screening prompt (#74): a 1 bridges the call (an empty response ends the screen), anything else hangs up their leg. */
+  /** The principal's answer to the screening prompt (#74): a 1 bridges the call (once this response ends, so does the screen), anything else hangs up their leg. */
   acceptTransferScreen(callId: string, digits: string): string {
     const response = new twilioLib.twiml.VoiceResponse();
-    if (digits === '1') this.acceptedTransfers.add(callId);
-    else response.hangup();
+    if (digits === '1') {
+      const now = Date.now();
+      for (const [id, at] of this.acceptedTransfers) if (now - at > ACCEPTED_TRANSFER_TTL_MS) this.acceptedTransfers.delete(id);
+      this.acceptedTransfers.set(callId, now);
+      response.say('Connecting.');
+    } else {
+      response.hangup();
+    }
     return response.toString();
   }
 

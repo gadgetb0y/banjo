@@ -555,7 +555,9 @@ describe('TwilioProvider: transfer screening (#74)', () => {
     const twiml = new TwilioProvider().buildTransferScreenTwiml('CA-9');
     expect(twiml).toMatch(/<Gather[^>]*numDigits="1"/);
     expect(twiml).toMatch(/<Gather[^>]*action="https:\/\/[^"]+\/telephony\/twilio\/transfer-screen-result\?callId=CA-9"/);
-    expect(twiml).toMatch(/<Say[^>]*>[^<]*[Pp]ress 1[^<]*<\/Say><\/Gather>/);
+    expect(twiml).toMatch(/<Say[^>]*loop="2"[^>]*>[^<]*[Pp]ress 1[^<]*<\/Say><\/Gather>/);
+    expect(twiml).toMatch(/<Gather[^>]*timeout="5"/);
+    expect(twiml).not.toContain('actionOnEmptyResult'); // no key must fall through to the hang-up
     expect(twiml).toMatch(/<\/Gather><Hangup\/><\/Response>$/);
   });
 
@@ -563,6 +565,7 @@ describe('TwilioProvider: transfer screening (#74)', () => {
     const provider = new TwilioProvider();
     const twiml = provider.acceptTransferScreen('CA-10', '1');
     expect(twiml).not.toContain('Hangup');
+    expect(twiml).toMatch(/<Say>Connecting\.<\/Say><\/Response>$/); // then the screen ends, and Twilio bridges
     expect(provider.takeTransferAccepted('CA-10')).toBe(true);
     expect(provider.takeTransferAccepted('CA-10')).toBe(false);
   });
@@ -572,5 +575,27 @@ describe('TwilioProvider: transfer screening (#74)', () => {
     const twiml = provider.acceptTransferScreen('CA-11', digits);
     expect(twiml).toContain('<Hangup/>');
     expect(provider.takeTransferAccepted('CA-11')).toBe(false);
+  });
+
+  it('keeps acceptances apart per call', () => {
+    const provider = new TwilioProvider();
+    provider.acceptTransferScreen('CA-12', '1');
+    expect(provider.takeTransferAccepted('CA-13')).toBe(false);
+    expect(provider.takeTransferAccepted('CA-12')).toBe(true);
+  });
+
+  it('forgets an acceptance whose transfer callback never came, after an hour', () => {
+    vi.useFakeTimers();
+    try {
+      const provider = new TwilioProvider();
+      provider.acceptTransferScreen('CA-14', '1');
+      vi.advanceTimersByTime(61 * 60_000);
+      provider.acceptTransferScreen('CA-15', '1'); // any later acceptance sweeps stale ones
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      expect((provider as any).acceptedTransfers.has('CA-14')).toBe(false);
+      expect(provider.takeTransferAccepted('CA-15')).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

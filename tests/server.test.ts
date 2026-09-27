@@ -392,6 +392,23 @@ describe('POST /telephony/twilio/transfer-callback (#7)', () => {
     expect(buildTransferCallbackTwiml).toHaveBeenCalledWith(result);
   });
 
+  it('counts a completed dial as answered when the principal accepted it at the screen (#74)', async () => {
+    takeTransferAccepted.mockReturnValueOnce(true);
+    await post('?callId=attempt-1', { DialCallStatus: 'completed' });
+    expect(recordTransferResult).toHaveBeenCalledWith('attempt-1', 'answered');
+  });
+
+  it("counts a completed dial as answered when Twilio says it bridged, even if this process never saw the key press — a restart, or another process (#74)", async () => {
+    takeTransferAccepted.mockReturnValueOnce(false);
+    await post('?callId=attempt-1', { DialCallStatus: 'completed', DialBridged: 'true' });
+    expect(recordTransferResult).toHaveBeenCalledWith('attempt-1', 'answered');
+  });
+
+  it.each([['no-answer'], ['busy'], ['failed']])('reads the screen result even for DialCallStatus=%s, so a late 1 is not left behind (#74)', async (dialStatus) => {
+    await post('?callId=attempt-1', { DialCallStatus: dialStatus });
+    expect(takeTransferAccepted).toHaveBeenCalledWith('attempt-1');
+  });
+
   it("counts a completed dial the principal never accepted as no_answer — their voicemail picked up (#74)", async () => {
     takeTransferAccepted.mockReturnValueOnce(false);
     await post('?callId=attempt-1', { DialCallStatus: 'completed' });
@@ -412,6 +429,7 @@ describe('POST /telephony/twilio/transfer-callback (#7)', () => {
     const res = await post('?callId=attempt-1', { DialCallStatus: 'completed' }, 'bad-signature');
     expect(res.status).toBe(403);
     expect(recordTransferResult).not.toHaveBeenCalled();
+    expect(takeTransferAccepted).not.toHaveBeenCalled(); // a forged callback can't consume a real acceptance
   });
 });
 
@@ -460,6 +478,7 @@ describe('transfer screening routes (#74)', () => {
       const res = await post(path, { Digits: '1' }, 'bad-signature');
       expect(res.status).toBe(403);
       expect(acceptTransferScreen).not.toHaveBeenCalled();
+      expect(buildTransferScreenTwiml).not.toHaveBeenCalled();
     },
   );
 });

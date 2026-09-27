@@ -114,7 +114,9 @@ app.post('/telephony/twilio/amd-callback', async (c) => {
  * Twilio's DialCallStatus, as recorded on call_attempts.transfer_result.
  * Anything unknown counts as failed. A dial the principal's line picked up
  * counts as answered only if they accepted it at the screen (#74): their
- * voicemail picks up too, and Twilio reports that as completed.
+ * voicemail picks up too, and Twilio reports that as completed. Accepted is
+ * this process's record of the key press, or Twilio's DialBridged, which
+ * survives a restart and holds across processes.
  */
 function transferResultFrom(dialCallStatus: unknown, accepted: boolean): TransferResult {
   switch (dialCallStatus) {
@@ -143,10 +145,14 @@ app.post('/telephony/twilio/transfer-callback', async (c) => {
     return c.body(null, 403);
   }
   const callId = c.req.query('callId') ?? '';
-  const result = transferResultFrom(body.DialCallStatus, telephony.takeTransferAccepted(callId));
+  const acceptedHere = telephony.takeTransferAccepted(callId);
+  const bridged = body.DialBridged === 'true';
+  const result = transferResultFrom(body.DialCallStatus, acceptedHere || bridged);
   try {
     const recorded = await recordTransferResult(callId, result);
-    logger.info({ callId, result, recorded }, 'transfer dial ended');
+    // Both acceptance signals are logged until a live call shows how Twilio
+    // sets DialBridged after a screen (#74).
+    logger.info({ callId, result, recorded, acceptedHere, bridged, dialCallStatus: body.DialCallStatus }, 'transfer dial ended');
   } catch (err) {
     logger.error({ err, callId, result }, 'could not record the transfer result');
   }
