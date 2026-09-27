@@ -187,6 +187,8 @@ cp .env.example .env   # fill in ASSISTANT_PRINCIPAL_NAME + everything from step
 docker compose up      # Postgres + Banjo; migrations are applied on boot
 ```
 
+`docker compose up` pulls the published image, `ghcr.io/shatch/banjo`, built for amd64 and arm64 on each release. Set `BANJO_VERSION` in `.env` to pin a release, for example `0.1.0`. The default is `latest`. To run your own checkout instead, use `docker compose up --build`.
+
 Or to develop against it locally, with hot reload:
 
 ```bash

@@ -18,6 +18,10 @@ services:
       retries: 12
 
   app:
+    # The published image for this release (#40). `docker compose up` pulls
+    # it; `docker compose up --build` builds from this checkout instead and
+    # tags the result the same way. Pin a version with BANJO_VERSION in .env.
+    image: ghcr.io/shatch/banjo:${BANJO_VERSION:-latest}
     build: .
     restart: unless-stopped
     # node as PID 1 ignores SIGTERM, so without an init `docker compose down`
