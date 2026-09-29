@@ -264,7 +264,16 @@ export class CallSession<TCtx = CallContext> {
         outputAudioFormat: this.outputFormat.output,
       });
     } catch (err) {
+      if (this.isEnding()) return;
       await this.fail('voice_ai_connect_failed', err);
+      return;
+    }
+
+    // The call can end while the voice AI is still connecting — a call that
+    // fails at once, reported by Twilio's status callback (#79). end() has
+    // already disconnected, before this connection existed, so close it now.
+    if (this.isEnding()) {
+      await this.voiceAI.disconnect().catch(() => {});
       return;
     }
 

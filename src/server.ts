@@ -27,6 +27,7 @@ interface TwilioHttpHooks {
   buildTwiml(callId: string): string;
   handleMediaStreamConnection(ws: WebSocket): void;
   handleAmdCallback(callId: string, answeredBy: string): void;
+  handleStatusCallback(callId: string, callStatus: string): void;
   buildInboundTwiml(): string;
   buildDeclineTwiml(): string;
   isAnyCallActive(): boolean;
@@ -107,6 +108,21 @@ app.post('/telephony/twilio/amd-callback', async (c) => {
   const answeredBy = typeof body.AnsweredBy === 'string' ? body.AnsweredBy : 'unknown';
   logger.info({ callId, answeredBy }, 'AMD callback received');
   telephony.handleAmdCallback(callId, answeredBy);
+  return c.body(null, 204);
+});
+
+// An outbound call's final status (#79) — how Banjo learns a call that never
+// connected (busy, no answer, failed) is over.
+app.post('/telephony/twilio/status-callback', async (c) => {
+  const body = await c.req.parseBody();
+  if (!isValidTwilioSignature(c, body as Record<string, string>)) {
+    logger.warn({ path: c.req.path }, 'rejected Twilio webhook with invalid or missing signature');
+    return c.body(null, 403);
+  }
+  const callId = c.req.query('callId') ?? '';
+  const callStatus = typeof body.CallStatus === 'string' ? body.CallStatus : '';
+  logger.info({ callId, callStatus }, 'call status callback received');
+  telephony.handleStatusCallback(callId, callStatus);
   return c.body(null, 204);
 });
 
