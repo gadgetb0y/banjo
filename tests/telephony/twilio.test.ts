@@ -603,3 +603,79 @@ describe('TwilioProvider: transfer screening (#74)', () => {
     }
   });
 });
+
+describe('TwilioProvider status callback (#79)', () => {
+  /** A provider with `callId` originated (REST mocked) but no media stream opened yet. */
+  async function providerWithOriginatedCall(callId = 'call-1') {
+    const provider = new TwilioProvider();
+    const create = vi.fn(async () => ({ sid: 'CA-out-1' }));
+    Object.defineProperty((provider as any).client, 'calls', { value: Object.assign(vi.fn(), { create }), configurable: true });
+    await provider.originateCall({ to: '+15555550100', callId });
+    const events: TelephonyEvent[] = [];
+    provider.on('event', (e) => events.push(e));
+    return { provider, create, events };
+  }
+
+  it('asks Twilio for a status callback carrying our callId', async () => {
+    const { create } = await providerWithOriginatedCall();
+
+    expect(create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        statusCallback: expect.stringContaining('/telephony/twilio/status-callback?callId=call-1'),
+        statusCallbackMethod: 'POST',
+        statusCallbackEvent: ['completed'],
+      }),
+    );
+  });
+
+  it.each(['failed', 'busy', 'no-answer', 'canceled', 'completed'])(
+    "ends a call that never connected when Twilio reports '%s'",
+    async (status) => {
+      const { provider, events } = await providerWithOriginatedCall();
+
+      provider.handleStatusCallback('call-1', status);
+
+      expect(events).toHaveLength(1);
+      expect(events[0]).toMatchObject({ callId: 'call-1', type: 'ended' });
+      expect((events[0] as { reason: string }).reason).not.toBe('');
+      // Forgotten, so a later hangUp() from the session's teardown is a quiet no-op.
+      fakeLog.warn.mockClear();
+      await provider.hangUp('call-1');
+      expect(fakeLog.warn).not.toHaveBeenCalledWith(expect.anything(), expect.stringContaining('no known providerCallId'));
+    },
+  );
+
+  it('ignores a status for a call whose media stream opened — the stream owns its end', async () => {
+    const { provider, events } = await providerWithOriginatedCall();
+    const ws = fakeWebSocket();
+    provider.handleMediaStreamConnection(ws as never);
+    ws.emitMessage({ event: 'start', start: { streamSid: 'MZ1', callSid: 'CA-out-1', customParameters: { callId: 'call-1' } } });
+    events.length = 0;
+
+    provider.handleStatusCallback('call-1', 'completed');
+
+    expect(events).toEqual([]);
+  });
+
+  it('ignores a status arriving after the stream already ended the call', async () => {
+    const { provider, events } = await providerWithOriginatedCall();
+    const ws = fakeWebSocket();
+    provider.handleMediaStreamConnection(ws as never);
+    ws.emitMessage({ event: 'start', start: { streamSid: 'MZ1', callSid: 'CA-out-1', customParameters: { callId: 'call-1' } } });
+    ws.emitMessage({ event: 'stop' });
+    events.length = 0;
+
+    provider.handleStatusCallback('call-1', 'completed');
+
+    expect(events).toEqual([]);
+  });
+
+  it('ignores unknown calls and non-final statuses', async () => {
+    const { provider, events } = await providerWithOriginatedCall();
+
+    provider.handleStatusCallback('some-other-call', 'failed');
+    provider.handleStatusCallback('call-1', 'ringing');
+
+    expect(events).toEqual([]);
+  });
+});

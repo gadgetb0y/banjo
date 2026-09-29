@@ -93,6 +93,20 @@ const TRANSFER_SCREEN_TIMEOUT_S = 5;
 const ACCEPTED_TRANSFER_TTL_MS = 4 * 60 * 60_000;
 
 /**
+ * The final CallStatus values handleStatusCallback acts on, and the reason each
+ * one gives the task — the text the owner's notification shows. 'completed'
+ * without a media stream means the call was answered but Banjo's audio never
+ * connected (e.g. the TwiML fetch failed).
+ */
+const NEVER_CONNECTED_REASONS: Record<string, string> = {
+  busy: 'The line was busy, so the call never connected.',
+  'no-answer': 'Nobody answered; the call rang out without connecting.',
+  failed: "The call couldn't be connected. Twilio reported it as failed; the number may not accept calls.",
+  canceled: 'The call was canceled before it connected.',
+  completed: "The call ended before Banjo's audio connected.",
+};
+
+/**
  * Twilio telephony adapter: REST call origination via the `twilio` SDK, plus
  * the Media Streams WebSocket side for bidirectional audio once the call is
  * connected. The webhook routes that return buildTwiml()/buildInboundTwiml()'s
@@ -151,6 +165,13 @@ export class TwilioProvider implements TelephonyProvider {
       asyncAmdStatusCallback: opts.answeringMachineDetection
         ? `https://${config.PUBLIC_HOSTNAME}/telephony/twilio/amd-callback?callId=${opts.callId}`
         : undefined,
+      // A call that never connects (busy, no answer, failed) never fetches the
+      // TwiML or opens a media stream, so without this nothing reaches Banjo and
+      // the task sat in 'calling' until the stale-call sweep (#79). 'completed'
+      // is Twilio's terminal event and carries every final CallStatus.
+      statusCallback: `https://${config.PUBLIC_HOSTNAME}/telephony/twilio/status-callback?callId=${opts.callId}`,
+      statusCallbackMethod: 'POST',
+      statusCallbackEvent: ['completed'],
     });
 
     const state = this.calls.get(opts.callId);
@@ -477,6 +498,25 @@ export class TwilioProvider implements TelephonyProvider {
     const KNOWN_VALUES = new Set(['human', 'machine_start', 'fax', 'unknown']);
     const normalized = KNOWN_VALUES.has(answeredBy) ? (answeredBy as 'human' | 'machine_start' | 'fax' | 'unknown') : 'unknown';
     const event: TelephonyEvent = { callId, type: 'answering_machine_detected', answeredBy: normalized };
+    this.emitter.emit('event', event);
+  }
+
+  /**
+   * Called by the server's `/telephony/twilio/status-callback` route with a
+   * call's final CallStatus (#79). Only acts on a call that never opened its
+   * media stream: once the stream is open, its 'stop' or socket close already
+   * ends the call, and a 'completed' arriving after that finds the call
+   * forgotten here and is ignored. A call this process doesn't know about
+   * (e.g. placed before a restart) is left to the stale-call sweep.
+   */
+  handleStatusCallback(callId: string, callStatus: string): void {
+    const state = this.calls.get(callId);
+    if (!state || state.ws) return;
+    const reason = NEVER_CONNECTED_REASONS[callStatus];
+    if (!reason) return;
+    logger.info({ callId, callStatus }, 'Twilio reported the call ended before its media stream connected');
+    this.forgetCall(callId);
+    const event: TelephonyEvent = { callId, type: 'ended', reason };
     this.emitter.emit('event', event);
   }
 

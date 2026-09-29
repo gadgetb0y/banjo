@@ -2009,3 +2009,31 @@ describe('CallSession: a barge-in around the recording notice (#71)', () => {
   });
 
 });
+
+describe('CallSession: call ends while the voice AI is still connecting (#79)', () => {
+  it('ends the call with the telephony reason and closes the voice AI connection once it opens', async () => {
+    // A call Twilio fails at once reports 'ended' (via its status callback)
+    // before voiceAI.connect() resolves. end() disconnects before that
+    // connection exists, so start() must close it afterwards, or it stays open.
+    const telephony = makeFakeTelephony();
+    const options = makeFakeCallSessionOptions(telephony.provider);
+    let finishConnect!: () => void;
+    fakeVoiceAI.connect.mockImplementationOnce(() => new Promise<void>((resolve) => (finishConnect = resolve)));
+    const session = new CallSession(options);
+
+    const started = session.start();
+    await vi.waitFor(() => expect(fakeVoiceAI.connect).toHaveBeenCalled());
+    telephony.emit({ callId: callAttempt.id, type: 'ended', reason: 'The line was busy, so the call never connected.' });
+    await vi.waitFor(() => expect(options.notifyIfTerminal).toHaveBeenCalled());
+    const disconnectsBeforeConnect = fakeVoiceAI.disconnect.mock.calls.length;
+
+    finishConnect();
+    await started;
+
+    expect(options.onStatusChange).toHaveBeenCalledWith(
+      expect.objectContaining({ kind: 'ended', reason: 'The line was busy, so the call never connected.' }),
+    );
+    expect(fakeVoiceAI.disconnect.mock.calls.length).toBe(disconnectsBeforeConnect + 1);
+    expect(options.onFailure).not.toHaveBeenCalled();
+  });
+});
