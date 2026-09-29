@@ -155,6 +155,38 @@ is upgraded. A Calendar-only token shows up in the logs as a single line:
 `Google Contacts sync failed: GOOGLE_OAUTH_REFRESH_TOKEN lacks the contacts.readonly scope — re-mint it ...`
 (Google's `403 ACCESS_TOKEN_SCOPE_INSUFFICIENT`, detected in `src/googleContacts/googleApiErrors.ts`).
 
+### Checking which scopes a token has
+
+The Cloud Console can't show this. Scopes belong to the refresh token, not the OAuth client, so the
+Credentials page looks the same whether the token has one scope or both. Ask Google instead. This exchanges
+the running container's refresh token for a short-lived access token and prints what it was granted. It
+changes nothing:
+
+```bash
+docker compose exec -T app node -e '
+const p = new URLSearchParams({client_id: process.env.GOOGLE_OAUTH_CLIENT_ID, client_secret: process.env.GOOGLE_OAUTH_CLIENT_SECRET, refresh_token: process.env.GOOGLE_OAUTH_REFRESH_TOKEN, grant_type: "refresh_token"});
+fetch("https://oauth2.googleapis.com/token", {method: "POST", body: p}).then(r => r.json()).then(t => console.log(t.access_token ? "scopes: " + t.scope : "token exchange failed: " + t.error + " " + (t.error_description || "")));'
+```
+
+- `scopes: https://www.googleapis.com/auth/calendar https://www.googleapis.com/auth/contacts.readonly` means
+  the token is good.
+- `calendar` alone means it's Calendar-only. Mint a new one with the steps above.
+- `token exchange failed: invalid_grant` means the token was revoked, expired, or pasted wrong.
+- `token exchange failed: invalid_client` means the client ID or secret doesn't match the one the token was
+  minted with.
+
+This reads the container's environment, so after editing `.env` run `docker compose up -d app` first. A plain
+`restart` keeps the old values. When running Banjo with `npm run dev`, run the same script with
+`node --env-file=.env -e '...'` instead.
+
+To check whether the APIs are enabled without the Console, use the Google Cloud CLI (`gcloud auth login`
+first). The project number is the part of `GOOGLE_OAUTH_CLIENT_ID` before the first `-`:
+
+```bash
+gcloud services list --enabled --project <project-number> | grep -E 'calendar-json|people'
+gcloud services enable people.googleapis.com --project <project-number>   # if People API is missing
+```
+
 To check which APIs are enabled for step 1, use the Cloud Console rather than the API hostnames themselves —
 opening `https://calendar.googleapis.com/` or `https://www.googleapis.com/` in a browser returns Google's generic
 "404. That's an error. The requested URL / was not found on this server," which is expected and means nothing.
