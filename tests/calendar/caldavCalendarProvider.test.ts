@@ -138,6 +138,18 @@ END:VCALENDAR&#13;
     handler = () => new Response('', { status: 401 });
     await expect(provider().isFree({ start: START, durationMinutes: 30 })).rejects.toThrow(/HTTP 401/);
   });
+
+  it("reads a window time with no UTC offset in CALENDAR_TIMEZONE, not the server's own zone", async () => {
+    // Tokyo has no DST and is no test machine's zone, so a Date.parse in the
+    // process zone would land somewhere else.
+    const tokyo = new CaldavCalendarProvider({ calendarUrl: CALENDAR_URL, username: 'me@example.com', password: 'app-password', timeZone: 'Asia/Tokyo' });
+    handler = () => multistatus([]);
+
+    const windows = await tokyo.computeCandidateWindows({ dateWindows: [{ start: '2026-08-05T09:00:00', end: '2026-08-05T10:00:00' }], durationMinutes: 60 });
+
+    expect(requests[0]!.body).toContain('<c:time-range start="20260805T000000Z" end="20260805T010000Z"/>');
+    expect(windows).toEqual([{ start: '2026-08-05T00:00:00.000Z', end: '2026-08-05T01:00:00.000Z' }]);
+  });
 });
 
 describe('CaldavCalendarProvider.createEventIdempotent', () => {
@@ -198,6 +210,16 @@ describe('CaldavCalendarProvider.createEventIdempotent', () => {
 
     expect(result).toEqual({ eventId: EVENT_ID, confirmedStart: START, confirmedEnd: '2026-08-05T18:30:00.000Z' });
   });
+
+  it('throws when the create is refused as a duplicate but no event is there to return', async () => {
+    handler = (req) => {
+      if (req.method === 'GET') return new Response('', { status: 404 });
+      if (req.method === 'REPORT') return multistatus([]);
+      return new Response('', { status: 412 });
+    };
+
+    await expect(provider().createEventIdempotent(input)).rejects.toThrow(/refused as a duplicate but no event found/);
+  });
 });
 
 describe('CaldavCalendarProvider.findEventByIdempotencyKey', () => {
@@ -209,6 +231,15 @@ describe('CaldavCalendarProvider.findEventByIdempotencyKey', () => {
 
   it("reads the event's current times, including after the owner moved it to a zoned time", async () => {
     handler = () => eventBody(['DTSTART;TZID=America/New_York:20260805T150000', 'DTEND;TZID=America/New_York:20260805T153000']);
+    expect(await provider().findEventByIdempotencyKey(KEY)).toEqual({
+      eventId: EVENT_ID,
+      confirmedStart: '2026-08-05T19:00:00.000Z',
+      confirmedEnd: '2026-08-05T19:30:00.000Z',
+    });
+  });
+
+  it('reads the times after the owner edited it in Outlook, which writes a Windows zone name as the TZID', async () => {
+    handler = () => eventBody(['DTSTART;TZID=Eastern Standard Time:20260805T150000', 'DTEND;TZID=Eastern Standard Time:20260805T153000']);
     expect(await provider().findEventByIdempotencyKey(KEY)).toEqual({
       eventId: EVENT_ID,
       confirmedStart: '2026-08-05T19:00:00.000Z',
@@ -230,6 +261,12 @@ describe('CaldavCalendarProvider.deleteEvent', () => {
   it('throws on any other failure', async () => {
     handler = () => new Response('', { status: 500 });
     await expect(provider().deleteEvent(EVENT_ID)).rejects.toThrow(/HTTP 500/);
+  });
+
+  it("refuses an event id Banjo didn't create on CalDAV (e.g. a Google one from before a switch) rather than report it deleted", async () => {
+    handler = () => new Response('', { status: 404 });
+    await expect(provider().deleteEvent('abc123googleeventid')).rejects.toThrow(/not a CalDAV event Banjo created/);
+    expect(requests).toHaveLength(0);
   });
 });
 

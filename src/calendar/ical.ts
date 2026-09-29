@@ -108,8 +108,9 @@ export interface ParsedInstant {
  * Reads a DATE or DATE-TIME property as an instant. UTC ("...Z") is taken
  * as-is; a TZID is honored; a floating time (neither) or an all-day DATE is
  * read in `defaultTimeZone` — CALENDAR_TIMEZONE, the same zone every other
- * time on a call means. An unknown TZID throws (Intl rejects it), which
- * fails the availability check closed instead of guessing a zone.
+ * time on a call means. A common Windows zone name is mapped to its IANA
+ * zone; any other unknown TZID throws (Intl rejects it), which fails the
+ * availability check closed instead of guessing a zone.
  */
 export function parseInstant(prop: ICalProperty, defaultTimeZone: string): ParsedInstant {
   const value = prop.value.trim();
@@ -127,9 +128,37 @@ export function parseInstant(prop: ICalProperty, defaultTimeZone: string): Parse
   if (utc) return { ms: Date.parse(`${naive}Z`), allDay: false };
 
   // Some clients write a path-style TZID ("/America/New_York").
-  const timeZone = prop.params.TZID?.replace(/^\//, '') || defaultTimeZone;
+  const tzid = prop.params.TZID?.replace(/^\//, '');
+  const timeZone = tzid ? (WINDOWS_ZONES[tzid] ?? tzid) : defaultTimeZone;
   return { ms: Date.parse(zonedTimeToUtcIso(naive, timeZone)), allDay: false };
 }
+
+/**
+ * Outlook and Exchange write Windows zone names as the TZID, which Intl
+ * doesn't know. The common ones, mapped as CLDR's windowsZones.xml maps
+ * them (territory "001"); anything else still throws.
+ */
+const WINDOWS_ZONES: Record<string, string> = {
+  'Eastern Standard Time': 'America/New_York',
+  'Central Standard Time': 'America/Chicago',
+  'Mountain Standard Time': 'America/Denver',
+  'US Mountain Standard Time': 'America/Phoenix',
+  'Pacific Standard Time': 'America/Los_Angeles',
+  'Alaskan Standard Time': 'America/Anchorage',
+  'Hawaiian Standard Time': 'Pacific/Honolulu',
+  'Atlantic Standard Time': 'America/Halifax',
+  'Newfoundland Standard Time': 'America/St_Johns',
+  'GMT Standard Time': 'Europe/London',
+  'W. Europe Standard Time': 'Europe/Berlin',
+  'Romance Standard Time': 'Europe/Paris',
+  'Central Europe Standard Time': 'Europe/Budapest',
+  'Central European Standard Time': 'Europe/Warsaw',
+  'AUS Eastern Standard Time': 'Australia/Sydney',
+  'Tokyo Standard Time': 'Asia/Tokyo',
+  'India Standard Time': 'Asia/Calcutta',
+  'China Standard Time': 'Asia/Shanghai',
+  UTC: 'Etc/UTC',
+};
 
 /** An RFC 5545 DURATION ("PT30M", "P1D", "P1W", "-PT15M") in milliseconds. */
 export function parseDurationMs(value: string): number {

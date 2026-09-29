@@ -125,9 +125,12 @@ async function refreshThen<T>(read: () => Promise<T>): Promise<T> {
 }
 
 export async function findByPhone(e164: string, timeoutMs = INBOUND_LOOKUP_TIMEOUT_MS): Promise<GoogleContactMatch | undefined> {
+  // With no source, nothing refreshes the cache — rows left from an earlier
+  // provider would keep naming callers (and ranking them family/friend) as
+  // they were at its last sync, forever.
+  if (config.CONTACTS_PROVIDER === 'none') return undefined;
   const cached = await findCachedByPhone(e164);
   if (cached) return cached;
-  if (config.CONTACTS_PROVIDER === 'none') return undefined;
   if (config.CONTACTS_PROVIDER === 'carddav') return withTimeout(refreshThen(() => findCachedByPhone(e164)), timeoutMs);
   const live = await withTimeout(liveSearch(e164, e164), timeoutMs);
   // No `?? live[0]` fallback: people.searchContacts matches fuzzily, so a
@@ -138,9 +141,9 @@ export async function findByPhone(e164: string, timeoutMs = INBOUND_LOOKUP_TIMEO
 }
 
 export async function findByName(query: string, timeoutMs = OUTBOUND_LOOKUP_TIMEOUT_MS): Promise<GoogleContactMatch[]> {
+  if (config.CONTACTS_PROVIDER === 'none') return []; // see findByPhone
   const cached = await findCachedByName(query);
   if (cached.length > 0) return cached;
-  if (config.CONTACTS_PROVIDER === 'none') return [];
   if (config.CONTACTS_PROVIDER === 'carddav') return (await withTimeout(refreshThen(() => findCachedByName(query)), timeoutMs)) ?? [];
   const live = await withTimeout(liveSearch(query), timeoutMs);
   return live ?? [];

@@ -112,6 +112,12 @@ describe('sweepStaleCalls', () => {
 
     await sweepStaleCalls();
 
-    expect(transitionTask).toHaveBeenCalledWith('task-1', 'failed', expect.anything(), expect.anything());
+    // Never "no booking was found" — the calendar wasn't read, so there may be one.
+    expect(transitionTask).toHaveBeenCalledWith(
+      'task-1',
+      'failed',
+      { outcome: { kind: 'failed', reason: expect.stringMatching(/calendar could not be checked/) } },
+      expect.anything(),
+    );
   });
 });

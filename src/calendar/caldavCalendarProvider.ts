@@ -15,6 +15,7 @@
 import { createHash } from 'node:crypto';
 import { config } from '../config/index.js';
 import { logger } from '../lib/logger.js';
+import { zonedTimeToUtcIso } from '../lib/timezone.js';
 import type { TimeWindow } from '../tasks/schema.js';
 import { davRequest, isOkStatus, parseMultistatus, textOf, type DavCredentials } from '../lib/dav/davHttp.js';
 import { chunkIntoWindows, subtractBusyIntervals, type BusyInterval } from './freeSlots.js';
@@ -62,6 +63,9 @@ export function resourceNameForKey(idempotencyKey: string): string {
   return `banjo-${createHash('sha256').update(idempotencyKey).digest('hex').slice(0, 40)}.ics`;
 }
 
+/** What resourceNameForKey produces — the only event ids this provider ever hands out. */
+const BANJO_RESOURCE_NAME = /^banjo-[0-9a-f]{40}\.ics$/;
+
 export class CaldavCalendarProvider implements CalendarProvider {
   private readonly calendarUrl: string;
   private readonly credentials: DavCredentials;
@@ -82,7 +86,7 @@ export class CaldavCalendarProvider implements CalendarProvider {
     const candidates: TimeWindow[] = [];
     for (const window of dateWindows) {
       const busy = await this.getBusyIntervals(window);
-      const freeIntervals = subtractBusyIntervals({ startMs: Date.parse(window.start), endMs: Date.parse(window.end) }, busy);
+      const freeIntervals = subtractBusyIntervals({ startMs: this.instantMs(window.start), endMs: this.instantMs(window.end) }, busy);
       for (const free of freeIntervals) {
         candidates.push(...chunkIntoWindows(free, durationMinutes));
       }
@@ -91,7 +95,7 @@ export class CaldavCalendarProvider implements CalendarProvider {
   }
 
   async isFree({ start, durationMinutes }: IsFreeInput): Promise<boolean> {
-    const startMs = Date.parse(start);
+    const startMs = this.instantMs(start);
     const endMs = startMs + durationMinutes * MS_PER_MINUTE;
     const busy = await this.getBusyIntervals({ start, end: new Date(endMs).toISOString() });
     return !busy.some((b) => b.startMs < endMs && b.endMs > startMs);
@@ -138,7 +142,7 @@ export class CaldavCalendarProvider implements CalendarProvider {
     }
 
     const eventId = resourceNameForKey(idempotencyKey);
-    const startMs = Date.parse(start);
+    const startMs = this.instantMs(start);
     const endMs = startMs + durationMinutes * MS_PER_MINUTE;
 
     const insertStartedAt = Date.now();
@@ -167,6 +171,12 @@ export class CaldavCalendarProvider implements CalendarProvider {
   }
 
   async deleteEvent(eventId: string): Promise<void> {
+    // Any other id was written by a different provider — a Google event id
+    // stored before CALENDAR_PROVIDER was switched. It can't exist here, so
+    // the 404 below would report success while the real event stays put.
+    if (!BANJO_RESOURCE_NAME.test(eventId)) {
+      throw new Error(`deleteEvent: "${eventId}" is not a CalDAV event Banjo created — was it booked under another CALENDAR_PROVIDER?`);
+    }
     // Already gone (e.g. the owner deleted it by hand) is the outcome we
     // wanted, so it isn't an error — reschedule deletes then recreates, and
     // shouldn't fail on an event that's no longer there.
@@ -177,6 +187,14 @@ export class CaldavCalendarProvider implements CalendarProvider {
       allowStatuses: [404, 410],
     });
     await response.body?.cancel();
+  }
+
+  /**
+   * A time from the call path as epoch ms. Offset-less means CALENDAR_TIMEZONE —
+   * a bare Date.parse would read it in the server's zone (UTC in Docker).
+   */
+  private instantMs(value: string): number {
+    return Date.parse(zonedTimeToUtcIso(value, this.timeZone));
   }
 
   private eventUrl(eventId: string): string {
@@ -190,8 +208,8 @@ export class CaldavCalendarProvider implements CalendarProvider {
    * can show what Banjo will treat as busy.
    */
   async getBusyIntervals(window: TimeWindow): Promise<BusyInterval[]> {
-    const rangeStart = formatUtc(Date.parse(window.start));
-    const rangeEnd = formatUtc(Date.parse(window.end));
+    const rangeStart = formatUtc(this.instantMs(window.start));
+    const rangeEnd = formatUtc(this.instantMs(window.end));
     const response = await davRequest({
       method: 'REPORT',
       url: this.calendarUrl,

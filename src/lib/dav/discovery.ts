@@ -37,6 +37,21 @@ async function propfind(url: string, credentials: DavCredentials, depth: '0' | '
   return { baseUrl: response.url || url, responses: parseMultistatus(await response.text()) };
 }
 
+/**
+ * Guards the app password: discovery follows hrefs the server hands back,
+ * and each request carries Basic auth. The same host, or a sibling under
+ * the same parent domain (iCloud's caldav.icloud.com points at
+ * p52-caldav.icloud.com), is the same service; anything else is refused.
+ */
+function assertSameService(url: string, serverUrl: string): void {
+  const host = new URL(url).hostname;
+  const serverHost = new URL(serverUrl).hostname;
+  if (host === serverHost) return;
+  const parent = (h: string) => h.split('.').slice(1).join('.');
+  if (parent(serverHost).includes('.') && parent(host) === parent(serverHost)) return;
+  throw new Error(`${serverUrl} pointed discovery at ${host}, an unrelated host — not sending the app password there`);
+}
+
 function hrefIn(prop: unknown): string | undefined {
   if (!prop || typeof prop !== 'object') return undefined;
   const hrefs = (prop as { href?: unknown[] }).href;
@@ -56,11 +71,13 @@ export async function discoverCollections(serverUrl: string, credentials: DavCre
   const principalHref = principalLookup.responses.map((r) => hrefIn(okProps(r)['current-user-principal'])).find(Boolean);
   if (!principalHref) throw new Error(`No current-user-principal found at ${start}`);
   const principalUrl = new URL(principalHref, principalLookup.baseUrl).toString();
+  assertSameService(principalUrl, serverUrl);
 
   const homeLookup = await propfind(principalUrl, credentials, '0', homeSet);
   const homeHref = homeLookup.responses.map((r) => hrefIn(okProps(r)[homeSetProp])).find(Boolean);
   if (!homeHref) throw new Error(`No ${homeSetProp} found for principal ${principalUrl}`);
   const homeUrl = new URL(homeHref, homeLookup.baseUrl).toString();
+  assertSameService(homeUrl, serverUrl);
 
   const listing = await propfind(homeUrl, credentials, '1', '<d:displayname/><d:resourcetype/><c:supported-calendar-component-set/>');
 

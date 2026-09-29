@@ -47,8 +47,15 @@ describe('parseInstant', () => {
     expect(new Date(allDay.ms).toISOString()).toBe('2026-08-05T04:00:00.000Z');
   });
 
+  it("maps the Windows zone names Outlook writes as a TZID to the IANA zone they mean", () => {
+    // Pacific, not the default zone, so the mapping — not a fallback — is what's being read.
+    expect(
+      new Date(parseInstant({ name: 'DTSTART', params: { TZID: 'Pacific Standard Time' }, value: '20260805T110000' }, TZ).ms).toISOString(),
+    ).toBe('2026-08-05T18:00:00.000Z');
+  });
+
   it('throws on a TZID Intl does not know, rather than guessing a zone', () => {
-    expect(() => parseInstant({ name: 'DTSTART', params: { TZID: 'Eastern Standard Time' }, value: '20260805T140000' }, TZ)).toThrow();
+    expect(() => parseInstant({ name: 'DTSTART', params: { TZID: 'Mars Standard Time' }, value: '20260805T140000' }, TZ)).toThrow();
   });
 });
 

@@ -31,12 +31,29 @@ export interface AddressBookChanges {
   removedHrefs: string[];
 }
 
+/**
+ * A card's identity: its decoded path, so a server that encodes an href
+ * differently from one reply to the next still names the same card. Only a
+ * key — requests send the server's own href (see multiget), since re-encoding
+ * a decoded path can't restore a `%2F` or `%3F`.
+ */
 function canonicalPath(href: string, base: string): string {
-  return decodeURIComponent(new URL(href, base).pathname).replace(/\/$/, '');
+  const { pathname } = new URL(href, base);
+  let decoded = pathname;
+  try {
+    decoded = decodeURIComponent(pathname);
+  } catch {
+    // A malformed escape ("50%.vcf"). Keep it raw rather than fail the whole sync.
+  }
+  return decoded.replace(/\/$/, '');
+}
+
+function escapeXml(text: string): string {
+  return text.replace(/&/g, '&amp;').replace(/</g, '&lt;');
 }
 
 function syncCollectionBody(syncToken: string | undefined): string {
-  const escaped = (syncToken ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;');
+  const escaped = escapeXml(syncToken ?? '');
   return `<?xml version="1.0" encoding="utf-8"?>
 <d:sync-collection xmlns:d="DAV:" xmlns:card="urn:ietf:params:xml:ns:carddav">
   <d:sync-token>${escaped}</d:sync-token>
@@ -58,8 +75,9 @@ export async function fetchAddressBookChanges(
   const collectionPath = canonicalPath(addressBookUrl, addressBookUrl);
   let token = syncToken;
   let full = !syncToken;
-  // Keyed by href so a card changed twice across continuations keeps its latest state.
-  const latest = new Map<string, { removed: true } | { removed: false; data: string | undefined }>();
+  // Keyed by canonical path so a card changed twice across continuations keeps
+  // its latest state; `href` is the server's own spelling, for multiget.
+  const latest = new Map<string, { removed: true } | { removed: false; href: string; data: string | undefined }>();
 
   for (let continuation = 0; ; continuation++) {
     if (continuation > MAX_CONTINUATIONS) throw new Error(`CardDAV sync of ${addressBookUrl} did not finish after ${MAX_CONTINUATIONS} continuations`);
@@ -95,17 +113,19 @@ export async function fetchAddressBookChanges(
         latest.set(path, { removed: true });
         continue;
       }
-      latest.set(path, { removed: false, data: addressDataOf(item) });
+      latest.set(path, { removed: false, href: item.href, data: addressDataOf(item) });
     }
 
     if (!truncated) break;
+    // Without a new token, asking again just repeats the same truncated read.
+    if (!token) throw new Error(`CardDAV sync of ${addressBookUrl} was truncated with no sync-token to continue from`);
   }
 
   // Some servers list changes without the card data; fetch those in batches.
-  const missing = [...latest].filter(([, v]) => !v.removed && !v.data).map(([href]) => href);
+  const missing = [...latest.values()].flatMap((v) => (!v.removed && !v.data ? [v.href] : []));
   for (let i = 0; i < missing.length; i += MULTIGET_BATCH) {
     const fetched = await multiget(addressBookUrl, credentials, missing.slice(i, i + MULTIGET_BATCH));
-    for (const [href, data] of fetched) latest.set(href, { removed: false, data });
+    for (const [path, { href, data }] of fetched) latest.set(path, { removed: false, href, data });
   }
 
   const changed: AddressBookCard[] = [];
@@ -129,8 +149,9 @@ function addressDataOf(item: DavResponse): string | undefined {
   return undefined;
 }
 
-async function multiget(addressBookUrl: string, credentials: DavCredentials, hrefs: string[]): Promise<Map<string, string>> {
-  const hrefXml = hrefs.map((h) => `<d:href>${encodeURI(h).replace(/&/g, '&amp;')}</d:href>`).join('');
+/** Card data for `hrefs` (as the server spelled them), keyed by canonical path. */
+async function multiget(addressBookUrl: string, credentials: DavCredentials, hrefs: string[]): Promise<Map<string, { href: string; data: string }>> {
+  const hrefXml = hrefs.map((h) => `<d:href>${escapeXml(h)}</d:href>`).join('');
   const response = await davRequest({
     method: 'REPORT',
     url: addressBookUrl,
@@ -142,10 +163,10 @@ async function multiget(addressBookUrl: string, credentials: DavCredentials, hre
   ${hrefXml}
 </card:addressbook-multiget>`,
   });
-  const found = new Map<string, string>();
+  const found = new Map<string, { href: string; data: string }>();
   for (const item of parseMultistatusWithToken(await response.text()).responses) {
     const data = addressDataOf(item);
-    if (data) found.set(canonicalPath(item.href, addressBookUrl), data);
+    if (data) found.set(canonicalPath(item.href, addressBookUrl), { href: item.href, data });
   }
   return found;
 }

@@ -7,8 +7,11 @@ export interface GooglePhoneNumber {
 }
 
 /**
- * Local cache of the principal's own Google Contacts, refreshed by
- * src/googleContacts/sync.ts on a timer (GOOGLE_CONTACTS_SYNC_INTERVAL_HOURS).
+ * Local cache of the principal's own contacts, refreshed on a timer
+ * (CONTACTS_SYNC_INTERVAL_HOURS) from CONTACTS_PROVIDER: Google
+ * (src/googleContacts/sync.ts) or CardDAV (src/carddavContacts/sync.ts,
+ * rows keyed `carddav:<UID>` in googleResourceName). The Google names are
+ * historical.
  * Hot-path lookups (src/googleContacts/lookup.ts) read this table, never the
  * live People API, so an inbound call or outbound find_contact never waits
  * on a network round trip in the common case.

@@ -14,6 +14,21 @@ const e164 = z
   .optional();
 
 /**
+ * A CalDAV/CardDAV collection URL. Every request to it carries the app
+ * password as Basic auth, so plain http is refused — except to this machine,
+ * e.g. a Radicale server for development.
+ */
+const LOOPBACK_HOSTS = new Set(['localhost', '127.0.0.1', '[::1]']);
+const davUrl = (name: string) =>
+  z
+    .string()
+    .url()
+    .refine((v) => {
+      const { protocol, hostname } = new URL(v);
+      return protocol === 'https:' || (protocol === 'http:' && LOOPBACK_HOSTS.has(hostname));
+    }, `${name} must use https — it carries the DAV app password (plain http is allowed only to localhost)`);
+
+/**
  * Single source of truth for process configuration. Parsed once, at import
  * time, so the process fails fast on a missing/invalid value rather than
  * discovering it mid-call. Import this module first in src/index.ts.
@@ -124,10 +139,10 @@ const envSchema = z
     // The one calendar collection to read and write, e.g.
     // https://caldav.fastmail.com/dav/calendars/user/you@fastmail.com/<calendar-id>/
     // `npm run dav:check` lists an account's calendars and address books with their URLs.
-    CALDAV_CALENDAR_URL: z.string().url().optional(),
+    CALDAV_CALENDAR_URL: davUrl('CALDAV_CALENDAR_URL').optional(),
     // The one address book to sync, e.g.
     // https://carddav.fastmail.com/dav/addressbooks/user/you@fastmail.com/Default/
-    CARDDAV_ADDRESSBOOK_URL: z.string().url().optional(),
+    CARDDAV_ADDRESSBOOK_URL: davUrl('CARDDAV_ADDRESSBOOK_URL').optional(),
 
     GOOGLE_OAUTH_CLIENT_ID: z.string().optional(),
     GOOGLE_OAUTH_CLIENT_SECRET: z.string().optional(),

@@ -101,6 +101,42 @@ describe('fetchAddressBookChanges', () => {
     expect(result.changed.map((c) => c.card.uid)).toEqual(['a']);
   });
 
+  it('reports a removal that arrives on a continuation page, after the card appeared on an earlier one', async () => {
+    replies.push(() => ms('tok-part', ok(`${BOOK_PATH}/a.vcf`, vcard('a', 'Ann')), truncated));
+    replies.push(() => ms('tok-done', gone(`${BOOK_PATH}/a.vcf`)));
+
+    const result = await fetchAddressBookChanges(BOOK, CREDS);
+
+    expect(result.changed).toEqual([]);
+    expect(result.removedHrefs).toEqual([`${BOOK_PATH}/a.vcf`]);
+  });
+
+  it('stops at once when a truncated reply gives no token to continue from, instead of re-reading from scratch', async () => {
+    replies.push(() => new Response(`<d:multistatus xmlns:d="DAV:">${truncated}</d:multistatus>`, { status: 207 }));
+
+    await expect(fetchAddressBookChanges(BOOK, CREDS)).rejects.toThrow(/truncated with no sync-token/);
+    expect(requests).toHaveLength(1);
+  });
+
+  it('keeps syncing past a card whose href has a malformed percent escape', async () => {
+    replies.push(() => ms('tok-1', ok(`${BOOK_PATH}/50%.vcf`, vcard('odd', 'Odd Name')), ok(`${BOOK_PATH}/a.vcf`, vcard('a', 'Ann'))));
+
+    const result = await fetchAddressBookChanges(BOOK, CREDS);
+
+    expect(result.changed.map((c) => c.card.uid)).toEqual(['odd', 'a']);
+  });
+
+  it("asks multiget for a card by the server's own href, so escaped / and ? survive", async () => {
+    const href = `${BOOK_PATH}/a%2Fb%3Fc.vcf`;
+    replies.push(() => ms('tok-1', ok(href)));
+    replies.push(() => ms('', ok(href, vcard('slashy', 'Slash Name'))));
+
+    const result = await fetchAddressBookChanges(BOOK, CREDS);
+
+    expect(requests[1]!.body).toContain(`<d:href>${href}</d:href>`);
+    expect(result.changed.map((c) => c.card.uid)).toEqual(['slashy']);
+  });
+
   it('throws when the server refuses sync-collection outright', async () => {
     replies.push(() => new Response('', { status: 403 }));
     await expect(fetchAddressBookChanges(BOOK, CREDS)).rejects.toThrow(/HTTP 403/);

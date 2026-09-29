@@ -240,9 +240,11 @@ export async function sweepStaleCalls(): Promise<void> {
     // A Calendar outage must not stall the sweep — an honest "we don't know"
     // still beats leaving the task in limbo, which is the bug being fixed.
     let booked: Awaited<ReturnType<typeof calendar.findEventByIdempotencyKey>>;
+    let calendarChecked = true;
     try {
       booked = await calendar.findEventByIdempotencyKey(`confirm:${attempt.id}`);
     } catch (err) {
+      calendarChecked = false;
       logger.error({ err, taskId: task.id }, 'stale-call sweep could not reach the calendar — reporting outcome as unknown');
     }
 
@@ -273,7 +275,11 @@ export async function sweepStaleCalls(): Promise<void> {
         {
           outcome: {
             kind: 'failed',
-            reason: 'The call was interrupted before it finished, and no booking was found on the calendar. Its outcome is unknown.',
+            // Only claim the calendar was empty when it was actually read — a
+            // failed lookup says nothing about whether a booking exists.
+            reason: calendarChecked
+              ? 'The call was interrupted before it finished, and no booking was found on the calendar. Its outcome is unknown.'
+              : 'The call was interrupted before it finished, and the calendar could not be checked for a booking — check it by hand. Its outcome is unknown.',
           },
         },
         { from: ['calling', 'negotiating'] },

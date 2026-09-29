@@ -121,6 +121,20 @@ describe('config: env schema', () => {
     expect(config.CALENDAR_PROVIDER).toBe('caldav');
   });
 
+  it('refuses a plain-http DAV URL, which would send the app password in the clear', async () => {
+    setEnv({ CALDAV_CALENDAR_URL: 'http://caldav.example.com/dav/calendars/user/me/work/' });
+    await expect(import('../src/config/index.js')).rejects.toThrow(/CALDAV_CALENDAR_URL.*https/s);
+  });
+
+  it('allows plain http to localhost, e.g. a Radicale server for development', async () => {
+    setEnv({
+      CARDDAV_ADDRESSBOOK_URL: 'http://localhost:5232/me/contacts/',
+      CALDAV_CALENDAR_URL: 'http://127.0.0.1:5232/me/calendar/',
+    });
+    const { config } = await import('../src/config/index.js');
+    expect(config.CARDDAV_ADDRESSBOOK_URL).toBe('http://localhost:5232/me/contacts/');
+  });
+
   it('fails fast when CONTACTS_PROVIDER=carddav has no address book URL', async () => {
     setEnv({ CONTACTS_PROVIDER: 'carddav', DAV_USERNAME: 'me@example.com', DAV_PASSWORD: 'app-password' });
     await expect(import('../src/config/index.js')).rejects.toThrow(/CARDDAV_ADDRESSBOOK_URL/);

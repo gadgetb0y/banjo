@@ -39,9 +39,10 @@ function emptyState(): SyncState {
   return { syncToken: undefined, uidByHref: new Map(), groups: new Map() };
 }
 
-/** For tests: forget the sync token, as a restart would. */
+/** For tests: forget the sync token and any sync still running, as a restart would. */
 export function resetCardDavSyncState(): void {
   state = emptyState();
+  inFlight = undefined;
 }
 
 function resourceName(uid: string): string {

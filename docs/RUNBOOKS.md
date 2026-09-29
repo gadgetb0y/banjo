@@ -114,7 +114,13 @@ passwords and servers.
 5. **Switch over.** Set `CALENDAR_PROVIDER=caldav` and/or `CONTACTS_PROVIDER=carddav` and restart.
    Boot fails fast if a URL or the `DAV_*` sign-in is missing. On its first CardDAV sync, Banjo makes
    the contacts cache match the address book exactly, which removes any rows from Google Contacts.
-   Your curated `contacts` table isn't touched.
+   Your curated `contacts` table isn't touched. The URLs must be `https` (plain `http` only to
+   `localhost`), since every request carries the app password.
+
+Bookings Banjo made before the switch stay in Google Calendar, and Banjo can no longer move or cancel
+them: a reschedule or mid-call undo of one fails with "not a CalDAV event Banjo created" rather
+than pretending it worked. Change those by hand. Likewise `CONTACTS_PROVIDER=none` ignores the
+contacts cache entirely instead of trusting whatever an earlier provider last synced.
 
 To revoke Banjo's access, delete the app password in Fastmail. Availability checks then fail with
 HTTP 401, and contact syncs log the failure and keep the last cache, until you add a new one.

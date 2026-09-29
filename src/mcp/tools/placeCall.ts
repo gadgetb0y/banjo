@@ -4,11 +4,15 @@ import { zonedTimeToUtcIso } from '../../lib/timezone.js';
 import { checkCallCap, describeCallCapRefusal } from '../../tasks/callCap.js';
 import { createTask } from '../../tasks/service.js';
 import { triggerOrchestration } from '../../tasks/orchestrator.js';
-import type { TaskConstraints } from '../../tasks/schema.js';
+import type { TaskConstraints, TimeWindow } from '../../tasks/schema.js';
 
 const timeWindowSchema = z.object({
-  start: z.string().describe('ISO 8601 datetime marking the start of an acceptable window, e.g. "2026-08-03T15:00:00-07:00".'),
-  end: z.string().describe('ISO 8601 datetime marking the end of an acceptable window.'),
+  start: z
+    .string()
+    .describe(
+      `ISO 8601 date-time marking the start of an acceptable window, e.g. "2026-08-03T15:00:00". Without a UTC offset it's read in ${config.CALENDAR_TIMEZONE}.`,
+    ),
+  end: z.string().describe('ISO 8601 date-time marking the end of an acceptable window, read the same way as start.'),
 });
 
 export const placeCallInputSchema = z.object({
@@ -74,6 +78,23 @@ export function parseScheduledFor(value: string): Date {
   return parsed;
 }
 
+/**
+ * Pins each window to UTC instants before it's stored. An offset-less time
+ * means CALENDAR_TIMEZONE; left as-is, the calendar provider's Date.parse
+ * would read it in the server's own zone (UTC in Docker) and offer times
+ * hours off — see zonedTimeToUtcIso.
+ */
+function normalizeDateWindows(windows: TimeWindow[]): TimeWindow[] {
+  const toUtc = (value: string) => {
+    try {
+      return zonedTimeToUtcIso(value, config.CALENDAR_TIMEZONE);
+    } catch {
+      throw new Error(`constraints.dateWindows: could not parse "${value}" as a date-time, e.g. "2026-08-03T15:00:00"`);
+    }
+  };
+  return windows.map((w) => ({ start: toUtc(w.start), end: toUtc(w.end) }));
+}
+
 /** How far in the past a scheduledFor may be and still call immediately — see placeCallHandler. */
 const SCHEDULED_FOR_PAST_GRACE_MS = 5 * 60 * 1000;
 
@@ -90,7 +111,8 @@ function formatInCalendarTimezone(date: Date): string {
  * call once it's due.
  */
 export async function placeCallHandler(input: z.infer<typeof placeCallInputSchema>): Promise<PlaceCallResult> {
-  const constraints: TaskConstraints = input.constraints ?? {};
+  const constraints: TaskConstraints = { ...input.constraints };
+  if (constraints.dateWindows) constraints.dateWindows = normalizeDateWindows(constraints.dateWindows);
   const scheduledFor = input.scheduledFor ? parseScheduledFor(input.scheduledFor) : undefined;
   // A time well in the past is almost always a mistake (the wrong year, or
   // yesterday's date) — dialing it now could place a real call at the wrong
