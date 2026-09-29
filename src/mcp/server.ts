@@ -1,5 +1,6 @@
 import { timingSafeEqual } from 'node:crypto';
 import type { IncomingMessage, ServerResponse } from 'node:http';
+import { RESPONSE_ALREADY_SENT } from '@hono/node-server/utils/response';
 import type { Context, Hono } from 'hono';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { SSEServerTransport } from '@modelcontextprotocol/sdk/server/sse.js';
@@ -177,16 +178,6 @@ export function createMcpServer(): McpServer {
   return server;
 }
 
-/**
- * @hono/node-server's actual mechanism for "I already wrote the raw Node
- * response myself, don't also serialize a Fetch Response over it" is the
- * `x-hono-already-sent` response header (checked in its listener — there is
- * no separate `RESPONSE_ALREADY_SENT` export in the installed version).
- */
-function alreadySentResponse(): Response {
-  return new Response(null, { headers: { 'x-hono-already-sent': 'true' } });
-}
-
 function requireAuth(c: Context): boolean {
   const authHeader = c.req.header('Authorization') ?? '';
   const expected = `Bearer ${config.MCP_API_KEY}`;
@@ -273,7 +264,11 @@ export function registerMcpRoutes(app: Hono): void {
     // We already wrote the SSE response directly to the raw ServerResponse
     // above (via transport/server.connect). Tell @hono/node-server not to
     // also attempt to serialize a Fetch Response over the same connection.
-    return alreadySentResponse();
+    // Use its own RESPONSE_ALREADY_SENT: from v2, a Response built here with
+    // the x-hono-already-sent header takes a fast path that ignores the
+    // header, writes headers and ends the stream, closing the session at once
+    // ("No transport found for sessionId" on the first POST).
+    return RESPONSE_ALREADY_SENT;
   });
 
   app.post(MCP_MESSAGES_PATH, async (c) => {
@@ -297,6 +292,6 @@ export function registerMcpRoutes(app: Hono): void {
 
     await transport.handlePostMessage(raw.req, raw.res);
 
-    return alreadySentResponse();
+    return RESPONSE_ALREADY_SENT;
   });
 }
