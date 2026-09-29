@@ -8,6 +8,10 @@ import { callsPlacedToContactSince, dueQueuedCallsForContact, withContactAdvisor
  * right before it dials (./orchestrator.ts), so a call scheduled earlier can't
  * slip past it. There is no override — each call is an AI calling a real
  * person, and five in one evening to one friend is how this came about.
+ *
+ * A call counts once it's dialed, whether or not it connected: a busy line,
+ * a call nobody answered and a call Twilio failed all count (#79). Each still
+ * rang, or tried to ring, someone's phone.
  */
 export const CALL_CAP_WINDOW_MS = 24 * 60 * 60 * 1000;
 
