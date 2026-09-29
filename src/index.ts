@@ -4,6 +4,7 @@
 import { config } from './config/index.js';
 import { normalizeStoredPhoneNumbers } from './contacts/service.js';
 import { runMigrations } from './db/migrate.js';
+import { startCardDavContactsSyncPoller } from './carddavContacts/sync.js';
 import { startGoogleContactsSyncPoller } from './googleContacts/sync.js';
 import { logger } from './lib/logger.js';
 import { startServer } from './server.js';
@@ -51,6 +52,7 @@ if (config.RUN_MIGRATIONS_ON_BOOT) {
 
 startServer();
 startOrchestrationPoller();
-startGoogleContactsSyncPoller();
+if (config.CONTACTS_PROVIDER === 'google') startGoogleContactsSyncPoller();
+else if (config.CONTACTS_PROVIDER === 'carddav') startCardDavContactsSyncPoller();
 startTranscriptRetentionSweeper();
 startRecordingRetentionSweeper();

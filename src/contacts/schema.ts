@@ -11,7 +11,7 @@ export const contactCategoryEnum = pgEnum('contact_category', [
 /** 'phone' | 'online' | null (unset — the skill asks Steve once, then persists the answer here). */
 export const preferredChannelEnum = pgEnum('preferred_channel', ['phone', 'online']);
 
-/** null = ordinary/business contact. Derived heuristically from Google Contacts relation/group labels — see src/googleContacts/reconcile.ts. */
+/** null = ordinary/business contact. Derived heuristically from the address book's relation/group labels (Google or CardDAV) — see src/googleContacts/reconcile.ts. */
 export const relationshipTierEnum = pgEnum('relationship_tier', ['family', 'friend']);
 
 export const contacts = pgTable(
@@ -24,7 +24,7 @@ export const contacts = pgTable(
     preferredChannel: preferredChannelEnum('preferred_channel'), // null = ask once, then set
     bookingUrl: text('booking_url'), // used by the schedule-appointment skill's online-booking path
     notes: text('notes'), // free text, injected into the live-call system prompt as context
-    // The three columns below are enrichment from Google Contacts (see
+    // The three columns below are enrichment from the address book cache (see
     // src/googleContacts/reconcile.ts) — never set directly by the skill or
     // add_contact/update_contact's normal callers, and never overwritten
     // once set by anything other than the reconciliation backfill.

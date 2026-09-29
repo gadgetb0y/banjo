@@ -139,3 +139,56 @@ describe('mcp: place_call per-number call cap', () => {
     expect(createTask).toHaveBeenCalled();
   });
 });
+
+describe('mcp: place_call date windows', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    // clearAllMocks keeps queued once-values — drop the refusal the call-cap
+    // block's scheduled-for-later test queues but never consumes.
+    checkCallCap.mockReset();
+    checkCallCap.mockResolvedValue({ allowed: true, placed: 0, queued: 0 });
+  });
+
+  it('stores offset-less window times as UTC instants read in CALENDAR_TIMEZONE, never the server zone', async () => {
+    await placeCallHandler({
+      contactId: CONTACT_ID,
+      taskDescription: 'Book a haircut',
+      constraints: { dateWindows: [{ start: '2026-10-01T15:00:00', end: '2026-10-01T18:00:00' }], durationMinutes: 30 },
+    });
+
+    // 3pm-6pm America/New_York in October is EDT (UTC-4).
+    expect(createTask).toHaveBeenCalledWith(
+      expect.objectContaining({
+        constraints: {
+          dateWindows: [{ start: '2026-10-01T19:00:00.000Z', end: '2026-10-01T22:00:00.000Z' }],
+          durationMinutes: 30,
+        },
+      }),
+    );
+  });
+
+  it('keeps a window time that already carries an offset at the instant it names', async () => {
+    await placeCallHandler({
+      contactId: CONTACT_ID,
+      taskDescription: 'Book a haircut',
+      constraints: { dateWindows: [{ start: '2026-10-01T15:00:00-07:00', end: '2026-10-01T18:00:00Z' }] },
+    });
+
+    expect(createTask).toHaveBeenCalledWith(
+      expect.objectContaining({
+        constraints: { dateWindows: [{ start: '2026-10-01T22:00:00.000Z', end: '2026-10-01T18:00:00.000Z' }] },
+      }),
+    );
+  });
+
+  it('rejects an unparseable window time without creating a task', async () => {
+    await expect(
+      placeCallHandler({
+        contactId: CONTACT_ID,
+        taskDescription: 'Book a haircut',
+        constraints: { dateWindows: [{ start: 'next tuesday', end: '2026-10-01T18:00:00' }] },
+      }),
+    ).rejects.toThrow(/dateWindows/);
+    expect(createTask).not.toHaveBeenCalled();
+  });
+});

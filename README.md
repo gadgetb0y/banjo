@@ -14,7 +14,7 @@ Banjo is the phone half of a pair. The other half is a Claude Code skill
 be done online — and only picks up the phone when it can't.
 
 It also answers your number, if you want it to: an optional inbound line where people can book,
-check or reschedule with you, recognizing callers already in your Google Contacts.
+check or reschedule with you, recognizing callers already in your Google or CardDAV (Fastmail, iCloud) contacts.
 
 ## Hear it
 
@@ -104,6 +104,11 @@ project with one maintainer. Things worth knowing before you build on it:
   noted in your notification, but it isn't prevented.
   **If you're in a jurisdiction with AI-disclosure or two-party-consent rules (TCPA/FCC, California
   AB 2905), check your own calls.** ([#8](https://github.com/shatch/banjo/issues/8))
+- **CalDAV/CardDAV is opt-in and not yet proven on a real call.** Google stays the default. Fastmail,
+  iCloud and Nextcloud work only if you set `CALENDAR_PROVIDER=caldav` and/or `CONTACTS_PROVIDER=carddav`.
+  The code is tested, but no real booking has been made through a CalDAV calendar yet. Until one has,
+  check the first few bookings in your calendar yourself.
+  ([#70](https://github.com/shatch/banjo/pull/70))
 - **Logs are redacted, not access-controlled.** Phone numbers are logged with only the last 4 digits,
   and voicemail text and raw tool arguments as a length. Error messages from vendors can still quote a
   number, and `LOG_TRANSCRIPTS=true` deliberately logs full call text. Treat logs as sensitive.
@@ -157,7 +162,13 @@ Banjo needs four things before it can place a real call — get these first:
    default — Gemini Live and ElevenLabs Conversational AI are supported but flagged
    `NEEDS VERIFICATION` in a few places (see `docs/ARCHITECTURE.md`'s Open Risks section) since they haven't
    carried live call traffic the way the OpenAI path has. Get an API key from whichever you pick.
-3. **A Google OAuth client + refresh token**, if you want live calendar-aware booking and/or Google Contacts
+3. **Calendar and contacts access**, if you want live calendar-aware booking and caller ID. Either
+   CalDAV/CardDAV (Fastmail, iCloud, Nextcloud) with an app password — set `CALENDAR_PROVIDER=caldav`
+   and/or `CONTACTS_PROVIDER=carddav`, see `docs/RUNBOOKS.md`'s "Connecting Fastmail calendar and
+   contacts" — or Google, below. Google is the default. CalDAV/CardDAV is opt-in and hasn't carried
+   a real booking yet (see Known limitations).
+
+   **A Google OAuth client + refresh token**, if you want Google Calendar and/or Google Contacts
    integration (caller-ID personalization, `find_contact` fallback) — the two share one client and one
    refresh token minted with both scopes at once. See `docs/RUNBOOKS.md`'s "Minting `GOOGLE_OAUTH_REFRESH_TOKEN`"
    runbook for the exact steps, and `docs/ARCHITECTURE.md`'s Calendar/Google Contacts sections for how each is
