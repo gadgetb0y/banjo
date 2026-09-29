@@ -1,4 +1,4 @@
-import { and, desc, eq, inArray, isNull, lte, or } from 'drizzle-orm';
+import { and, count, desc, eq, gte, inArray, isNull, lte, or, sql } from 'drizzle-orm';
 import { db } from '../db/index.js';
 import { logger } from '../lib/logger.js';
 import {
@@ -9,6 +9,7 @@ import {
   type TaskConstraints,
   type TaskOutcome,
   type TimeWindow,
+  type TransferResult,
 } from './schema.js';
 
 /**
@@ -191,6 +192,53 @@ export function isTaskDue(task: Pick<Task, 'scheduledFor'>, now: Date = new Date
   return !task.scheduledFor || task.scheduledFor.getTime() <= now.getTime();
 }
 
+/**
+ * Start times of the outbound calls placed to a contact since `since`,
+ * oldest first — for the per-number call cap (./callCap.ts), which needs to
+ * know when enough of them leave the window. Phone numbers are stored in
+ * E.164 and unique (contacts/service.ts's addContact), so per contact is
+ * per number.
+ */
+export async function callsPlacedToContactSince(contactId: string, since: Date): Promise<Date[]> {
+  const rows = await db
+    .select({ startedAt: callAttempts.startedAt })
+    .from(callAttempts)
+    .innerJoin(tasks, eq(callAttempts.taskId, tasks.id))
+    .where(and(eq(tasks.contactId, contactId), gte(callAttempts.startedAt, since)))
+    .orderBy(callAttempts.startedAt);
+  return rows.map((row) => row.startedAt);
+}
+
+/**
+ * Runs `work` holding a Postgres advisory lock for this contact, so dials to
+ * one number are serialized across every process on this database — e.g.
+ * `npm run test:call` alongside `npm run dev` — not just within one. The lock
+ * lives for the transaction; `work` itself may use other connections, and its
+ * writes commit on their own before the lock is released.
+ */
+export async function withContactAdvisoryLock<T>(contactId: string, work: () => Promise<T>): Promise<T> {
+  return db.transaction(async (tx) => {
+    await tx.execute(sql`select pg_advisory_xact_lock(hashtext(${`call-cap:${contactId}`}))`);
+    return work();
+  });
+}
+
+/** Phone tasks for a contact that are due and about to dial but haven't yet — counted by place_call's cap check. */
+export async function dueQueuedCallsForContact(contactId: string, now: Date = new Date()): Promise<number> {
+  const [row] = await db
+    .select({ count: count() })
+    .from(tasks)
+    .where(
+      and(
+        eq(tasks.contactId, contactId),
+        eq(tasks.channel, 'phone'),
+        inArray(tasks.status, ['pending', 'checking_availability']),
+        or(isNull(tasks.scheduledFor), lte(tasks.scheduledFor, now)),
+      ),
+    );
+  return row?.count ?? 0;
+}
+
 // --- Call attempts (phone path only) ---
 
 export async function createCallAttempt(taskId: string): Promise<CallAttempt> {
@@ -217,4 +265,18 @@ export async function updateCallAttempt(
   const [row] = await db.update(callAttempts).set(patch).where(eq(callAttempts.id, id)).returning();
   if (!row) throw new Error(`Call attempt not found: ${id}`);
   return row;
+}
+
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/**
+ * Records how a transfer_to_owner dial ended (#7). `callId` is whatever the
+ * transfer callback was given: a call attempt id for an outbound call, or a
+ * Twilio CallSid for an inbound one, which has no call attempt. Returns
+ * whether a call attempt was updated.
+ */
+export async function recordTransferResult(callId: string, result: TransferResult): Promise<boolean> {
+  if (!UUID_PATTERN.test(callId)) return false;
+  const rows = await db.update(callAttempts).set({ transferResult: result }).where(eq(callAttempts.id, callId)).returning({ id: callAttempts.id });
+  return rows.length > 0;
 }

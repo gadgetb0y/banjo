@@ -240,6 +240,30 @@ const envSchema = z
     // above which an inbound caller with no Google relationship tier still
     // gets a warmer "welcome back" greeting. See src/inbound/callerContext.ts.
     FREQUENT_CONTACT_THRESHOLD: z.coerce.number().int().positive().default(3),
+
+    // Hard cap on outbound calls to one phone number in any rolling 24 hours.
+    // place_call refuses past it, and a scheduled call that would exceed it is
+    // failed instead of dialed (src/tasks/callCap.ts). An operator setting on
+    // purpose: nothing the model or an MCP client sends can raise it. Five
+    // test calls to one friend in one evening is how this came about.
+    MAX_CALLS_PER_NUMBER_PER_DAY: z.coerce.number().int().min(1).default(3),
+
+    // Cold call transfer to the principal's phone (#7). Off by default: when
+    // on, both the outbound and inbound tool lists gain transfer_to_owner and
+    // the prompts gain the rule for when to use it (voice/systemPrompt.ts).
+    TRANSFER_ENABLED: z
+      .enum(['true', 'false'])
+      .default('false')
+      .transform((v) => v === 'true'),
+    // Where a transfer rings. Fixed here, never chosen by the model, so a
+    // callee can't talk Banjo into bridging them to an arbitrary number.
+    TRANSFER_TO_PHONE_NUMBER: e164,
+    // Said to the other party when the transfer isn't answered (declined,
+    // busy, no answer), before hanging up.
+    TRANSFER_FALLBACK_MESSAGE: z
+      .string()
+      .min(1)
+      .default("Sorry, they couldn't be reached right now. They'll get back to you soon. Goodbye."),
   })
   .refine((v) => v.VOICE_AI_PROVIDER !== 'openai' || !!v.OPENAI_API_KEY, {
     message: 'OPENAI_API_KEY is required when VOICE_AI_PROVIDER=openai',
@@ -278,6 +302,10 @@ const envSchema = z
       path: ['NOTIFY_TO_PHONE_NUMBER'],
     },
   )
+  .refine((v) => !v.TRANSFER_ENABLED || !!v.TRANSFER_TO_PHONE_NUMBER, {
+    message: 'TRANSFER_TO_PHONE_NUMBER is required when TRANSFER_ENABLED=true',
+    path: ['TRANSFER_TO_PHONE_NUMBER'],
+  })
   .refine((v) => v.BUSINESS_HOURS_START < v.BUSINESS_HOURS_END, {
     message: 'BUSINESS_HOURS_START must be earlier than BUSINESS_HOURS_END',
     path: ['BUSINESS_HOURS_START'],
@@ -294,8 +322,13 @@ export const RECORDING_NOTICE = /\brecord(ed|ing)?\b/i;
  * here unless the owner's wording already has one (#8).
  */
 export function disclosureLine(): string {
-  const line = config.DISCLOSURE_LINE.replaceAll('{name}', config.ASSISTANT_PRINCIPAL_NAME);
+  const line = disclosureLineWithoutNotice();
   return config.RECORD_CALLS && !RECORDING_NOTICE.test(line) ? `${line} This call is recorded.` : line;
+}
+
+/** DISCLOSURE_LINE with {name} filled in, without the recording notice disclosureLine() may add. */
+export function disclosureLineWithoutNotice(): string {
+  return config.DISCLOSURE_LINE.replaceAll('{name}', config.ASSISTANT_PRINCIPAL_NAME);
 }
 export type AppConfig = typeof config;
 

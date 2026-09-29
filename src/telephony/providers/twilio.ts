@@ -5,6 +5,7 @@ import { config } from '../../config/index.js';
 import { childLogger } from '../../lib/logger.js';
 import { pcm16ToMuLaw } from '../audio/codec.js';
 import type { AudioChunk } from '../../voice/types.js';
+import type { TransferResult } from '../../tasks/schema.js';
 import type { TelephonyEvent, TelephonyEventListener, TelephonyProvider } from './types.js';
 
 const logger = childLogger({ component: 'telephony:twilio' });
@@ -54,6 +55,7 @@ interface TwilioCallState {
   streamSid: string | null;
   providerCallId: string | null;
   toNumber: string;
+  recordingSid?: string; // set by startRecording, so transferCall can stop it (#7)
 }
 
 function sleep(ms: number): Promise<void> {
@@ -83,6 +85,13 @@ function generateSilencePcm16(durationMs: number): Buffer {
   return Buffer.alloc(sampleCount * 2); // zeroed buffer == silence
 }
 
+/** Said to the principal when a transfer reaches them (#74), before they are connected. */
+const TRANSFER_SCREEN_PROMPT = 'Your AI assistant is transferring a call to you. Press 1 to take it.';
+/** Seconds the screen waits for a key after the prompt, per Twilio <Gather>. */
+const TRANSFER_SCREEN_TIMEOUT_S = 5;
+/** How long an accepted screen waits for its transfer callback (which comes when the bridged call ends) before it's swept: Twilio's default <Dial> timeLimit, 4 hours. */
+const ACCEPTED_TRANSFER_TTL_MS = 4 * 60 * 60_000;
+
 /**
  * Twilio telephony adapter: REST call origination via the `twilio` SDK, plus
  * the Media Streams WebSocket side for bidirectional audio once the call is
@@ -98,6 +107,15 @@ export class TwilioProvider implements TelephonyProvider {
   private readonly client = twilioLib(config.TWILIO_ACCOUNT_SID, config.TWILIO_AUTH_TOKEN);
   private readonly emitter = new EventEmitter();
   private readonly calls = new Map<string, TwilioCallState>();
+  /**
+   * Transfers whose principal pressed 1 at the screening prompt (#74), and
+   * when, until the transfer callback takes the entry. Per process, like
+   * `calls`: a restart between the press and the callback reports an
+   * accepted transfer as no_answer, and the caller hears the fallback line
+   * after the call. An entry whose callback never comes is swept after
+   * ACCEPTED_TRANSFER_TTL_MS.
+   */
+  private readonly acceptedTransfers = new Map<string, number>();
   /** Calls forgotten recently, so a repeat hangUp() isn't mistaken for an unknown call. Capped: oldest dropped first. */
   private readonly recentlyEnded = new Set<string>();
   private readonly inboundRegistrationTimers = new Map<string, NodeJS.Timeout>();
@@ -564,6 +582,95 @@ export class TwilioProvider implements TelephonyProvider {
   }
 
   /**
+   * Cold transfer (#7). <Connect><Stream> is terminal TwiML, so a live call
+   * can't <Dial> from inside itself: it's redirected over REST instead, the
+   * same shape as hangUp(). Nothing follows the <Dial> — with an `action`,
+   * Twilio runs the callback's TwiML instead (buildTransferCallbackTwiml).
+   */
+  async transferCall(callId: string, opts: { to: string }): Promise<void> {
+    const state = this.calls.get(callId);
+    if (!state?.providerCallId) throw new Error(`transferCall: no live Twilio call for ${callId}`);
+    const call = this.client.calls(state.providerCallId);
+
+    // The callee agreed to a recorded call with Banjo, not to recording the
+    // principal's conversation once the call is bridged.
+    if (state.recordingSid) {
+      await call
+        .recordings(state.recordingSid)
+        .update({ status: 'stopped' })
+        .catch((err: unknown) => logger.warn({ err, callId }, 'could not stop the recording before transfer — transferring anyway'));
+    }
+
+    const response = new twilioLib.twiml.VoiceResponse();
+    const dial = response.dial({
+      timeout: 20,
+      answerOnBridge: true,
+      action: `https://${config.PUBLIC_HOSTNAME}/telephony/twilio/transfer-callback?callId=${encodeURIComponent(callId)}`,
+    });
+    // #74: a carrier voicemail answers a dial just like a person, so the
+    // principal's leg is screened first — see buildTransferScreenTwiml.
+    dial.number({ url: `https://${config.PUBLIC_HOSTNAME}/telephony/twilio/transfer-screen?callId=${encodeURIComponent(callId)}` }, opts.to);
+
+    // Deliberately no TwiML (it holds the principal's number) in this log line.
+    logger.info({ callId, providerCallId: state.providerCallId }, 'transferring this call via the Twilio REST API');
+    await call.update({ twiml: response.toString() });
+
+    // Only after success, unlike hangUp()'s finally: a failed redirect leaves
+    // a call Banjo still has to talk on, and the stream's 'stop'/close
+    // handlers forget it whenever it really ends. Forgetting now also makes
+    // CallSession's teardown hangUp() a no-op, where it would otherwise hang
+    // up the bridged call if it ran before Twilio's 'stop' arrives.
+    this.clearInboundRegistrationTimeout(callId);
+    this.forgetCall(callId);
+  }
+
+  /**
+   * Runs on the principal's leg once it picks up, before it is bridged (#74);
+   * the caller keeps hearing ringing (answerOnBridge). Only a press of 1
+   * bridges the call. Anything else, and silence, which is what a voicemail
+   * greeting gives, hangs up the principal's leg, so the dial ends unanswered
+   * and the caller hears TRANSFER_FALLBACK_MESSAGE.
+   */
+  buildTransferScreenTwiml(callId: string): string {
+    const response = new twilioLib.twiml.VoiceResponse();
+    const gather = response.gather({
+      numDigits: 1,
+      timeout: TRANSFER_SCREEN_TIMEOUT_S,
+      action: `https://${config.PUBLIC_HOSTNAME}/telephony/twilio/transfer-screen-result?callId=${encodeURIComponent(callId)}`,
+    });
+    gather.say({ loop: 2 }, TRANSFER_SCREEN_PROMPT);
+    response.hangup();
+    return response.toString();
+  }
+
+  /** The principal's answer to the screening prompt (#74): a 1 bridges the call (once this response ends, so does the screen), anything else hangs up their leg. */
+  acceptTransferScreen(callId: string, digits: string): string {
+    const response = new twilioLib.twiml.VoiceResponse();
+    if (digits === '1') {
+      const now = Date.now();
+      for (const [id, at] of this.acceptedTransfers) if (now - at > ACCEPTED_TRANSFER_TTL_MS) this.acceptedTransfers.delete(id);
+      this.acceptedTransfers.set(callId, now);
+      response.say('Connecting.');
+    } else {
+      response.hangup();
+    }
+    return response.toString();
+  }
+
+  /** Whether the principal accepted this transfer at the screen (#74). Reads it once. */
+  takeTransferAccepted(callId: string): boolean {
+    return this.acceptedTransfers.delete(callId);
+  }
+
+  /** The TwiML Twilio runs once a transfer's <Dial> ends (#7): hang up if the principal answered, else say the fallback line first. */
+  buildTransferCallbackTwiml(result: TransferResult): string {
+    const response = new twilioLib.twiml.VoiceResponse();
+    if (result !== 'answered') response.say(config.TRANSFER_FALLBACK_MESSAGE);
+    response.hangup();
+    return response.toString();
+  }
+
+  /**
    * Two-track recording (callee and Banjo on separate channels) on the live
    * call, via the in-progress-call Recordings API — the method the demo
    * recordings used, starting ~0.13s after it's asked. Called by CallSession
@@ -573,6 +680,8 @@ export class TwilioProvider implements TelephonyProvider {
     const providerCallId = this.calls.get(callId)?.providerCallId;
     if (!providerCallId) throw new Error(`startRecording: no live Twilio call for ${callId}`);
     const recording = await this.client.calls(providerCallId).recordings.create({ recordingChannels: 'dual', recordingTrack: 'both' });
+    const state = this.calls.get(callId);
+    if (state) state.recordingSid = recording.sid;
     logger.info({ callId, recordingId: recording.sid }, 'call recording started');
     return { recordingId: recording.sid };
   }

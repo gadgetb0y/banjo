@@ -190,6 +190,8 @@ function toLiveTools(tools: ToolDefinition[]): unknown[] {
 
 export class OpenAILiveProvider implements VoiceAIProvider {
   readonly name = 'openai-live';
+  /** No interruption event exists on this wire (open risk #15). */
+  readonly emitsInterruptions = false;
 
   private ws: WebSocket | undefined;
   private emitter = new EventEmitter();
@@ -212,7 +214,7 @@ export class OpenAILiveProvider implements VoiceAIProvider {
    * the message (or the report is read). While set, turn_end is held back:
    * trailing preamble audio, or a pause of more than OUTPUT_IDLE_TURN_END_MS
    * before or inside the message, would otherwise resolve CallSession's
-   * speakVerbatim() wait before the message was spoken, misreport a delivered
+   * deliverVerbatim() wait before the message was spoken, misreport a delivered
    * voicemail as a mismatch, and hang up on it. If the model never says it,
    * CallSession's SPEAK_VERBATIM_TIMEOUT_MS ends the wait instead.
    */

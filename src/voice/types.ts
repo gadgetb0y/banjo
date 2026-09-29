@@ -69,7 +69,7 @@ export interface VoiceAISessionConfig {
   outputAudioFormat: VoiceAIAudioFormat;
 }
 
-/** What a provider that cannot guarantee verbatim playback actually spoke for its most recent sayVerbatim() call — see VoiceAIProvider.verbatimDeliveryReport. */
+/** What was actually spoken for a sayVerbatim() request, against what was intended — from VoiceAIProvider.verbatimDeliveryReport, or built by CallSession from the transcript. */
 export interface VerbatimDeliveryReport {
   intended: string;
   /** Transcript of the model's own speech from the sayVerbatim() call until the report was taken. */
@@ -131,6 +131,13 @@ export interface VoiceAIProvider {
    * instead of trusting that an earlier, unconstrained model turn happened
    * to say the exact right words before the tool call reported it delivered.
    */
+  /**
+   * Optional; false for a provider that never emits 'interrupted' on a
+   * barge-in (openai-live — full duplex, no interruption event). CallSession
+   * then treats the callee's words during a verbatim delivery as the sign
+   * they answered (#71). Absent means it does emit them.
+   */
+  readonly emitsInterruptions?: boolean;
   sayVerbatim(text: string): void;
   /**
    * Optional. A provider that cannot guarantee verbatim delivery (openai-live
@@ -138,8 +145,8 @@ export interface VoiceAIProvider {
    * spoken for the most recent sayVerbatim() call. CallSession reads it once
    * the forced speech finishes and hands it to the tool handler, so the
    * recorded outcome reflects what the callee heard. Undefined if
-   * sayVerbatim() was never called. Providers without this method are
-   * trusted to have complied, as before.
+   * sayVerbatim() was never called. For providers without this method,
+   * CallSession checks the provider's own final transcript instead (#71).
    */
   verbatimDeliveryReport?(): VerbatimDeliveryReport | undefined;
   disconnect(): Promise<void>;

@@ -3,6 +3,7 @@ import type { CallContext } from '../../src/session/types.js';
 import type { CallAttempt, Task } from '../../src/tasks/schema.js';
 import type { TelephonyProvider } from '../../src/telephony/providers/types.js';
 import { pressDigitsTool, pressDigitsToolDefinition } from '../../src/telephony/dtmf.js';
+import { disclosureLine } from '../../src/config/index.js';
 
 // leaveVoicemailAndEndCallTool/reportNegotiationFailedTool/escalateAndEndCallTool/
 // endCallTool all call transitionTask — stub the
@@ -61,7 +62,10 @@ describe('voice tools: schema + JSON Schema conversion', () => {
     // this test only asserts the extraction is wired correctly, not
     // CallSession's enforcement of it (covered in tests/session/callSession.test.ts).
     expect(leaveVoicemailAndEndCallTool.verbatimMessage).toBeDefined();
-    expect(leaveVoicemailAndEndCallTool.verbatimMessage!({ message: 'please call back at 555-1234' })).toBe('please call back at 555-1234');
+    expect(leaveVoicemailAndEndCallTool.verbatimMessage!({ message: 'please call back at 555-1234' })).toEqual([
+      disclosureLine(),
+      'please call back at 555-1234',
+    ]);
   });
 
   it('report_negotiation_failed/escalate_and_end_call/end_conversation_call do NOT declare verbatimMessage — their arguments are metadata for Steve, not content meant for the other party', () => {
@@ -287,7 +291,11 @@ describe('outcome-recording order relative to hangUpAfterSpeaking (regression fo
     const hangUp = vi.fn(async () => {});
     const now = Date.now();
 
-    const promise = leaveVoicemailAndEndCallTool.handler({ message: 'please call back' }, makeCtx(hangUp, now + 60_000));
+    const ctx: CallContext = {
+      ...makeCtx(hangUp, now + 60_000),
+      verbatimDelivery: { intended: 'please call back', spoken: 'please call back', matched: true },
+    };
+    const promise = leaveVoicemailAndEndCallTool.handler({ message: 'please call back' }, ctx);
     await vi.advanceTimersByTimeAsync(6000); // MAX_HANGUP_WAIT_MS
     await promise;
     vi.useRealTimers();
@@ -317,6 +325,24 @@ describe('outcome-recording order relative to hangUpAfterSpeaking (regression fo
     });
     expect(hangUp).toHaveBeenCalledTimes(1);
     expect(result).toEqual({ ok: true });
+  });
+
+  it('leave_voicemail_and_end_call: records escalated — never voicemail_left — when no delivery report came with it (#71)', async () => {
+    // CallSession checks delivery on every provider now. A handler run with
+    // no report has nothing that says the callee heard the message.
+    vi.useFakeTimers();
+    const hangUp = vi.fn(async () => {});
+    const promise = leaveVoicemailAndEndCallTool.handler({ message: 'please call back' }, makeCtx(hangUp, Date.now()));
+    await vi.advanceTimersByTimeAsync(6000);
+    const result = await promise;
+    vi.useRealTimers();
+
+    expect(transitionTask).toHaveBeenCalledTimes(1);
+    expect(transitionTask).toHaveBeenCalledWith('task-1', 'escalated', {
+      outcome: { kind: 'escalated', reason: expect.stringContaining('could not be verified') },
+    });
+    expect(hangUp).toHaveBeenCalledTimes(1);
+    expect(result).toEqual({ ok: false, error: 'voicemail_delivery_unverified' });
   });
 
   it("leave_voicemail_and_end_call: records escalated — never voicemail_left — when the provider reports the spoken audio didn't match, and still hangs up", async () => {
@@ -510,5 +536,39 @@ describe('leave_voicemail_and_end_call: message length (#3)', () => {
     const tooLong = leaveVoicemailAndEndCallTool.schema.safeParse({ message: 'x'.repeat(VOICEMAIL_MESSAGE_MAX_CHARS + 1) });
     expect(ok.success).toBe(true);
     expect(tooLong.success).toBe(false);
+  });
+});
+
+describe('leave_voicemail_and_end_call: the AI disclosure opens the voicemail (#71)', () => {
+  // Live, 2026-09-25: both voicemails opened with a preamble the tool
+  // description allowed ("Hi, I'm going to leave a quick message for
+  // Jessica."), so the recorded voicemail did not start with the disclosure.
+  const opener = disclosureLine();
+  const segments = (message: string) => leaveVoicemailAndEndCallTool.verbatimMessage!({ message });
+
+  it('is spoken by the system as its own turn, before the message', () => {
+    expect(segments('Please call Alex back at 555-1234.')).toEqual([opener, 'Please call Alex back at 555-1234.']);
+  });
+
+  it('drops a repeat of the opener at the start of the message, so the callee does not hear it twice', () => {
+    expect(segments(`${opener} Please call Alex back at 555-1234.`)).toEqual([opener, 'Please call Alex back at 555-1234.']);
+    // A transcript-style apostrophe or case change is still the same words.
+    expect(segments(`${opener.replace("'", '’').toLowerCase()} Please call back.`)).toEqual([opener, 'Please call back.']);
+  });
+
+  it('drops only a whole repeat of the opener, never the message itself', () => {
+    expect(segments('Hi, please call Alex back.')).toEqual([opener, 'Hi, please call Alex back.']);
+    expect(segments(`Please call back. ${opener}`)).toEqual([opener, `Please call back. ${opener}`]);
+  });
+
+  it('speaks just the opener when the message was nothing but the opener', () => {
+    expect(segments(opener)).toEqual([opener]);
+  });
+
+  it('tells the model to say nothing before calling it, and never to describe how the message is delivered', () => {
+    const description = leaveVoicemailAndEndCallTool.description;
+    expect(description).not.toContain('preamble before calling this tool (e.g. reacting to the greeting you just heard) is fine');
+    expect(description).toContain('Call it without saying anything first');
+    expect(description).toContain('Never tell the callee how the message is delivered');
   });
 });

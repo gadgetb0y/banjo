@@ -441,3 +441,165 @@ describe('TwilioProvider recording (#8)', () => {
     await expect(provider.deleteRecording('RE-err')).rejects.toThrow('boom');
   });
 });
+
+describe('TwilioProvider.transferCall (#7)', () => {
+  function withFakeCalls(provider: TwilioProvider, update = vi.fn(async () => ({})), recordingUpdate = vi.fn(async () => ({}))) {
+    const recordings = Object.assign(vi.fn(() => ({ update: recordingUpdate })), { create: vi.fn(async () => ({ sid: 'RE-live' })) });
+    const calls = vi.fn(() => ({ update, recordings }));
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    Object.defineProperty((provider as any).client, 'calls', { value: calls, configurable: true });
+    return { update, recordingUpdate, calls };
+  }
+
+  it('redirects the live call to a <Dial> with an action callback and nothing after it', async () => {
+    const provider = new TwilioProvider();
+    provider.registerInboundCall('CA-1', '+15555550100');
+    const { update } = withFakeCalls(provider);
+
+    await provider.transferCall('CA-1', { to: '+15557654321' });
+
+    const twiml = (update.mock.calls[0] as unknown as [{ twiml: string }])[0].twiml;
+    expect(twiml).toMatch(/<Dial[^>]*timeout="20"/);
+    expect(twiml).toMatch(/<Dial[^>]*answerOnBridge="true"/);
+    expect(twiml).toMatch(/action="https:\/\/[^"]+\/telephony\/twilio\/transfer-callback\?callId=CA-1"/);
+    // #74: the principal's leg is screened before it is bridged.
+    expect(twiml).toMatch(/<Number url="https:\/\/[^"]+\/telephony\/twilio\/transfer-screen\?callId=CA-1">\+15557654321<\/Number>/);
+    expect(twiml).toMatch(/<\/Dial><\/Response>$/);
+  });
+
+  it('stops a running recording before transferring', async () => {
+    const provider = new TwilioProvider();
+    provider.registerInboundCall('CA-2', '+15555550100');
+    const { update, recordingUpdate, calls } = withFakeCalls(provider);
+    await provider.startRecording('CA-2');
+
+    await provider.transferCall('CA-2', { to: '+15557654321' });
+
+    expect(recordingUpdate).toHaveBeenCalledWith({ status: 'stopped' });
+    expect(recordingUpdate.mock.invocationCallOrder[0]).toBeLessThan(update.mock.invocationCallOrder[0]!);
+    expect(calls).toHaveBeenCalledWith('CA-2');
+  });
+
+  it('still transfers when stopping the recording fails', async () => {
+    const provider = new TwilioProvider();
+    provider.registerInboundCall('CA-3', '+15555550100');
+    const { update } = withFakeCalls(provider, undefined, vi.fn(async () => { throw new Error('recording gone'); }));
+    await provider.startRecording('CA-3');
+
+    await provider.transferCall('CA-3', { to: '+15557654321' });
+    expect(update).toHaveBeenCalled();
+  });
+
+  it('forgets the call after a successful redirect, so the session teardown hangUp() cannot end the bridged call', async () => {
+    const provider = new TwilioProvider();
+    provider.registerInboundCall('CA-4', '+15555550100');
+    const { update } = withFakeCalls(provider);
+
+    await provider.transferCall('CA-4', { to: '+15557654321' });
+    expect(provider.isAnyCallActive()).toBe(false);
+
+    await provider.hangUp('CA-4');
+    expect(update).toHaveBeenCalledTimes(1); // the redirect only, no { status: 'completed' }
+  });
+
+  it('keeps the call when the redirect fails, so Banjo can keep talking', async () => {
+    const provider = new TwilioProvider();
+    provider.registerInboundCall('CA-5', '+15555550100');
+    withFakeCalls(provider, vi.fn(async () => { throw new Error('twilio 500'); }));
+
+    await expect(provider.transferCall('CA-5', { to: '+15557654321' })).rejects.toThrow('twilio 500');
+    expect(provider.isAnyCallActive()).toBe(true);
+  });
+
+  it('refuses a call it has no Twilio id for', async () => {
+    await expect(new TwilioProvider().transferCall('nope', { to: '+15557654321' })).rejects.toThrow();
+  });
+
+  it('never logs the TwiML (it holds the principal\'s number)', async () => {
+    const provider = new TwilioProvider();
+    provider.registerInboundCall('CA-6', '+15555550100');
+    withFakeCalls(provider);
+    fakeLog.info.mockClear();
+    await provider.transferCall('CA-6', { to: '+15557654321' });
+    expect(JSON.stringify(fakeLog.info.mock.calls)).not.toContain('+15557654321');
+  });
+});
+
+describe('TwilioProvider.buildTransferCallbackTwiml (#7)', () => {
+  it('just hangs up after an answered transfer', () => {
+    const twiml = new TwilioProvider().buildTransferCallbackTwiml('answered');
+    expect(twiml).toContain('<Hangup/>');
+    expect(twiml).not.toContain('<Say');
+  });
+
+  it('says the fallback message, XML-escaped, then hangs up when not answered', async () => {
+    const { config } = await import('../../src/config/index.js');
+    const original = config.TRANSFER_FALLBACK_MESSAGE;
+    config.TRANSFER_FALLBACK_MESSAGE = 'Smith & Sons <will> call "back"';
+    try {
+      const twiml = new TwilioProvider().buildTransferCallbackTwiml('no_answer');
+      expect(twiml).toContain('Smith &amp; Sons &lt;will&gt; call');
+      expect(twiml).toMatch(/<\/Say><Hangup\/><\/Response>$/);
+    } finally {
+      config.TRANSFER_FALLBACK_MESSAGE = original;
+    }
+  });
+});
+
+describe('TwilioProvider: transfer screening (#74)', () => {
+  // Live, 2026-09-26: the principal let the transfer ring, their carrier
+  // voicemail picked up inside the dial timeout, and Twilio reported the dial
+  // 'completed' — recorded as answered, the caller bridged into voicemail and
+  // never told they weren't reached. Only a press of 1 counts as answered.
+  it('asks the principal to press 1, then hangs up their leg if they do not', () => {
+    const twiml = new TwilioProvider().buildTransferScreenTwiml('CA-9');
+    expect(twiml).toMatch(/<Gather[^>]*numDigits="1"/);
+    expect(twiml).toMatch(/<Gather[^>]*action="https:\/\/[^"]+\/telephony\/twilio\/transfer-screen-result\?callId=CA-9"/);
+    expect(twiml).toMatch(/<Say[^>]*loop="2"[^>]*>[^<]*[Pp]ress 1[^<]*<\/Say><\/Gather>/);
+    expect(twiml).toMatch(/<Gather[^>]*timeout="5"/);
+    expect(twiml).not.toContain('actionOnEmptyResult'); // no key must fall through to the hang-up
+    expect(twiml).toMatch(/<\/Gather><Hangup\/><\/Response>$/);
+  });
+
+  it('bridges on a 1, and remembers it once for the transfer callback', () => {
+    const provider = new TwilioProvider();
+    const twiml = provider.acceptTransferScreen('CA-10', '1');
+    expect(twiml).not.toContain('Hangup');
+    expect(twiml).toMatch(/<Say>Connecting\.<\/Say><\/Response>$/); // then the screen ends, and Twilio bridges
+    expect(provider.takeTransferAccepted('CA-10')).toBe(true);
+    expect(provider.takeTransferAccepted('CA-10')).toBe(false);
+  });
+
+  it.each([['2'], [''], ['*']])('hangs up the principal\'s leg on %j, and does not count it as accepted', (digits) => {
+    const provider = new TwilioProvider();
+    const twiml = provider.acceptTransferScreen('CA-11', digits);
+    expect(twiml).toContain('<Hangup/>');
+    expect(provider.takeTransferAccepted('CA-11')).toBe(false);
+  });
+
+  it('keeps acceptances apart per call', () => {
+    const provider = new TwilioProvider();
+    provider.acceptTransferScreen('CA-12', '1');
+    expect(provider.takeTransferAccepted('CA-13')).toBe(false);
+    expect(provider.takeTransferAccepted('CA-12')).toBe(true);
+  });
+
+  it('forgets an acceptance whose transfer callback never came, after four hours', () => {
+    vi.useFakeTimers();
+    try {
+      const provider = new TwilioProvider();
+      provider.acceptTransferScreen('CA-14', '1');
+      vi.advanceTimersByTime(3 * 60 * 60_000);
+      provider.acceptTransferScreen('CA-16', '1');
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      expect((provider as any).acceptedTransfers.has('CA-14')).toBe(true); // a long bridged call keeps its entry
+      vi.advanceTimersByTime(61 * 60_000);
+      provider.acceptTransferScreen('CA-15', '1'); // any later acceptance sweeps stale ones
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      expect((provider as any).acceptedTransfers.has('CA-14')).toBe(false);
+      expect(provider.takeTransferAccepted('CA-15')).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});

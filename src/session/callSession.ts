@@ -5,6 +5,7 @@ import { createVoiceAIProvider } from '../voice/factory.js';
 import { toToolDefinition, type VoiceTool } from '../voice/tools/defineVoiceTool.js';
 import type { ToolDefinition } from '../voice/types.js';
 import type { VerbatimDeliveryReport, VoiceAIEvent, VoiceAIProvider } from '../voice/types.js';
+import { verbatimMatches } from '../voice/verbatimMatch.js';
 import { createAudioPlaybackTracker, type AudioPlaybackTracker } from './audioPlaybackTracker.js';
 import { negotiateAudioFormats, resolveAudioPipeline, type AudioPipeline } from './audioPipeline.js';
 import type { CallContext } from './types.js';
@@ -12,6 +13,18 @@ import { checkDisclosure, type DisclosureResult } from './disclosure.js';
 import { classifyTranscript } from './transcriptQuality.js';
 
 export type CallSessionState = 'connecting' | 'active' | 'tool-pending' | 'ending' | 'ended' | 'error';
+
+/** A verbatimMessage being delivered (#71): see CallSession.deliverVerbatim. */
+interface VerbatimDelivery {
+  /** Banjo's final transcript lines for the part being spoken. */
+  spoken: string[];
+  /** The callee may not have heard it all: a barge-in flushed queued audio, someone answered, or the call is ending. */
+  cutOff: boolean;
+  /** When the first part is estimated to have finished playing — from then on a user line is a reply, not the greeting finalizing late. */
+  openerPlayedAt?: number;
+  /** Ends whatever wait deliverVerbatim is in. */
+  wake: () => void;
+}
 
 // Firing the greeting the instant the Media Stream connects felt abrupt on a
 // live call — almost no gap between "call picked up" and ea already talking.
@@ -35,18 +48,29 @@ const TURN_END_WAIT_MS = 4000;
 // shouldn't hang a hang-up tool forever, mirroring TURN_END_WAIT_MS's
 // rationale above. Sized generously relative to TURN_END_WAIT_MS because,
 // unlike a short trailing confirmation sentence, this covers reading an
-// entire voicemail message aloud from scratch.
+// entire voicemail message aloud from scratch. One budget for all of a
+// tool's parts together, not one each.
 const SPEAK_VERBATIM_TIMEOUT_MS = 20_000;
+
+// How long CallSession waits, after the last forced turn ends, for its audio
+// to finish playing before the delivery is judged (#71). The model writes a
+// message faster than it plays: on a live voicemail most of it was still
+// queued on the phone when a barge-in flushed it. A 500-character message
+// (VOICEMAIL_MESSAGE_MAX_CHARS) is ~35s of speech. Audio still unplayed after
+// this is not verified: the hang-up that follows would cut it off.
+const VERBATIM_PLAYBACK_WAIT_MS = 40_000;
 
 // toolPendingWatchdog's normal budget (below) comfortably covers a fast tool
 // handler, but a tool with verbatimMessage additionally waits through (in
 // sequence) the pre-existing TURN_END_WAIT_MS, then up to
-// SPEAK_VERBATIM_TIMEOUT_MS for the forced speech itself, then the handler's
-// own hangUpAfterSpeaking wait (up to MAX_HANGUP_WAIT_MS in
-// voice/tools/callTools.ts, currently 6000ms) — comfortably exceeding the
-// normal 15s budget. Re-armed with this larger budget specifically for those
-// tools (see handleToolCall) rather than raising the default for every tool.
-const VERBATIM_TOOL_PENDING_BUDGET_MS = 35_000;
+// SPEAK_VERBATIM_TIMEOUT_MS for the forced speech itself, then up to
+// VERBATIM_PLAYBACK_WAIT_MS for it to play, then the handler's own
+// hangUpAfterSpeaking wait (up to MAX_HANGUP_WAIT_MS in
+// voice/tools/callTools.ts, currently 6000ms, though by then little is left
+// to play) — comfortably exceeding the normal 15s budget. Re-armed with this
+// larger budget specifically for those tools (see handleToolCall) rather
+// than raising the default for every tool.
+const VERBATIM_TOOL_PENDING_BUDGET_MS = SPEAK_VERBATIM_TIMEOUT_MS + VERBATIM_PLAYBACK_WAIT_MS + 10_000;
 
 // Caught on a live call: after a finalized user transcript, OpenAI's
 // Realtime API — which we rely on to auto-trigger a response via its own
@@ -159,10 +183,21 @@ export class CallSession<TCtx = CallContext> {
   /**
    * idle → (notice in Banjo's final line) awaiting_turn_end → (turn_end)
    * scheduled → started. An interruption before turn_end drops back to idle:
-   * the notice's audio may have been cut off before it was heard.
+   * the notice's audio may have been cut off before it was heard. One after
+   * turn_end but before the notice has played cancels the call's recording
+   * for good (#71): 'cancelled' never re-arms, since RECORDING_NOTICE would
+   * match any later line that merely says "recorded".
    */
-  private recordingState: 'idle' | 'awaiting_turn_end' | 'scheduled' = 'idle';
+  private recordingState: 'idle' | 'awaiting_turn_end' | 'scheduled' | 'cancelled' = 'idle';
   private recordingTimer: ReturnType<typeof setTimeout> | null = null;
+  /** When the recording notice itself is estimated to finish playing — a barge-in before then may have flushed it (#71). */
+  private recordingNoticePlayedAt = 0;
+  /** How far through the notice's turn, by its words, the notice sentence ends (0–1). */
+  private recordingNoticeFraction = 1;
+  /** Milliseconds of Banjo's audio sent in the current turn. */
+  private turnAudioMs = 0;
+  /** Set while a tool's verbatimMessage is being delivered, from the first sayVerbatim() until its audio has played (#71) — see VerbatimDelivery. */
+  private verbatimDelivery: VerbatimDelivery | null = null;
   private readonly pipeline: AudioPipeline;
   private readonly outputFormat;
   private readonly toolRegistry: Map<string, VoiceTool<any, TCtx>>;
@@ -170,6 +205,8 @@ export class CallSession<TCtx = CallContext> {
   private readonly audioPlaybackTracker: AudioPlaybackTracker;
   private providerCallId: string | null = null;
   private toolPendingWatchdog: ReturnType<typeof setTimeout> | null = null;
+  /** The tool call whose budget toolPendingWatchdog is timing; only it may clear the watchdog. */
+  private toolPendingWatchdogOwner: string | null = null;
   private turnEndWaiters: Array<() => void> = [];
   private silenceWatchdog: ReturnType<typeof setTimeout> | null = null;
   private silenceNudgeSent = false;
@@ -183,6 +220,15 @@ export class CallSession<TCtx = CallContext> {
   private responseActive = false;
   /** Running tool handlers, each with the time its budget runs out (see toolBudgetMs). */
   private readonly inFlightToolHandlers = new Map<Promise<void>, number>();
+  /**
+   * The id of a running tool marked endsCall, or null. While set, no other
+   * tool call is accepted and the silence watchdog neither arms nor nudges:
+   * transfer_to_owner can wait over a minute on Twilio's redirect, and a
+   * nudged end_call accepted meanwhile could hang up mid-transfer (#7).
+   * Cleared when that handler finishes, so a failed transfer (the call still
+   * Banjo's) goes back to normal.
+   */
+  private callEndingToolCallId: string | null = null;
 
   constructor(private readonly opts: CallSessionOptions<TCtx>) {
     this.voiceAI = createVoiceAIProvider();
@@ -271,6 +317,7 @@ export class CallSession<TCtx = CallContext> {
         this.responseActive = true;
         const outboundChunk = this.pipeline.outbound(event.chunk);
         this.audioPlaybackTracker.recordChunkSent(outboundChunk.data.length);
+        this.turnAudioMs += outboundChunk.data.length / 8; // 8kHz mu-law: 8 bytes per ms
         this.opts.telephony.sendAudio(this.opts.callId, outboundChunk);
         break;
       }
@@ -307,9 +354,21 @@ export class CallSession<TCtx = CallContext> {
           const quality = classifyTranscript(event.text);
           if (quality === 'empty') break;
           this.recordTranscript(event.role, event.text, quality);
+          if (event.role === 'assistant') this.verbatimDelivery?.spoken.push(event.text);
+          // openai-live never emits 'interrupted', so someone answering
+          // mid-message shows up only as their words (#22). Only there: a
+          // provider that reports barge-ins already caught a real reply, and
+          // a transcribed line of hiss (#25) must not cut off a real
+          // voicemail. And only once the opener has played: a voicemail
+          // greeting's own transcript can finalize after delivery has begun.
+          if (event.role === 'user' && quality === 'ok' && this.voiceAI.emitsInterruptions === false) {
+            const openerPlayedAt = this.verbatimDelivery?.openerPlayedAt;
+            if (openerPlayedAt !== undefined && Date.now() >= openerPlayedAt) this.cutOffVerbatimDelivery();
+          }
           if (event.role === 'assistant' && this.firstAssistantLine === undefined) this.firstAssistantLine = event.text;
           if (event.role === 'assistant' && RECORDING_NOTICE.test(event.text) && this.opts.recordCalls && this.recordingState === 'idle') {
             this.recordingState = 'awaiting_turn_end';
+            this.recordingNoticeFraction = noticeFraction(event.text);
           }
           if (config.LOG_TRANSCRIPTS) {
             logger.info(
@@ -334,6 +393,16 @@ export class CallSession<TCtx = CallContext> {
         // #8: cut off before its turn ended, the recording notice may never
         // have reached the other party. Wait for Banjo to say it again.
         if (this.recordingState === 'awaiting_turn_end') this.recordingState = 'idle';
+        // #71: the turn can end well before its audio has played (the model
+        // writes faster than it speaks), so the flush may also take a notice
+        // whose recording is already scheduled. Once it has played, keep it:
+        // the callee heard it and simply answered quickly.
+        if (this.recordingState === 'scheduled' && this.recordingTimer && Date.now() < this.recordingNoticePlayedAt) {
+          this.cancelPendingRecording();
+          this.recordingState = 'cancelled';
+          logger.warn({ callId: this.opts.callId }, 'barge-in before the recording notice had played — this call will not be recorded');
+        }
+        this.cutOffVerbatimDelivery();
         // Caller barge-in — flush whatever we've already queued on the phone
         // leg, and reset the playback tracker's high-water mark: the
         // discarded buffered-but-unplayed audio will never actually play,
@@ -342,6 +411,7 @@ export class CallSession<TCtx = CallContext> {
         // audioPlaybackTracker.ts's reset() doc comment).
         this.opts.telephony.interrupt(this.opts.callId);
         this.audioPlaybackTracker.reset();
+        this.turnAudioMs = 0;
         break;
       case 'error':
         // Caught live (2026-09-01, callId d38b79ab): the silence watchdog's
@@ -364,6 +434,7 @@ export class CallSession<TCtx = CallContext> {
         this.clearSilenceWatchdog();
         this.responseActive = false;
         if (this.recordingState === 'awaiting_turn_end') this.scheduleRecordingStart();
+        this.turnAudioMs = 0;
         this.turnEndWaiters.splice(0).forEach((resolve) => resolve());
         break;
     }
@@ -379,7 +450,7 @@ export class CallSession<TCtx = CallContext> {
    * turn and stays fixed until something clears it.
    */
   private armSilenceWatchdogIfNeeded(): void {
-    if (this.silenceWatchdog) return;
+    if (this.silenceWatchdog || this.callEndingToolCallId !== null) return;
     this.silenceNudgeSent = false;
     this.silenceWatchdog = setTimeout(() => this.handleSilenceWatchdogFired(), SILENCE_WATCHDOG_MS);
   }
@@ -392,6 +463,8 @@ export class CallSession<TCtx = CallContext> {
 
   private handleSilenceWatchdogFired(): void {
     this.silenceWatchdog = null;
+    // Nothing to nudge while a call-ending tool runs (see callEndingToolCallId).
+    if (this.callEndingToolCallId !== null) return;
     if (!this.silenceNudgeSent) {
       if (this.responseActive) {
         // A response we already know about (typically the opening greeting
@@ -425,7 +498,12 @@ export class CallSession<TCtx = CallContext> {
     const { telephony, callId } = this.opts;
     if (!telephony.startRecording) return;
     this.recordingState = 'scheduled';
-    const delay = Math.max(0, this.audioPlaybackTracker.estimatedDoneAt() - Date.now()) + RECORDING_START_MARGIN_MS;
+    const turnPlayedAt = this.audioPlaybackTracker.estimatedDoneAt();
+    // Where the notice sentence ends within the turn, by its words, scaled to
+    // the turn's audio (#71) — an estimate, so it gets the same margin as the
+    // start below, erring toward treating a barge-in as having cut it off.
+    this.recordingNoticePlayedAt = turnPlayedAt - this.turnAudioMs * (1 - this.recordingNoticeFraction) + RECORDING_START_MARGIN_MS;
+    const delay = Math.max(0, turnPlayedAt - Date.now()) + RECORDING_START_MARGIN_MS;
     this.recordingTimer = setTimeout(() => {
       this.recordingTimer = null;
       telephony
@@ -469,20 +547,38 @@ export class CallSession<TCtx = CallContext> {
       this.voiceAI.sendToolResult(toolCallId, { ok: false, error: 'call_ended' }, true);
       return;
     }
+    const tool = this.toolRegistry.get(name);
+    // A call-ending tool is still running (transfer_to_owner waiting on
+    // Twilio). Refuse another call-ending tool without touching state or the
+    // running tool's watchdog: a second end_call could hang up mid-transfer
+    // (#7). A non-ending tool still runs — one response can carry end_call
+    // and confirm_appointment together, and the booking must land.
+    if (this.callEndingToolCallId !== null && tool?.endsCall) {
+      logger.warn(
+        { callId: this.opts.callId, toolCallId, name, callEndingToolCallId: this.callEndingToolCallId },
+        'Refusing a tool call while a call-ending tool is still running',
+      );
+      this.voiceAI.sendToolResult(
+        toolCallId,
+        {
+          ok: false,
+          error: 'call_ending',
+          message: 'An earlier tool call is already ending or transferring this call. Do not call another tool to end it; wait for its result.',
+        },
+        true,
+      );
+      return;
+    }
     this.setState('tool-pending');
     // Session-level watchdog independent of each tool's own TOOL_TIMEOUT_MS —
     // if a call has been tool-pending unreasonably long, something is wrong
     // beyond a single slow API call, and we shouldn't trust every code path
     // to always eventually emit *something*.
-    this.toolPendingWatchdog = setTimeout(() => {
-      logger.error({ callId: this.opts.callId, toolCallId, name }, 'Tool call watchdog fired — forcing call end');
-      void this.fail('tool_pending_watchdog', new Error(`Tool ${name} did not resolve in time`));
-    }, TOOL_PENDING_WATCHDOG_MS);
+    this.armToolPendingWatchdog(toolCallId, name, TOOL_PENDING_WATCHDOG_MS);
 
-    const tool = this.toolRegistry.get(name);
     if (!tool) {
       this.voiceAI.sendToolResult(toolCallId, { ok: false, error: 'unknown_tool' }, true);
-      this.clearWatchdogAndResume();
+      this.clearWatchdogAndResume(toolCallId);
       return;
     }
 
@@ -504,7 +600,7 @@ export class CallSession<TCtx = CallContext> {
         },
         true,
       );
-      this.clearWatchdogAndResume();
+      this.clearWatchdogAndResume(toolCallId);
       return;
     }
 
@@ -517,29 +613,25 @@ export class CallSession<TCtx = CallContext> {
         'tool call rejected: arguments failed schema validation',
       );
       this.voiceAI.sendToolResult(toolCallId, { ok: false, error: 'invalid_arguments', details: parsed.error.flatten() }, true);
-      this.clearWatchdogAndResume();
+      this.clearWatchdogAndResume(toolCallId);
       return;
     }
 
+    if (tool.endsCall) this.callEndingToolCallId = toolCallId;
     try {
       if (tool.endsCall) await this.waitForTurnEnd(TURN_END_WAIT_MS);
+      // A tool with its own handler budget (VoiceTool.handlerBudgetMs) gets it
+      // from here — the same point toolBudgetMs counts it from.
+      if (tool.handlerBudgetMs !== undefined && !tool.verbatimMessage) this.armToolPendingWatchdog(toolCallId, name, tool.handlerBudgetMs);
       let verbatimDelivery: VerbatimDeliveryReport | undefined;
       if (tool.verbatimMessage) {
         // This forced turn can legitimately take much longer than a normal
         // tool call (reading an entire voicemail message aloud) — re-arm the
         // session-level watchdog with a larger budget before starting it, so
         // a real message doesn't get killed as if it were a stuck handler.
-        if (this.toolPendingWatchdog) clearTimeout(this.toolPendingWatchdog);
-        this.toolPendingWatchdog = setTimeout(() => {
-          logger.error({ callId: this.opts.callId, toolCallId, name }, 'Tool call watchdog fired — forcing call end');
-          void this.fail('tool_pending_watchdog', new Error(`Tool ${name} did not resolve in time`));
-        }, VERBATIM_TOOL_PENDING_BUDGET_MS);
-        await this.speakVerbatim(tool.verbatimMessage(parsed.data));
-        // Only a provider that can't guarantee verbatim playback reports what
-        // was actually said (openai-live); undefined leaves the handler on its
-        // original trust-the-provider path.
-        verbatimDelivery = this.voiceAI.verbatimDeliveryReport?.();
-        if (verbatimDelivery && !verbatimDelivery.matched) {
+        this.armToolPendingWatchdog(toolCallId, name, VERBATIM_TOOL_PENDING_BUDGET_MS);
+        verbatimDelivery = await this.deliverVerbatim(tool.verbatimMessage(parsed.data));
+        if (!verbatimDelivery.matched) {
           logger.warn({ callId: this.opts.callId, toolCallId, name }, 'Verbatim message delivery did not match the intended text');
         }
       }
@@ -554,39 +646,126 @@ export class CallSession<TCtx = CallContext> {
       logger.error({ err, toolCallId, name }, 'Tool handler threw');
       this.voiceAI.sendToolResult(toolCallId, { ok: false, error: 'upstream_error' }, true);
     } finally {
-      this.clearWatchdogAndResume();
+      if (this.callEndingToolCallId === toolCallId) this.callEndingToolCallId = null;
+      this.clearWatchdogAndResume(toolCallId);
     }
   }
 
   /**
-   * Resolves once the current response's 'turn_end' fires, or after
-   * timeoutMs if it never does — a missing/late signal shouldn't hang a
+   * Resolves once the current response's 'turn_end' fires, `stopped`
+   * resolves, or after timeoutMs if neither does — a missing/late signal shouldn't hang a
    * hang-up tool forever. See handleToolCall's endsCall branch.
    */
-  private waitForTurnEnd(timeoutMs: number): Promise<void> {
+  private waitForTurnEnd(timeoutMs: number, stopped?: Promise<void>): Promise<void> {
     return new Promise((resolve) => {
-      const timer = setTimeout(resolve, timeoutMs);
-      this.turnEndWaiters.push(() => {
+      const done = () => {
         clearTimeout(timer);
+        this.turnEndWaiters = this.turnEndWaiters.filter((w) => w !== done);
         resolve();
-      });
+      };
+      const timer = setTimeout(done, timeoutMs);
+      this.turnEndWaiters.push(done);
+      void stopped?.then(done);
     });
   }
 
   /**
-   * Forces `text` to be spoken verbatim (VoiceAIProvider.sayVerbatim) and
-   * waits for that response to finish (its 'turn_end') before resolving —
-   * see VoiceTool.verbatimMessage's doc comment for why a tool needs this
-   * rather than trusting the model already said the right words earlier.
+   * Forces each part to be spoken verbatim (VoiceAIProvider.sayVerbatim), one
+   * turn each, waiting for each turn to end, then for the audio to finish
+   * playing — see VoiceTool.verbatimMessage's doc comment for why a tool
+   * needs this rather than trusting the model already said the right words
+   * earlier. Reports what was said on every provider (#71): the provider's
+   * own report where it has one (openai-live), otherwise Banjo's transcript
+   * for the turn. A barge-in, or audio still unplayed when the wait runs out,
+   * means the callee did not hear it all, whatever the transcript says.
    */
-  private speakVerbatim(text: string): Promise<void> {
-    this.voiceAI.sayVerbatim(text);
-    return this.waitForTurnEnd(SPEAK_VERBATIM_TIMEOUT_MS);
+  private async deliverVerbatim(parts: string[]): Promise<VerbatimDeliveryReport> {
+    let stop = () => {};
+    const stopped = new Promise<void>((resolve) => (stop = resolve));
+    const delivery: VerbatimDelivery = { spoken: [], cutOff: false, wake: stop };
+    this.verbatimDelivery = delivery;
+    try {
+      const deadline = Date.now() + SPEAK_VERBATIM_TIMEOUT_MS;
+      const reports: VerbatimDeliveryReport[] = [];
+      for (const part of parts) {
+        // Nothing more is said once the callee may not hear it all anyway:
+        // the call is ending, the other side barged in, or an earlier part
+        // used up the time, and the hang-up would cut this one off (#71).
+        if (delivery.cutOff || this.isEnding() || Date.now() >= deadline) break;
+        delivery.spoken = [];
+        this.voiceAI.sayVerbatim(part);
+        await this.waitForTurnEnd(deadline - Date.now(), stopped);
+        const spoken = delivery.spoken.join(' ');
+        reports.push(this.voiceAI.verbatimDeliveryReport?.() ?? { intended: part, spoken, matched: verbatimMatches(part, spoken) });
+        delivery.openerPlayedAt ??= this.audioPlaybackTracker.estimatedDoneAt();
+      }
+      const playedOut = reports.length === parts.length && !delivery.cutOff && (await this.waitForVerbatimPlayback(delivery));
+      return {
+        intended: parts.join(' '),
+        spoken: reports.map((r) => r.spoken).filter(Boolean).join(' '),
+        matched: playedOut && reports.every((r) => r.matched) && !delivery.cutOff,
+      };
+    } finally {
+      this.verbatimDelivery = null;
+    }
   }
 
-  private clearWatchdogAndResume(): void {
+  /** True once everything sent has played; false if cut off first, or still playing after VERBATIM_PLAYBACK_WAIT_MS. */
+  private waitForVerbatimPlayback(delivery: VerbatimDelivery): Promise<boolean> {
+    const remainingMs = this.audioPlaybackTracker.estimatedDoneAt() - Date.now();
+    if (remainingMs <= 0) return Promise.resolve(true);
+    if (remainingMs > VERBATIM_PLAYBACK_WAIT_MS) {
+      logger.warn({ callId: this.opts.callId, remainingMs }, 'Verbatim message would still be playing at the hang-up');
+      return Promise.resolve(false);
+    }
+    return new Promise((resolve) => {
+      const timer = setTimeout(() => resolve(!delivery.cutOff), remainingMs);
+      const stop = delivery.wake;
+      delivery.wake = () => {
+        clearTimeout(timer);
+        stop();
+        resolve(false);
+      };
+    });
+  }
+
+  /** The callee may not hear the rest of a verbatim delivery: a barge-in flushed it, they answered, or the call is ending. */
+  private cutOffVerbatimDelivery(): void {
+    if (!this.verbatimDelivery) return;
+    this.verbatimDelivery.cutOff = true;
+    this.verbatimDelivery.wake();
+  }
+
+  private isEnding(): boolean {
+    return this.state === 'ending' || this.state === 'ended' || this.state === 'error';
+  }
+
+  /**
+   * (Re-)arms the session-level tool-pending watchdog: `budgetMs` from now,
+   * the call fails as stuck. While a call-ending tool runs, the watchdog is
+   * its budget and no other tool call may replace it (#7).
+   */
+  private armToolPendingWatchdog(toolCallId: string, name: string, budgetMs: number): void {
+    if (this.callEndingToolCallId !== null && this.callEndingToolCallId !== toolCallId) return;
+    if (this.toolPendingWatchdog) clearTimeout(this.toolPendingWatchdog);
+    this.toolPendingWatchdogOwner = toolCallId;
+    this.toolPendingWatchdog = setTimeout(() => {
+      logger.error({ callId: this.opts.callId, toolCallId, name }, 'Tool call watchdog fired — forcing call end');
+      void this.fail('tool_pending_watchdog', new Error(`Tool ${name} did not resolve in time`));
+    }, budgetMs);
+  }
+
+  /**
+   * A finishing tool call clears the watchdog and resumes 'active' only if the
+   * watchdog is its own and no call-ending handler is still running — a tool
+   * that started earlier and finishes mid-transfer must not disarm the
+   * transfer's watchdog or mark the call 'active' (#7).
+   */
+  private clearWatchdogAndResume(toolCallId: string): void {
+    if (this.toolPendingWatchdogOwner !== toolCallId || this.callEndingToolCallId !== null) return;
     if (this.toolPendingWatchdog) clearTimeout(this.toolPendingWatchdog);
     this.toolPendingWatchdog = null;
+    this.toolPendingWatchdogOwner = null;
     if (this.state === 'tool-pending') this.setState('active');
   }
 
@@ -598,6 +777,7 @@ export class CallSession<TCtx = CallContext> {
     if (this.state === 'ended' || this.state === 'error' || this.state === 'ending') return;
     this.clearSilenceWatchdog();
     this.cancelPendingRecording();
+    this.cutOffVerbatimDelivery();
     logger.error({ err, reason, callId: this.opts.callId }, 'Call session error');
     this.setState('error');
     // Same reason as end(): a booking still being written must land before
@@ -618,11 +798,15 @@ export class CallSession<TCtx = CallContext> {
    * How long a tool call may legitimately run: the same budget its own
    * tool-pending watchdog gives it (#3). A verbatim tool first waits up to
    * TURN_END_WAIT_MS for turn_end, then gets VERBATIM_TOOL_PENDING_BUDGET_MS.
+   * A tool with handlerBudgetMs (transfer_to_owner) gets that budget after its
+   * endsCall turn_end wait, so end() keeps waiting for a redirect still in
+   * flight instead of recording the call as failed over it (#7).
    */
   private toolBudgetMs(name: string): number {
-    return this.toolRegistry.get(name)?.verbatimMessage
-      ? TURN_END_WAIT_MS + VERBATIM_TOOL_PENDING_BUDGET_MS
-      : TOOL_PENDING_WATCHDOG_MS;
+    const tool = this.toolRegistry.get(name);
+    if (tool?.verbatimMessage) return TURN_END_WAIT_MS + VERBATIM_TOOL_PENDING_BUDGET_MS;
+    if (tool?.handlerBudgetMs !== undefined) return (tool.endsCall ? TURN_END_WAIT_MS : 0) + tool.handlerBudgetMs;
+    return TOOL_PENDING_WATCHDOG_MS;
   }
 
   private trackToolHandler(run: Promise<void>, budgetMs: number): void {
@@ -673,6 +857,7 @@ export class CallSession<TCtx = CallContext> {
     this.clearSilenceWatchdog();
     this.cancelPendingRecording();
     this.setState('ending');
+    this.cutOffVerbatimDelivery();
     await this.waitForInFlightToolHandlers();
     await this.opts.onStatusChange({ kind: 'ended', reason, disclosure: checkDisclosure(this.firstAssistantLine) });
     await this.voiceAI.disconnect().catch(() => {});
@@ -705,4 +890,21 @@ export class CallSession<TCtx = CallContext> {
       logger.warn({ err, callId: this.opts.callId }, 'hangUpTelephony: telephony.hangUp() failed');
     });
   }
+}
+
+/**
+ * How far through `text`, by characters, the sentence carrying the recording
+ * notice ends (0–1): a rough stand-in for how far through the turn's audio
+ * the notice has finished playing. Every estimate here errs late, toward
+ * treating a barge-in as having flushed the notice: it times the LAST
+ * "record" in the line (an earlier "Banjo's record" isn't the notice), and
+ * gives up (1, the turn's end) when digits come first, since a phone number
+ * takes far longer to say than its characters suggest.
+ */
+function noticeFraction(text: string): number {
+  const matches = [...text.matchAll(new RegExp(RECORDING_NOTICE.source, 'gi'))];
+  const match = matches[matches.length - 1];
+  if (!match || /\d/.test(text.slice(0, match.index))) return 1;
+  const sentenceEnd = text.slice(match.index).search(/[.!?]/);
+  return sentenceEnd === -1 ? 1 : (match.index + sentenceEnd + 1) / text.length;
 }
