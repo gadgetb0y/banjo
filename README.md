@@ -203,7 +203,7 @@ docker compose up      # Postgres + Banjo; migrations are applied on boot
 ```
 
 `npm run setup` checks each answer as you type it (E.164 phone numbers, a bare `PUBLIC_HOSTNAME`), can
-check your Twilio credentials with Twilio, generates `MCP_API_KEY`, and runs the same validation Banjo runs
+check your Twilio and Pushover credentials with those services, generates `MCP_API_KEY`, and runs the same validation Banjo runs
 at startup before writing anything. Run it again to change a setting: it offers the current values as
 defaults and backs up the old `.env` first. Prefer editing by hand? `cp .env.example .env` and fill it in.
 

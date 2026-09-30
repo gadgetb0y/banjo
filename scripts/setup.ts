@@ -26,6 +26,7 @@ import {
   backupName,
   E164,
   HOSTNAME,
+  PUSHOVER_KEY,
   renderEnvFile,
   REQUIRED,
   TIMEZONE,
@@ -105,6 +106,23 @@ async function checkTwilio(sid: string, token: string, phoneNumber: string): Pro
   }
 }
 
+/** Checks the Pushover app token and user key (and device, if set) without sending a notification. */
+async function checkPushover(token: string, user: string, device: string): Promise<void> {
+  const body = new URLSearchParams({ token, user, ...(device ? { device } : {}) });
+  try {
+    const response = await fetch('https://api.pushover.net/1/users/validate.json', { method: 'POST', body });
+    const result = (await response.json()) as { status?: number; errors?: string[]; devices?: string[] };
+    if (result.status === 1) {
+      const devices = result.devices?.length ? ` Devices: ${result.devices.join(', ')}.` : '';
+      console.log(`  ✔ Pushover accepted the app token and user key.${devices}`);
+    } else {
+      console.log(`  ✘ Pushover said: ${result.errors?.join('; ') ?? `HTTP ${response.status}`}`);
+    }
+  } catch (err) {
+    console.log(`  ? Couldn't reach Pushover (${err instanceof Error ? err.message : String(err)}); skipping the check.`);
+  }
+}
+
 async function main(): Promise<void> {
   console.log('Banjo setup — writes .env. Press Enter to accept the value in [brackets].\n');
 
@@ -148,8 +166,13 @@ async function main(): Promise<void> {
   values.PUBLIC_HOSTNAME = await ask('PUBLIC_HOSTNAME', { current: current.PUBLIC_HOSTNAME, validate: HOSTNAME });
 
   console.log('\n— Call outcome notifications —');
-  const channel = await choose('Send outcomes by', ['twilio_sms', 'none'] as const, current.NOTIFICATION_CHANNEL);
+  const channel = await choose('Send outcomes by', ['twilio_sms', 'pushover', 'none'] as const, current.NOTIFICATION_CHANNEL);
   values.NOTIFICATION_CHANNEL = channel;
+  // Each channel's settings are cleared when it isn't the one chosen, or a
+  // value kept from the old .env would still be written.
+  for (const key of ['NOTIFY_TO_PHONE_NUMBER', 'NOTIFY_FROM_PHONE_NUMBER', 'PUSHOVER_APP_TOKEN', 'PUSHOVER_USER_KEY', 'PUSHOVER_DEVICE']) {
+    values[key] = '';
+  }
   if (channel === 'twilio_sms') {
     values.NOTIFY_TO_PHONE_NUMBER = await ask('Your mobile number (texts go here)', { current: current.NOTIFY_TO_PHONE_NUMBER, validate: E164 });
     values.NOTIFY_FROM_PHONE_NUMBER = await ask('Send texts from', {
@@ -157,10 +180,14 @@ async function main(): Promise<void> {
       validate: E164,
     });
     console.log('  Texts to US numbers need A2P 10DLC registration; see docs/RUNBOOKS.md, "SMS notifications aren\'t arriving".');
-  } else {
-    // Otherwise a value kept from the old .env would still be written.
-    values.NOTIFY_TO_PHONE_NUMBER = '';
-    values.NOTIFY_FROM_PHONE_NUMBER = '';
+  } else if (channel === 'pushover') {
+    console.log('  At pushover.net: create an application for its API token; your user key is on the dashboard.');
+    values.PUSHOVER_APP_TOKEN = await ask('Pushover application API token', { current: current.PUSHOVER_APP_TOKEN, validate: PUSHOVER_KEY, secret: true });
+    values.PUSHOVER_USER_KEY = await ask('Pushover user key', { current: current.PUSHOVER_USER_KEY, validate: PUSHOVER_KEY, secret: true });
+    values.PUSHOVER_DEVICE = await ask('Deliver to one device only (optional, Enter for all)', { current: current.PUSHOVER_DEVICE });
+    if (await confirm('Check these with Pushover now? (No notification is sent.)', true)) {
+      await checkPushover(values.PUSHOVER_APP_TOKEN, values.PUSHOVER_USER_KEY, values.PUSHOVER_DEVICE);
+    }
   }
 
   console.log('\n— Google Calendar and Contacts (optional) —');

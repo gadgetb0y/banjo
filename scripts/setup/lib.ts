@@ -32,6 +32,10 @@ export const TWILIO_ACCOUNT_SID: Validator = (value) =>
 export const TWILIO_AUTH_TOKEN: Validator = (value) =>
   /^[0-9a-f]{32}$/i.test(value) ? undefined : 'A Twilio Auth Token is 32 letters and digits. Copy it from the Twilio console home page.';
 
+/** Pushover application tokens and user/group keys are 30 letters and digits. */
+export const PUSHOVER_KEY: Validator = (value) =>
+  /^[A-Za-z0-9]{30}$/.test(value) ? undefined : 'Pushover keys are 30 letters and digits. Copy it from pushover.net.';
+
 export const REQUIRED: Validator = (value) => (value.trim() ? undefined : 'This one is required.');
 
 export const TIMEZONE: Validator = (value) => {
