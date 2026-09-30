@@ -96,8 +96,10 @@ project with one maintainer. Things worth knowing before you build on it:
   set, Banjo can hand a live call straight to you instead of hanging up and notifying — but only after
   asking the other party and getting a yes, and only for one fixed number; the model never chooses who to
   connect. If you don't answer, they hear `TRANSFER_FALLBACK_MESSAGE` and the call ends. No whisper of
-  context before you're bridged in yet, and no warm transfer (Banjo can't stay on the line).
-  ([#7](https://github.com/shatch/banjo/issues/7))
+  context before you're bridged in yet, and no warm transfer (Banjo can't stay on the line). On the
+  inbound line, only callers already in your contacts can be put through; anyone else who asks for you
+  is flagged for you to call back, so a robocall can't ring your phone.
+  ([#7](https://github.com/shatch/banjo/issues/7), [#66](https://github.com/shatch/banjo/issues/66))
 - **AI disclosure is a prompt rule, checked after the call, not enforced.** Banjo is told to open every
   call with `DISCLOSURE_LINE` (default: *"Hi, I'm an AI assistant calling on behalf of {name}."*, and it
   must say "AI"). Afterwards, its first line is checked. A miss is recorded on the call attempt and

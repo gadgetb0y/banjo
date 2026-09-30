@@ -39,10 +39,20 @@ function buildGreetingGuidance(callerContext: CallerGreetingContext): string {
   return '';
 }
 
-export function buildInboundSystemPrompt(callerContext?: CallerGreetingContext): string {
+/**
+ * `transferAllowed`: whether this caller may be put through to the principal
+ * (#66) — true only for a caller recognized from contacts, and only with
+ * TRANSFER_ENABLED on. Off by default, so a caller left unresolved can't ring
+ * the principal's phone.
+ */
+export interface InboundPromptOptions {
+  transferAllowed?: boolean;
+}
+
+export function buildInboundSystemPrompt(callerContext?: CallerGreetingContext, { transferAllowed = false }: InboundPromptOptions = {}): string {
   const greetingGuidance = callerContext ? buildGreetingGuidance(callerContext) : '';
   return `
-${buildBaseSystemPromptGuidance('inbound')}${greetingGuidance}
+${buildBaseSystemPromptGuidance('inbound', { transfer: transferAllowed && config.TRANSFER_ENABLED })}${greetingGuidance}
 
 You are answering a public phone line to help the caller book, look up, or reschedule an appointment on
 ${config.ASSISTANT_PRINCIPAL_NAME}'s calendar. Appointments can only be booked on ${formatBusinessDays()} between ${formatHour(config.BUSINESS_HOURS_START)}
@@ -92,10 +102,10 @@ genuinely cannot resolve — call flag_for_owner_and_end_call with a short reaso
  * repeated here because the voice layer is what actually talks about the
  * calendar out loud.
  */
-export function buildInboundFrontendPrompt(callerContext?: CallerGreetingContext): string {
+export function buildInboundFrontendPrompt(callerContext?: CallerGreetingContext, { transferAllowed = false }: InboundPromptOptions = {}): string {
   const greetingGuidance = callerContext ? buildGreetingGuidance(callerContext) : '';
   return `
-${buildFrontendSystemPromptGuidance('inbound')}${greetingGuidance}
+${buildFrontendSystemPromptGuidance('inbound', { transfer: transferAllowed && config.TRANSFER_ENABLED })}${greetingGuidance}
 
 You are answering a public phone line to help the caller book, look up, or reschedule an appointment on
 ${config.ASSISTANT_PRINCIPAL_NAME}'s calendar. You can only ever discuss the current caller's own booking —

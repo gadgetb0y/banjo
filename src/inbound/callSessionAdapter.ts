@@ -21,8 +21,10 @@ export function buildInboundCallSessionOptions(params: {
   calendar: CalendarProvider;
   systemPrompt: string;
   frontendSystemPrompt?: string;
+  /** Whether this caller may be transferred to the principal (#66): a recognized contact. */
+  transferAllowed: boolean;
 }): CallSessionOptions<InboundCallContext> {
-  const { inboundCall, callerPhoneNumber, telephony, calendar, systemPrompt, frontendSystemPrompt } = params;
+  const { inboundCall, callerPhoneNumber, telephony, calendar, systemPrompt, frontendSystemPrompt, transferAllowed } = params;
 
   return {
     // Twilio's own CallSid — the id every TelephonyProvider method is keyed
@@ -33,7 +35,7 @@ export function buildInboundCallSessionOptions(params: {
     telephony,
     systemPrompt,
     frontendSystemPrompt,
-    tools: inboundToolsFor(),
+    tools: inboundToolsFor({ transferAllowed }),
     greetOnConnect: true,
 
     async beginCall() {
