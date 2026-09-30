@@ -113,7 +113,10 @@ export async function transitionTask(
   // tools racing on one call can't both land.
   const [row] = await db
     .update(tasks)
-    .set({ status, ...patch, updatedAt: new Date() })
+    // Always strictly later than the row's last write, even within the same
+    // millisecond: ifUpdatedAt (#64) relies on every transition changing
+    // updatedAt, or a second resume from the same read could still match.
+    .set({ status, ...patch, updatedAt: sql`greatest(${new Date().toISOString()}::timestamptz, ${tasks.updatedAt} + interval '1 millisecond')` })
     .where(
       and(
         eq(tasks.id, id),
