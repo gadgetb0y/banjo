@@ -64,6 +64,73 @@ describe('claiming a pending task (transitionTask with from)', () => {
   });
 });
 
+describe('resuming a checking_availability task from two processes (#64)', () => {
+  // A task left in checking_availability is resumed by any process that polls
+  // it. Status alone can't tell two resumers apart, so each step is also
+  // conditioned on the row being unchanged since the step before it wrote.
+  async function checkingTask(phoneNumber: string) {
+    const [contact] = await db.insert(contacts).values({ displayName: 'Salon', phoneNumber }).returning();
+    const task = await service.createTask({ contactId: contact.id, channel: 'phone', goalDescription: 'Call', constraints: {} });
+    return (await service.transitionTask(task.id, 'checking_availability', undefined, { from: ['pending'] }))!;
+  }
+
+  it('applies ifUpdatedAt only while the row is unchanged, including a row created with defaultNow()', async () => {
+    const [contact] = await db.insert(contacts).values({ displayName: 'Salon', phoneNumber: '+15551230010' }).returning();
+    // createTask's updatedAt comes from defaultNow(), stored to the microsecond.
+    const fresh = await service.createTask({ contactId: contact.id, channel: 'phone', goalDescription: 'Call', constraints: {} });
+    const claimed = await service.transitionTask(fresh.id, 'checking_availability', undefined, {
+      from: ['pending'],
+      ifUpdatedAt: fresh.updatedAt,
+    });
+    expect(claimed?.status).toBe('checking_availability');
+
+    // The row has moved on since `fresh` was read, so the same guard now fails.
+    const stale = await service.transitionTask(fresh.id, 'calling', undefined, {
+      from: ['checking_availability'],
+      ifUpdatedAt: fresh.updatedAt,
+    });
+    expect(stale).toBeUndefined();
+    expect((await service.getTask(fresh.id))?.status).toBe('checking_availability');
+  });
+
+  it('lets exactly one of two concurrent resumes win', async () => {
+    const task = await checkingTask('+15551230011');
+    const resume = () =>
+      service.transitionTask(task.id, 'checking_availability', undefined, {
+        from: ['checking_availability'],
+        ifUpdatedAt: task.updatedAt,
+      });
+
+    const results = await Promise.all([resume(), resume()]);
+
+    expect(results.filter((r) => r !== undefined)).toHaveLength(1);
+  });
+
+  it('stops a process that was still working on the task once another resumes it, so only one dials', async () => {
+    // Process A claimed the task and is still checking the calendar (no write
+    // yet). Process B's poller resumes it. A must then fail to reach calling.
+    const claimedByA = await checkingTask('+15551230012');
+    await new Promise((r) => setTimeout(r, 5)); // so B's write gets a later timestamp
+    const resumedByB = await service.transitionTask(claimedByA.id, 'checking_availability', undefined, {
+      from: ['checking_availability'],
+      ifUpdatedAt: claimedByA.updatedAt,
+    });
+    expect(resumedByB).toBeDefined();
+
+    const aDials = await service.transitionTask(claimedByA.id, 'calling', undefined, {
+      from: ['checking_availability'],
+      ifUpdatedAt: claimedByA.updatedAt,
+    });
+    const bDials = await service.transitionTask(claimedByA.id, 'calling', undefined, {
+      from: ['checking_availability'],
+      ifUpdatedAt: resumedByB!.updatedAt,
+    });
+
+    expect(aDials).toBeUndefined();
+    expect(bDials?.status).toBe('calling');
+  });
+});
+
 describe('listStartableTasks (#3)', () => {
   // The poller used to load every non-terminal task each 15s tick and filter
   // in memory, including calls in progress and ones scheduled for next week.
