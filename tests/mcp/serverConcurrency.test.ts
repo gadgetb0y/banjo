@@ -77,3 +77,28 @@ describe('mcp server: concurrent clients', () => {
     expect(next.sessionId).toBeTruthy();
   });
 });
+
+describe('mcp server: session stays open after the SSE route returns', () => {
+  // @hono/node-server v2 ignored the x-hono-already-sent header on a Response
+  // built in the route: it wrote its own headers and ended the SSE stream, so
+  // the session closed as soon as it opened and every client's first POST got
+  // 400 "No transport found for sessionId". Found 2026-09-29 when Claude Code
+  // couldn't reconnect after the upgrade. The tests above only open sessions.
+  it('accepts a message POSTed to the session it just handed out', async () => {
+    const port = await start();
+    const { sessionId } = await connect(port);
+
+    const res = await fetch(`http://127.0.0.1:${port}/mcp/messages?sessionId=${sessionId}`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${config.MCP_API_KEY}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        jsonrpc: '2.0',
+        id: 1,
+        method: 'initialize',
+        params: { protocolVersion: '2024-11-05', capabilities: {}, clientInfo: { name: 'test', version: '0' } },
+      }),
+    });
+
+    expect(res.status).toBe(202);
+  });
+});
