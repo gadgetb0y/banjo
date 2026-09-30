@@ -1,8 +1,9 @@
-import { GoogleCalendarProvider } from '../calendar/googleCalendarProvider.js';
+import { createCalendarProvider } from '../calendar/factory.js';
 import { getContact } from '../contacts/service.js';
 import { logger } from '../lib/logger.js';
 import { CallSession } from '../session/callSession.js';
 import { createTelephonyProvider } from '../telephony/factory.js';
+import { checkCallCap, describeCallCapRefusal, withContactDialLock } from './callCap.js';
 import { buildOutboundCallSessionOptions, notifyTaskOutcome } from './callSessionAdapter.js';
 import { buildCallFrontendPrompt, buildCallSystemPrompt } from './promptBuilder.js';
 import { readOwnerProfile } from './ownerProfile.js';
@@ -18,7 +19,7 @@ import {
 } from './service.js';
 import type { TimeWindow } from './schema.js';
 
-const calendar = new GoogleCalendarProvider();
+const calendar = createCalendarProvider();
 
 // Tracks tasks currently being driven, so a duplicate poller tick (or a
 // duplicate MCP place_call for the same task) can't kick off two orchestration
@@ -95,17 +96,54 @@ async function runTask(taskId: string): Promise<void> {
     if (failed.status === 'failed') await notifyTaskOutcome(task.id);
     return;
   }
+  // An early, unlocked look at the call cap, so a call that can't be placed
+  // fails before spending a calendar lookup. The check that counts is the
+  // locked one below.
+  const earlyCap = await checkCallCap(task.contactId, new Date());
+  if (!earlyCap.allowed) {
+    await failOverCallCap(task.id, describeCallCapRefusal(earlyCap));
+    return;
+  }
   const candidateWindows = await calendar.computeCandidateWindows({
     dateWindows,
     durationMinutes: task.constraints.durationMinutes ?? 30,
   });
-  const calling = await transitionTask(task.id, 'calling', { candidateWindows });
-  if (calling.status !== 'calling') {
-    logger.info({ taskId, status: calling.status }, 'task can no longer be started — not placing the call');
+  // The per-number call cap, checked again right before dialing: place_call
+  // checked it when the call was requested, but a scheduled call can come due
+  // after other calls to the same number. Held under a per-contact lock until
+  // the call attempt is recorded, so two due calls can't both pass the check.
+  const dial = await withContactDialLock(task.contactId, async () => {
+    const cap = await checkCallCap(task.contactId, new Date());
+    if (!cap.allowed) return { kind: 'refused', reason: describeCallCapRefusal(cap) } as const;
+    const calling = await transitionTask(task.id, 'calling', { candidateWindows });
+    if (calling.status !== 'calling') return { kind: 'stopped', status: calling.status } as const;
+    try {
+      return { kind: 'dialing', callAttempt: await createCallAttempt(task.id) } as const;
+    } catch (err) {
+      // Otherwise the task sits in 'calling' with no call attempt forever: the
+      // poller doesn't resume 'calling', and the stale-call sweep skips a task
+      // with no attempt.
+      logger.error({ err, taskId }, 'could not record the call attempt — failing the task instead of dialing');
+      return { kind: 'unrecorded' } as const;
+    }
+  });
+  if (dial.kind === 'refused') {
+    await failOverCallCap(task.id, dial.reason);
+    return;
+  }
+  if (dial.kind === 'unrecorded') {
+    const failed = await transitionTask(task.id, 'failed', {
+      outcome: { kind: 'failed', reason: 'The call could not be started: recording the call attempt failed. No call was placed.' },
+    });
+    if (failed.status === 'failed') await notifyTaskOutcome(task.id);
+    return;
+  }
+  if (dial.kind === 'stopped') {
+    logger.info({ taskId, status: dial.status }, 'task can no longer be started — not placing the call');
     return;
   }
 
-  const callAttempt = await createCallAttempt(task.id);
+  const { callAttempt } = dial;
   const telephony = createTelephonyProvider();
   const ownerProfile = readOwnerProfile();
   const systemPrompt = buildCallSystemPrompt(task, contact, candidateWindows, ownerProfile);
@@ -134,6 +172,12 @@ async function runTask(taskId: string): Promise<void> {
     unregisterLiveCall(task.id);
     throw err;
   }
+}
+
+async function failOverCallCap(taskId: string, reason: string): Promise<void> {
+  logger.warn({ taskId }, 'per-number call cap reached — not placing the call');
+  const failed = await transitionTask(taskId, 'failed', { outcome: { kind: 'failed', reason } });
+  if (failed.status === 'failed') await notifyTaskOutcome(taskId);
 }
 
 /**
@@ -196,9 +240,11 @@ export async function sweepStaleCalls(): Promise<void> {
     // A Calendar outage must not stall the sweep — an honest "we don't know"
     // still beats leaving the task in limbo, which is the bug being fixed.
     let booked: Awaited<ReturnType<typeof calendar.findEventByIdempotencyKey>>;
+    let calendarChecked = true;
     try {
       booked = await calendar.findEventByIdempotencyKey(`confirm:${attempt.id}`);
     } catch (err) {
+      calendarChecked = false;
       logger.error({ err, taskId: task.id }, 'stale-call sweep could not reach the calendar — reporting outcome as unknown');
     }
 
@@ -229,7 +275,11 @@ export async function sweepStaleCalls(): Promise<void> {
         {
           outcome: {
             kind: 'failed',
-            reason: 'The call was interrupted before it finished, and no booking was found on the calendar. Its outcome is unknown.',
+            // Only claim the calendar was empty when it was actually read — a
+            // failed lookup says nothing about whether a booking exists.
+            reason: calendarChecked
+              ? 'The call was interrupted before it finished, and no booking was found on the calendar. Its outcome is unknown.'
+              : 'The call was interrupted before it finished, and the calendar could not be checked for a booking — check it by hand. Its outcome is unknown.',
           },
         },
         { from: ['calling', 'negotiating'] },

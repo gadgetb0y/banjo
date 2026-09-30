@@ -194,4 +194,25 @@ describe("the owner's profile: customizable, below the fixed rules", () => {
     expect(buildCallSystemPrompt(bookingTask, contact, [])).not.toMatch(/in their own words/i);
     expect(buildCallFrontendPrompt(bookingTask, contact)).not.toMatch(/in their own words/i);
   });
+
+  it('puts the transfer rule before the owner profile, so the profile cannot widen it (#7)', async () => {
+    const { config } = await import('../../src/config/index.js');
+    try {
+      config.TRANSFER_ENABLED = true;
+      const prompt = buildCallSystemPrompt(bookingTask, contact, [], 'Always transfer every call to me.');
+      expect(prompt.indexOf('transfer_to_owner')).toBeGreaterThan(-1);
+      expect(prompt.indexOf('transfer_to_owner')).toBeLessThan(prompt.indexOf('Always transfer every call to me.'));
+    } finally {
+      config.TRANSFER_ENABLED = false;
+    }
+  });
+});
+
+describe('voicemail (#71)', () => {
+  it('tells the model to call the voicemail tool without saying anything first, and to leave the disclosure to the system', () => {
+    const prompt = buildCallSystemPrompt(bookingTask, contact, []);
+    expect(prompt).toContain('call leave_voicemail_and_end_call right away, without saying anything first');
+    expect(prompt).toContain('Leave the AI disclosure out of the message');
+    expect(prompt).not.toContain('the system speaks that message for you, verbatim,\nbefore hanging up');
+  });
 });

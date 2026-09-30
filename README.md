@@ -14,7 +14,7 @@ Banjo is the phone half of a pair. The other half is a Claude Code skill
 be done online — and only picks up the phone when it can't.
 
 It also answers your number, if you want it to: an optional inbound line where people can book,
-check or reschedule with you, recognizing callers already in your Google Contacts.
+check or reschedule with you, recognizing callers already in your Google or CardDAV (Fastmail, iCloud) contacts.
 
 ## Hear it
 
@@ -92,14 +92,23 @@ project with one maintainer. Things worth knowing before you build on it:
   party's greeting and Banjo's opener aren't on the recording. Both are off by default and deleted after
   30 days (`TRANSCRIPT_RETENTION_DAYS`, `RECORDING_RETENTION_DAYS`). Inbound calls are never recorded.
   ([#6](https://github.com/shatch/banjo/issues/6), [#8](https://github.com/shatch/banjo/issues/8))
-- **No call transfer.** When a call needs a human, Banjo hangs up and notifies you rather than
-  handing the call over. ([#7](https://github.com/shatch/banjo/issues/7))
+- **Call transfer is cold and off by default.** With `TRANSFER_ENABLED=true` and `TRANSFER_TO_PHONE_NUMBER`
+  set, Banjo can hand a live call straight to you instead of hanging up and notifying — but only after
+  asking the other party and getting a yes, and only for one fixed number; the model never chooses who to
+  connect. If you don't answer, they hear `TRANSFER_FALLBACK_MESSAGE` and the call ends. No whisper of
+  context before you're bridged in yet, and no warm transfer (Banjo can't stay on the line).
+  ([#7](https://github.com/shatch/banjo/issues/7))
 - **AI disclosure is a prompt rule, checked after the call, not enforced.** Banjo is told to open every
   call with `DISCLOSURE_LINE` (default: *"Hi, I'm an AI assistant calling on behalf of {name}."*, and it
   must say "AI"). Afterwards, its first line is checked. A miss is recorded on the call attempt and
   noted in your notification, but it isn't prevented.
   **If you're in a jurisdiction with AI-disclosure or two-party-consent rules (TCPA/FCC, California
   AB 2905), check your own calls.** ([#8](https://github.com/shatch/banjo/issues/8))
+- **CalDAV/CardDAV is opt-in and not yet proven on a real call.** Google stays the default. Fastmail,
+  iCloud and Nextcloud work only if you set `CALENDAR_PROVIDER=caldav` and/or `CONTACTS_PROVIDER=carddav`.
+  The code is tested, but no real booking has been made through a CalDAV calendar yet. Until one has,
+  check the first few bookings in your calendar yourself.
+  ([#70](https://github.com/shatch/banjo/pull/70))
 - **Logs are redacted, not access-controlled.** Phone numbers are logged with only the last 4 digits,
   and voicemail text and raw tool arguments as a length. Error messages from vendors can still quote a
   number, and `LOG_TRANSCRIPTS=true` deliberately logs full call text. Treat logs as sensitive.
@@ -130,6 +139,11 @@ conversation length, silence still bills, and how much the model talks varies pe
 across real calls, all-in vendor spend has run roughly $0.11–$0.17 per minute**, dominated by voice
 AI rather than telephony. A 3-minute booking call is somewhere around $0.35–$0.50.
 
+A call transfer (`TRANSFER_ENABLED`) adds a second billed Twilio leg: an outbound call to
+`TRANSFER_TO_PHONE_NUMBER`, at the outbound rate above, for as long as you're on it — on top of
+the original call's leg, which stays up while you talk. The voice AI stops billing once the call is
+handed over.
+
 Two honest notes. Pick `gpt-realtime-mini` and audio costs drop by about two thirds, at some
 quality cost. And don't run Banjo to save money against a SaaS subscription — at these rates you'd
 need a lot of calls, and the saving won't pay for an hour of your attention. Run it because it's
@@ -149,7 +163,13 @@ Banjo needs four things before it can place a real call — get these first:
    default — Gemini Live and ElevenLabs Conversational AI are supported but flagged
    `NEEDS VERIFICATION` in a few places (see `docs/ARCHITECTURE.md`'s Open Risks section) since they haven't
    carried live call traffic the way the OpenAI path has. Get an API key from whichever you pick.
-3. **A Google OAuth client + refresh token**, if you want live calendar-aware booking and/or Google Contacts
+3. **Calendar and contacts access**, if you want live calendar-aware booking and caller ID. Either
+   CalDAV/CardDAV (Fastmail, iCloud, Nextcloud) with an app password — set `CALENDAR_PROVIDER=caldav`
+   and/or `CONTACTS_PROVIDER=carddav`, see `docs/RUNBOOKS.md`'s "Connecting Fastmail calendar and
+   contacts" — or Google, below. Google is the default. CalDAV/CardDAV is opt-in and hasn't carried
+   a real booking yet (see Known limitations).
+
+   **A Google OAuth client + refresh token**, if you want Google Calendar and/or Google Contacts
    integration (caller-ID personalization, `find_contact` fallback) — the two share one client and one
    refresh token minted with both scopes at once. See `docs/RUNBOOKS.md`'s "Minting `GOOGLE_OAUTH_REFRESH_TOKEN`"
    runbook for the exact steps, and `docs/ARCHITECTURE.md`'s Calendar/Google Contacts sections for how each is
@@ -178,6 +198,8 @@ Then, to run the whole thing in Docker:
 cp .env.example .env   # fill in ASSISTANT_PRINCIPAL_NAME + everything from steps 1-3 above
 docker compose up      # Postgres + Banjo; migrations are applied on boot
 ```
+
+`docker compose up` pulls the published image, `ghcr.io/shatch/banjo`, built for amd64 and arm64 on each release. Set `BANJO_VERSION` in `.env` to pin a release, for example `0.1.0`. The default is `latest`. To run your own checkout instead, use `docker compose up --build`.
 
 Or to develop against it locally, with hot reload:
 

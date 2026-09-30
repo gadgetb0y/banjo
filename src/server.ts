@@ -3,7 +3,7 @@ import { Hono, type Context } from 'hono';
 import type { IncomingMessage } from 'node:http';
 import { WebSocketServer, type WebSocket } from 'ws';
 import twilioLib from 'twilio';
-import { GoogleCalendarProvider } from './calendar/googleCalendarProvider.js';
+import { createCalendarProvider } from './calendar/factory.js';
 import { config } from './config/index.js';
 import { buildInboundCallSessionOptions } from './inbound/callSessionAdapter.js';
 import { resolveCallerContext } from './inbound/callerContext.js';
@@ -14,6 +14,8 @@ import { registerMcpRoutes } from './mcp/server.js';
 import { healthRoutes } from './routes/health.js';
 import { CallSession } from './session/callSession.js';
 import { createTelephonyProvider } from './telephony/factory.js';
+import type { TransferResult } from './tasks/schema.js';
+import { recordTransferResult } from './tasks/service.js';
 
 /**
  * Twilio-specific hooks not part of the common TelephonyProvider interface
@@ -25,12 +27,17 @@ interface TwilioHttpHooks {
   buildTwiml(callId: string): string;
   handleMediaStreamConnection(ws: WebSocket): void;
   handleAmdCallback(callId: string, answeredBy: string): void;
+  handleStatusCallback(callId: string, callStatus: string): void;
   buildInboundTwiml(): string;
   buildDeclineTwiml(): string;
   isAnyCallActive(): boolean;
   registerInboundCall(callSid: string, from: string): void;
   unregisterInboundCall(callSid: string): void;
   handleInboundMediaStreamConnection(ws: WebSocket): void;
+  buildTransferCallbackTwiml(result: TransferResult): string;
+  buildTransferScreenTwiml(callId: string): string;
+  acceptTransferScreen(callId: string, digits: string): string;
+  takeTransferAccepted(callId: string): boolean;
 }
 
 /**
@@ -77,7 +84,7 @@ app.route('/', healthRoutes);
 registerMcpRoutes(app);
 
 const telephony = createTelephonyProvider() as unknown as TwilioHttpHooks;
-const calendar = new GoogleCalendarProvider();
+const calendar = createCalendarProvider();
 
 app.post('/telephony/twilio/twiml', async (c) => {
   const body = await c.req.parseBody();
@@ -87,7 +94,7 @@ app.post('/telephony/twilio/twiml', async (c) => {
   }
   const callId = c.req.query('callId') ?? '';
   const twiml = telephony.buildTwiml(callId);
-  logger.info({ callId, twiml }, 'serving TwiML for outbound call');
+  logger.info({ callId, twimlLength: twiml.length }, 'serving TwiML for outbound call');
   return c.body(twiml, 200, { 'Content-Type': 'text/xml' });
 });
 
@@ -102,6 +109,98 @@ app.post('/telephony/twilio/amd-callback', async (c) => {
   logger.info({ callId, answeredBy }, 'AMD callback received');
   telephony.handleAmdCallback(callId, answeredBy);
   return c.body(null, 204);
+});
+
+// An outbound call's final status (#79) — how Banjo learns a call that never
+// connected (busy, no answer, failed) is over.
+app.post('/telephony/twilio/status-callback', async (c) => {
+  const body = await c.req.parseBody();
+  if (!isValidTwilioSignature(c, body as Record<string, string>)) {
+    logger.warn({ path: c.req.path }, 'rejected Twilio webhook with invalid or missing signature');
+    return c.body(null, 403);
+  }
+  const callId = c.req.query('callId') ?? '';
+  const callStatus = typeof body.CallStatus === 'string' ? body.CallStatus : '';
+  logger.info({ callId, callStatus }, 'call status callback received');
+  telephony.handleStatusCallback(callId, callStatus);
+  return c.body(null, 204);
+});
+
+/**
+ * Twilio's DialCallStatus, as recorded on call_attempts.transfer_result.
+ * Anything unknown counts as failed. A dial the principal's line picked up
+ * counts as answered only if they accepted it at the screen (#74): their
+ * voicemail picks up too, and Twilio reports that as completed. Accepted is
+ * this process's record of the key press. Twilio's DialBridged is logged,
+ * not trusted: its docs don't say whether a voicemail picking up before the
+ * screen hangs up counts as bridged, and if it does, trusting it brings the
+ * bug back. Revisit once a live call shows its value in both cases.
+ */
+function transferResultFrom(dialCallStatus: unknown, accepted: boolean): TransferResult {
+  switch (dialCallStatus) {
+    case 'completed':
+    case 'answered':
+      return accepted ? 'answered' : 'no_answer';
+    case 'no-answer':
+      return 'no_answer';
+    case 'busy':
+      return 'busy';
+    default:
+      return 'failed';
+  }
+}
+
+/**
+ * The <Dial action> of a transfer_to_owner redirect (#7): Twilio calls this
+ * when the dial to the principal ends, and runs the TwiML it returns — the
+ * fallback line when they weren't reached. Recording the result must never
+ * keep that TwiML from going back, or the caller is left in silence.
+ */
+app.post('/telephony/twilio/transfer-callback', async (c) => {
+  const body = await c.req.parseBody();
+  if (!isValidTwilioSignature(c, body as Record<string, string>)) {
+    logger.warn({ path: c.req.path }, 'rejected Twilio webhook with invalid or missing signature');
+    return c.body(null, 403);
+  }
+  const callId = c.req.query('callId') ?? '';
+  const acceptedHere = telephony.takeTransferAccepted(callId);
+  const bridged = body.DialBridged === 'true';
+  const result = transferResultFrom(body.DialCallStatus, acceptedHere);
+  // Logged before recording, so it survives a failed write: DialBridged's
+  // value after a screen is what the #74 live test is collecting.
+  logger.info({ callId, result, acceptedHere, bridged, dialCallStatus: body.DialCallStatus }, 'transfer dial ended');
+  try {
+    const recorded = await recordTransferResult(callId, result);
+    logger.info({ callId, recorded }, 'transfer result recorded');
+  } catch (err) {
+    logger.error({ err, callId, result }, 'could not record the transfer result');
+  }
+  return c.body(telephony.buildTransferCallbackTwiml(result), 200, { 'Content-Type': 'text/xml' });
+});
+
+/** The <Number url> of a transfer (#74): the screening prompt, run on the principal's leg once it picks up. */
+app.post('/telephony/twilio/transfer-screen', async (c) => {
+  const body = await c.req.parseBody();
+  if (!isValidTwilioSignature(c, body as Record<string, string>)) {
+    logger.warn({ path: c.req.path }, 'rejected Twilio webhook with invalid or missing signature');
+    return c.body(null, 403);
+  }
+  const callId = c.req.query('callId') ?? '';
+  logger.info({ callId }, 'transfer reached the principal — screening');
+  return c.body(telephony.buildTransferScreenTwiml(callId), 200, { 'Content-Type': 'text/xml' });
+});
+
+/** The screening prompt's <Gather action> (#74): the principal's key press, if any. */
+app.post('/telephony/twilio/transfer-screen-result', async (c) => {
+  const body = await c.req.parseBody();
+  if (!isValidTwilioSignature(c, body as Record<string, string>)) {
+    logger.warn({ path: c.req.path }, 'rejected Twilio webhook with invalid or missing signature');
+    return c.body(null, 403);
+  }
+  const callId = c.req.query('callId') ?? '';
+  const digits = typeof body.Digits === 'string' ? body.Digits : '';
+  logger.info({ callId, accepted: digits === '1' }, 'transfer screen answered');
+  return c.body(telephony.acceptTransferScreen(callId, digits), 200, { 'Content-Type': 'text/xml' });
 });
 
 /**

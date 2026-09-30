@@ -85,3 +85,84 @@ describe('listStartableTasks (#3)', () => {
     expect(ids).toEqual([asap.id, due.id, resuming.id].sort());
   });
 });
+
+describe('recordTransferResult (#7)', () => {
+  it("records the dial result on the call attempt, and ignores ids that aren't call attempts", async () => {
+    const [contact] = await db.insert(contacts).values({ displayName: 'Salon', phoneNumber: '+15551230004' }).returning();
+    const task = await service.createTask({ contactId: contact.id, channel: 'phone', goalDescription: 'Call', constraints: {} });
+    const attempt = await service.createCallAttempt(task.id);
+
+    expect(await service.recordTransferResult(attempt.id, 'no_answer')).toBe(true);
+    expect((await service.latestCallAttemptFor(task.id))?.transferResult).toBe('no_answer');
+
+    // An inbound call's id is a Twilio CallSid, not a UUID: no query, no throw.
+    expect(await service.recordTransferResult('CA0123456789abcdef', 'answered')).toBe(false);
+    // A UUID that matches nothing.
+    expect(await service.recordTransferResult('00000000-0000-0000-0000-000000000000', 'answered')).toBe(false);
+  });
+
+  it("'transferred' is a terminal status", async () => {
+    expect(service.isTerminalStatus('transferred')).toBe(true);
+  });
+});
+
+describe('counting calls to a contact, for the per-number call cap', () => {
+  const now = new Date('2026-09-26T20:00:00.000Z');
+  const hoursAgo = (h: number) => new Date(now.getTime() - h * 60 * 60 * 1000);
+
+  it('lists the start times of call attempts to that contact since a time, oldest first', async () => {
+    const [jess] = await db.insert(contacts).values({ displayName: 'Jess', phoneNumber: '+15551230010' }).returning();
+    const [other] = await db.insert(contacts).values({ displayName: 'Other', phoneNumber: '+15551230011' }).returning();
+    const call = async (contactId: string, startedAt: Date) => {
+      const task = await service.createTask({ contactId, channel: 'phone', goalDescription: 'Call', constraints: {} });
+      await db.insert(callAttempts).values({ taskId: task.id, startedAt });
+    };
+    await call(jess.id, hoursAgo(30)); // outside the 24h window
+    await call(jess.id, hoursAgo(20));
+    await call(jess.id, hoursAgo(2));
+    await call(other.id, hoursAgo(1)); // someone else
+
+    const recent = await service.callsPlacedToContactSince(jess.id, hoursAgo(24));
+    expect(recent.map((d) => d.toISOString())).toEqual([hoursAgo(20).toISOString(), hoursAgo(2).toISOString()]); // oldest first
+    expect(await service.callsPlacedToContactSince(other.id, hoursAgo(24))).toHaveLength(1);
+  });
+
+  it('counts queued calls that are due now and not yet dialed, but not future or finished ones', async () => {
+    const [jess] = await db.insert(contacts).values({ displayName: 'Jess', phoneNumber: '+15551230012' }).returning();
+    const make = (scheduledFor?: Date) =>
+      service.createTask({ contactId: jess.id, channel: 'phone', goalDescription: 'Call', constraints: {}, scheduledFor });
+    await make(); // pending, call now
+    const claimed = await make();
+    await service.transitionTask(claimed.id, 'checking_availability');
+    await make(new Date(now.getTime() + 60 * 60 * 1000)); // scheduled later
+    const done = await make();
+    await service.transitionTask(done.id, 'failed', { outcome: { kind: 'failed', reason: 'x' } });
+
+    expect(await service.dueQueuedCallsForContact(jess.id, now)).toBe(2);
+  });
+});
+
+describe('withContactAdvisoryLock (per-number call cap across processes)', () => {
+  it('lets only one holder per contact run at a time, even from separate connections', async () => {
+    const order: string[] = [];
+    let release!: () => void;
+    const first = service.withContactAdvisoryLock('contact-a', async () => {
+      order.push('first start');
+      await new Promise<void>((r) => (release = r));
+      order.push('first end');
+    });
+    await new Promise((r) => setTimeout(r, 50));
+    const second = service.withContactAdvisoryLock('contact-a', async () => {
+      order.push('second');
+    });
+    const otherContact = service.withContactAdvisoryLock('contact-b', async () => {
+      order.push('other contact');
+    });
+    await otherContact;
+    await new Promise((r) => setTimeout(r, 50));
+    expect(order).toEqual(['first start', 'other contact']);
+    release();
+    await Promise.all([first, second]);
+    expect(order).toEqual(['first start', 'other contact', 'first end', 'second']);
+  });
+});

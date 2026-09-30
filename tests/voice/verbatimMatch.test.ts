@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { normalizeForVerbatimMatch, verbatimMatches } from '../../src/voice/verbatimMatch.js';
+import { normalizeForVerbatimMatch, verbatimMatches, withoutRepeatedLead } from '../../src/voice/verbatimMatch.js';
 
 const MESSAGE = "Hi, this is Alex's assistant calling to book a haircut. Please call back at 555-1234. Thanks!";
 
@@ -79,5 +79,24 @@ describe('verbatimMatches: rejected differences (the callee heard something else
 describe('normalizeForVerbatimMatch', () => {
   it('splits digits from letters and collapses digit runs', () => {
     expect(normalizeForVerbatimMatch('Call 555-1234 at 2:30pm')).toEqual(['call', '5551234', 'at', '230', 'pm']);
+  });
+});
+
+describe('withoutRepeatedLead (#71)', () => {
+  const lead = "Hi, I'm an AI assistant calling on behalf of Dr. Smith.";
+  const withNotice = `${lead} This call is recorded.`;
+
+  it('drops a whole repeat of any of the leads', () => {
+    expect(withoutRepeatedLead(`${withNotice} Please call back.`, [withNotice, lead])).toBe('Please call back.');
+    expect(withoutRepeatedLead(`${lead} Please call back.`, [withNotice, lead])).toBe('Please call back.');
+  });
+
+  it('never leaves a fragment when the message only starts like a lead — an abbreviation ends no sentence here', () => {
+    const message = "Hi, I'm an AI assistant calling on behalf of Dr. Smith's patient Steve. Please call back.";
+    expect(withoutRepeatedLead(message, [withNotice, lead])).toBe(message);
+  });
+
+  it('keeps a greeting that is not the whole lead', () => {
+    expect(withoutRepeatedLead('Hi. Please call back.', [lead])).toBe('Hi. Please call back.');
   });
 });

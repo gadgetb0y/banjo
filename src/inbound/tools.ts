@@ -4,6 +4,7 @@ import { config } from '../config/index.js';
 import { childLogger } from '../lib/logger.js';
 import { formatInZone } from '../lib/timezone.js';
 import { sendOwnerMessage } from '../notifications/owner.js';
+import { defineTransferTool } from '../telephony/transfer.js';
 import { combineDateTimeToIso, hangUpAfterSpeaking, runToolSafely } from '../voice/tools/callTools.js';
 import { defineVoiceTool, toToolDefinition, type VoiceTool } from '../voice/tools/defineVoiceTool.js';
 import type { ToolDefinition } from '../voice/types.js';
@@ -50,7 +51,7 @@ function formatStartForModel(confirmedStart: Date): string {
  * Picks `count` items evenly spread across `items` (always including the
  * first and last) rather than the first `count` in order. suggest_times'
  * candidate windows come back in chronological order from
- * chunkIntoWindows (googleCalendarProvider.ts) — on a wide-open day, a
+ * chunkIntoWindows (src/calendar/freeSlots.ts) — on a wide-open day, a
  * bare slice(0, count) returned nothing but consecutive early-morning
  * slots, and the model had no way to know later slots existed at all, so
  * it told callers only mornings were free.
@@ -412,3 +413,17 @@ export const inboundTools: VoiceTool<any, InboundCallContext>[] = [
 ] as VoiceTool<any, InboundCallContext>[];
 
 export const inboundToolDefinitions: ToolDefinition[] = inboundTools.map(toToolDefinition);
+
+/** transfer_to_owner for inbound calls (#7): no task to record, so the owner is told who is coming through. */
+export const inboundTransferToOwnerTool = defineTransferTool<InboundCallContext>({
+  async onTransferred(input, ctx) {
+    await sendOwnerMessage(`Transferring inbound caller ${ctx.callerPhoneNumber} to you — ${input.reason}`);
+  },
+});
+
+/** The inbound tool list for this process's config: inboundTools, plus transfer_to_owner when TRANSFER_ENABLED is on. */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export function inboundToolsFor(): VoiceTool<any, InboundCallContext>[] {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  return config.TRANSFER_ENABLED ? [...inboundTools, inboundTransferToOwnerTool as VoiceTool<any, InboundCallContext>] : inboundTools;
+}

@@ -23,11 +23,14 @@ const ALL_CONFIG_KEYS = [
   'VOICE_AI_PROVIDER', 'OPENAI_API_KEY', 'OPENAI_REALTIME_MODEL', 'OPENAI_LIVE_MODEL', 'OPENAI_LIVE_BACKEND_MODEL',
   'GEMINI_API_KEY', 'GEMINI_LIVE_MODEL', 'ELEVENLABS_API_KEY', 'ELEVENLABS_AGENT_ID',
   'TWILIO_ACCOUNT_SID', 'TWILIO_AUTH_TOKEN', 'TWILIO_PHONE_NUMBER', 'TWILIO_WEBHOOK_VALIDATION_ENABLED',
+  'CALENDAR_PROVIDER', 'CONTACTS_PROVIDER', 'DAV_USERNAME', 'DAV_PASSWORD', 'CALDAV_CALENDAR_URL', 'CARDDAV_ADDRESSBOOK_URL',
+  'GOOGLE_CONTACTS_SYNC_INTERVAL_HOURS', 'CONTACTS_SYNC_INTERVAL_HOURS',
   'GOOGLE_OAUTH_CLIENT_ID', 'GOOGLE_OAUTH_CLIENT_SECRET', 'GOOGLE_OAUTH_REFRESH_TOKEN', 'GOOGLE_CALENDAR_ID',
   'NOTIFICATION_CHANNEL', 'NOTIFY_TO_PHONE_NUMBER', 'NOTIFY_FROM_PHONE_NUMBER', 'PUSHOVER_APP_TOKEN', 'PUSHOVER_USER_KEY', 'PUSHOVER_DEVICE',
   'MCP_API_KEY', 'TOOL_TIMEOUT_MS', 'LOG_TRANSCRIPTS',
   'INBOUND_BOOKING_ENABLED', 'BUSINESS_HOURS_DAYS', 'BUSINESS_HOURS_START', 'BUSINESS_HOURS_END',
   'INBOUND_DEFAULT_DURATION_MINUTES', 'INBOUND_MAX_LOOKAHEAD_DAYS', 'ASSISTANT_PRINCIPAL_NAME', 'DISCLOSURE_LINE', 'RECORD_CALLS', 'RECORDING_RETENTION_DAYS',
+  'TRANSFER_ENABLED', 'TRANSFER_TO_PHONE_NUMBER', 'TRANSFER_FALLBACK_MESSAGE',
 ];
 
 function setEnv(overrides: Record<string, string | undefined>) {
@@ -128,6 +131,73 @@ describe('config: env schema', () => {
     expect(config.NOTIFICATION_CHANNEL).toBe('pushover');
   });
 
+  it('defaults CALENDAR_PROVIDER to google, with no CalDAV vars required', async () => {
+    setEnv({});
+    const { config } = await import('../src/config/index.js');
+    expect(config.CALENDAR_PROVIDER).toBe('google');
+  });
+
+  it('fails fast when CALENDAR_PROVIDER=caldav is missing its credentials', async () => {
+    setEnv({
+      CALENDAR_PROVIDER: 'caldav',
+      CALDAV_CALENDAR_URL: 'https://caldav.example.com/dav/calendars/user/me/work/',
+      DAV_USERNAME: 'me@example.com',
+    });
+    await expect(import('../src/config/index.js')).rejects.toThrow(/DAV_PASSWORD/);
+  });
+
+  it('accepts CALENDAR_PROVIDER=caldav with a calendar URL, username, and password', async () => {
+    setEnv({
+      CALENDAR_PROVIDER: 'caldav',
+      CALDAV_CALENDAR_URL: 'https://caldav.example.com/dav/calendars/user/me/work/',
+      DAV_USERNAME: 'me@example.com',
+      DAV_PASSWORD: 'app-password',
+    });
+    const { config } = await import('../src/config/index.js');
+    expect(config.CALENDAR_PROVIDER).toBe('caldav');
+  });
+
+  it('refuses a plain-http DAV URL, which would send the app password in the clear', async () => {
+    setEnv({ CALDAV_CALENDAR_URL: 'http://caldav.example.com/dav/calendars/user/me/work/' });
+    await expect(import('../src/config/index.js')).rejects.toThrow(/CALDAV_CALENDAR_URL.*https/s);
+  });
+
+  it('allows plain http to localhost, e.g. a Radicale server for development', async () => {
+    setEnv({
+      CARDDAV_ADDRESSBOOK_URL: 'http://localhost:5232/me/contacts/',
+      CALDAV_CALENDAR_URL: 'http://127.0.0.1:5232/me/calendar/',
+    });
+    const { config } = await import('../src/config/index.js');
+    expect(config.CARDDAV_ADDRESSBOOK_URL).toBe('http://localhost:5232/me/contacts/');
+  });
+
+  it('fails fast when CONTACTS_PROVIDER=carddav has no address book URL', async () => {
+    setEnv({ CONTACTS_PROVIDER: 'carddav', DAV_USERNAME: 'me@example.com', DAV_PASSWORD: 'app-password' });
+    await expect(import('../src/config/index.js')).rejects.toThrow(/CARDDAV_ADDRESSBOOK_URL/);
+  });
+
+  it('accepts CONTACTS_PROVIDER=carddav with an address book URL and the shared DAV sign-in', async () => {
+    setEnv({
+      CONTACTS_PROVIDER: 'carddav',
+      CARDDAV_ADDRESSBOOK_URL: 'https://carddav.example.com/dav/addressbooks/user/me/Default/',
+      DAV_USERNAME: 'me@example.com',
+      DAV_PASSWORD: 'app-password',
+    });
+    const { config } = await import('../src/config/index.js');
+    expect(config.CONTACTS_PROVIDER).toBe('carddav');
+  });
+
+  it('CONTACTS_SYNC_INTERVAL_HOURS wins over the older GOOGLE_CONTACTS_SYNC_INTERVAL_HOURS, which still works alone', async () => {
+    setEnv({ GOOGLE_CONTACTS_SYNC_INTERVAL_HOURS: '12' });
+    let mod = await import('../src/config/index.js');
+    expect(mod.contactsSyncIntervalHours()).toBe(12);
+
+    vi.resetModules();
+    setEnv({ GOOGLE_CONTACTS_SYNC_INTERVAL_HOURS: '12', CONTACTS_SYNC_INTERVAL_HOURS: '1' });
+    mod = await import('../src/config/index.js');
+    expect(mod.contactsSyncIntervalHours()).toBe(1);
+  });
+
   it('fails fast when NOTIFICATION_CHANNEL=twilio_sms without notify phone numbers', async () => {
     setEnv({ NOTIFICATION_CHANNEL: 'twilio_sms' });
     await expect(import('../src/config/index.js')).rejects.toThrow();
@@ -226,6 +296,31 @@ describe('config: env schema', () => {
       setEnv({});
       const { disclosureLine } = await import('../src/config/index.js');
       expect(disclosureLine()).not.toMatch(/record/i);
+    });
+  });
+
+  describe('call transfer (#7)', () => {
+    it('is off by default and needs no number', async () => {
+      setEnv({});
+      const { config } = await import('../src/config/index.js');
+      expect(config.TRANSFER_ENABLED).toBe(false);
+      expect(config.TRANSFER_FALLBACK_MESSAGE).toMatch(/couldn't be reached/);
+    });
+
+    it('requires TRANSFER_TO_PHONE_NUMBER when enabled', async () => {
+      setEnv({ TRANSFER_ENABLED: 'true' });
+      await expect(import('../src/config/index.js')).rejects.toThrow(/TRANSFER_TO_PHONE_NUMBER/);
+    });
+
+    it('accepts an E.164 number when enabled, and rejects one without its +', async () => {
+      setEnv({ TRANSFER_ENABLED: 'true', TRANSFER_TO_PHONE_NUMBER: '+15557654321' });
+      const { config } = await import('../src/config/index.js');
+      expect(config.TRANSFER_ENABLED).toBe(true);
+      expect(config.TRANSFER_TO_PHONE_NUMBER).toBe('+15557654321');
+
+      vi.resetModules();
+      setEnv({ TRANSFER_ENABLED: 'true', TRANSFER_TO_PHONE_NUMBER: '15557654321' });
+      await expect(import('../src/config/index.js')).rejects.toThrow();
     });
   });
 });

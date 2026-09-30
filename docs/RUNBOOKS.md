@@ -82,6 +82,51 @@ manual stopgap until then.
 
 ---
 
+## Connecting Fastmail calendar and contacts
+
+Banjo can read availability from, and write bookings to, one CalDAV calendar, and keep its contacts
+cache in step with one CardDAV address book. Both sign in with one app password, never your account
+password. These steps are for Fastmail; iCloud and Nextcloud work the same way with their own app
+passwords and servers.
+
+### Steps
+
+1. **Make an app password.** In Fastmail, open Settings → Privacy & Security and create a new app
+   password there. Give it calendar (CalDAV) and contacts (CardDAV) access — nothing else — if
+   Fastmail offers the choice, and name it "Banjo" so it's easy to find and revoke.
+2. **Add it to `.env`** (git-ignored; Docker reads it through `env_file`):
+
+   ```bash
+   DAV_USERNAME=you@fastmail.com
+   DAV_PASSWORD=<the app password>
+   ```
+
+3. **Pick a calendar and an address book.** `npm run dav:check` signs in and lists both with their
+   URLs. Copy one of each into `CALDAV_CALENDAR_URL` and `CARDDAV_ADDRESSBOOK_URL`. Fastmail's look like
+   `https://caldav.fastmail.com/dav/calendars/user/you@fastmail.com/<id>/` and
+   `https://carddav.fastmail.com/dav/addressbooks/user/you@fastmail.com/Default/`.
+4. **Check what Banjo sees.** Run `npm run dav:check` again. For the address book it counts contacts,
+   those with phone numbers (only they can identify a caller), groups, and relations — Banjo treats
+   groups named "Family" or "Friends" and relations like spouse or child as close contacts. For the
+   calendar it lists the next 7 days of busy times in `CALENDAR_TIMEZONE`; events marked free, declined
+   invitations, and all-day events not marked busy are deliberately left out. Nothing is written
+   anywhere.
+5. **Switch over.** Set `CALENDAR_PROVIDER=caldav` and/or `CONTACTS_PROVIDER=carddav` and restart.
+   Boot fails fast if a URL or the `DAV_*` sign-in is missing. On its first CardDAV sync, Banjo makes
+   the contacts cache match the address book exactly, which removes any rows from Google Contacts.
+   Your curated `contacts` table isn't touched. The URLs must be `https` (plain `http` only to
+   `localhost`), since every request carries the app password.
+
+Bookings Banjo made before the switch stay in Google Calendar, and Banjo can no longer move or cancel
+them: a reschedule or mid-call undo of one fails with "not a CalDAV event Banjo created" rather
+than pretending it worked. Change those by hand. Likewise `CONTACTS_PROVIDER=none` ignores the
+contacts cache entirely instead of trusting whatever an earlier provider last synced.
+
+To revoke Banjo's access, delete the app password in Fastmail. Availability checks then fail with
+HTTP 401, and contact syncs log the failure and keep the last cache, until you add a new one.
+
+---
+
 ## Minting `GOOGLE_OAUTH_REFRESH_TOKEN` (Calendar + Contacts)
 
 Banjo's Calendar and Google Contacts integrations share one OAuth2 client and refresh token — the same
@@ -109,6 +154,38 @@ Calendar keeps working even before this step is done; Contacts integration just 
 is upgraded. A Calendar-only token shows up in the logs as a single line:
 `Google Contacts sync failed: GOOGLE_OAUTH_REFRESH_TOKEN lacks the contacts.readonly scope — re-mint it ...`
 (Google's `403 ACCESS_TOKEN_SCOPE_INSUFFICIENT`, detected in `src/googleContacts/googleApiErrors.ts`).
+
+### Checking which scopes a token has
+
+The Cloud Console can't show this. Scopes belong to the refresh token, not the OAuth client, so the
+Credentials page looks the same whether the token has one scope or both. Ask Google instead. This exchanges
+the running container's refresh token for a short-lived access token and prints what it was granted. It
+changes nothing:
+
+```bash
+docker compose exec -T app node -e '
+const p = new URLSearchParams({client_id: process.env.GOOGLE_OAUTH_CLIENT_ID, client_secret: process.env.GOOGLE_OAUTH_CLIENT_SECRET, refresh_token: process.env.GOOGLE_OAUTH_REFRESH_TOKEN, grant_type: "refresh_token"});
+fetch("https://oauth2.googleapis.com/token", {method: "POST", body: p}).then(r => r.json()).then(t => console.log(t.access_token ? "scopes: " + t.scope : "token exchange failed: " + t.error + " " + (t.error_description || "")));'
+```
+
+- `scopes: https://www.googleapis.com/auth/calendar https://www.googleapis.com/auth/contacts.readonly` means
+  the token is good.
+- `calendar` alone means it's Calendar-only. Mint a new one with the steps above.
+- `token exchange failed: invalid_grant` means the token was revoked, expired, or pasted wrong.
+- `token exchange failed: invalid_client` means the client ID or secret doesn't match the one the token was
+  minted with.
+
+This reads the container's environment, so after editing `.env` run `docker compose up -d app` first. A plain
+`restart` keeps the old values. When running Banjo with `npm run dev`, run the same script with
+`node --env-file=.env -e '...'` instead.
+
+To check whether the APIs are enabled without the Console, use the Google Cloud CLI (`gcloud auth login`
+first). The project number is the part of `GOOGLE_OAUTH_CLIENT_ID` before the first `-`:
+
+```bash
+gcloud services list --enabled --project <project-number> | grep -E 'calendar-json|people'
+gcloud services enable people.googleapis.com --project <project-number>   # if People API is missing
+```
 
 To check which APIs are enabled for step 1, use the Cloud Console rather than the API hostnames themselves —
 opening `https://calendar.googleapis.com/` or `https://www.googleapis.com/` in a browser returns Google's generic

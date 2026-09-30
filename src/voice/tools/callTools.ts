@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import { SlotUnavailableError } from '../../calendar/types.js';
-import { config } from '../../config/index.js';
+import { config, disclosureLine, disclosureLineWithoutNotice } from '../../config/index.js';
 import { childLogger } from '../../lib/logger.js';
 import { formatInZone, formatSpokenInZone, zonedTimeToUtcIso } from '../../lib/timezone.js';
 import { TimeoutError, withTimeout } from '../../lib/withTimeout.js';
@@ -9,6 +9,7 @@ import type { CallContext } from '../../session/types.js';
 import { isTerminalStatus, transitionTask } from '../../tasks/service.js';
 import type { TelephonyProvider } from '../../telephony/providers/types.js';
 import type { ToolDefinition } from '../types.js';
+import { withoutRepeatedLead } from '../verbatimMatch.js';
 import { defineVoiceTool, toToolDefinition, type VoiceTool } from './defineVoiceTool.js';
 
 const log = childLogger({ module: 'voice.callTools' });
@@ -70,11 +71,20 @@ function sleep(ms: number): Promise<void> {
  * extends to cover it exactly, not by a guessed amount.
  */
 const HANGUP_SAFETY_MARGIN_MS = 400; // covers Twilio's own network/buffering lag beyond our send time
-const MAX_HANGUP_WAIT_MS = 6000; // stays comfortably under TOOL_TIMEOUT_MS (default 8000ms) so a long trailing utterance can never blow the enclosing tool call's timeout budget
+// Stays comfortably under TOOL_TIMEOUT_MS (default 8000ms) so a long trailing
+// utterance can never blow the enclosing tool call's timeout budget.
+// transfer_to_owner (telephony/transfer.ts) also uses it via waitForPlayback
+// but has no such enclosing timeout: its limit is its handlerBudgetMs.
+export const MAX_HANGUP_WAIT_MS = 6000;
 
-export async function hangUpAfterSpeaking(ctx: { telephony: TelephonyProvider; callId: string; estimatedAudioDoneAt: number }): Promise<void> {
+/** Waits until the model's own trailing speech has played out (capped at MAX_HANGUP_WAIT_MS). Shared with telephony/transfer.ts. */
+export async function waitForPlayback(ctx: { estimatedAudioDoneAt: number }): Promise<void> {
   const waitMs = Math.min(MAX_HANGUP_WAIT_MS, Math.max(0, ctx.estimatedAudioDoneAt - Date.now()) + HANGUP_SAFETY_MARGIN_MS);
   await sleep(waitMs);
+}
+
+export async function hangUpAfterSpeaking(ctx: { telephony: TelephonyProvider; callId: string; estimatedAudioDoneAt: number }): Promise<void> {
+  await waitForPlayback(ctx);
   await ctx.telephony.hangUp(ctx.callId);
 }
 
@@ -391,34 +401,41 @@ export const VOICEMAIL_MESSAGE_MAX_CHARS = 500;
 export const leaveVoicemailAndEndCallTool: VoiceTool<{ message: string }> = defineVoiceTool({
   name: 'leave_voicemail_and_end_call',
   description:
-    'Leave a voicemail message and end the call. Use this when you have reached an answering machine or voicemail system instead of a human. Provide the message as the `message` argument — the system speaks it for you, verbatim, before hanging up. Do NOT say the message yourself first: the callee would hear it twice. A short natural preamble before calling this tool (e.g. reacting to the greeting you just heard) is fine; the message itself is not.',
+    'Leave a voicemail message and end the call. Use this when you have reached an answering machine or voicemail system instead of a human. Call it without saying anything first: the voicemail records everything, and it must open with the AI disclosure, which the system says for you. Provide the message as the `message` argument — the system says the disclosure, then your message, verbatim, then hangs up. Leave the disclosure out of the message, and do NOT say the message yourself: the callee would hear it twice. Never tell the callee how the message is delivered or that the call is ending.',
   schema: z.object({
     message: z
       .string()
       .min(1)
       .max(VOICEMAIL_MESSAGE_MAX_CHARS)
       .describe(
-        'The exact voicemail message to deliver — concise and natural, including a callback number if one was given to you. This is spoken to the callee verbatim by the system; do not say it yourself beforehand.',
+        'The exact voicemail message to deliver — concise and natural, including a callback number if one was given to you, without the AI disclosure (the system says that first). This is spoken to the callee verbatim by the system; do not say it yourself.',
       ),
   }),
   endsCall: true,
-  // CallSession forces this to be spoken (VoiceAIProvider.sayVerbatim) and
-  // waits for it to finish before this handler ever runs — see
-  // VoiceTool.verbatimMessage's doc comment for why. On a provider that can't
-  // guarantee verbatim playback (openai-live), ctx.verbatimDelivery says what
-  // was actually spoken: a mismatch is recorded as an escalation, never as a
-  // voicemail left, because Postgres records what the callee heard rather
-  // than what the model was asked to say. With no report (every other
-  // provider), the provider is trusted exactly as before.
-  verbatimMessage: (input) => input.message,
+  // CallSession forces these to be spoken (VoiceAIProvider.sayVerbatim), one
+  // turn each, and waits for them to finish playing before this handler ever
+  // runs — see VoiceTool.verbatimMessage's doc comment for why. The opener is
+  // its own turn so a voicemail opens with the AI disclosure, and so recording
+  // can start once its notice has played rather than after the whole message,
+  // when the call is already hanging up (#71). ctx.verbatimDelivery says what
+  // was actually spoken: anything short of a verified delivery is recorded as
+  // an escalation, never as a voicemail left, because Postgres records what
+  // the callee heard rather than what the model was asked to say.
+  verbatimMessage: (input) => {
+    const opener = disclosureLine();
+    const message = withoutRepeatedLead(input.message, [opener, disclosureLineWithoutNotice()]);
+    return message ? [opener, message] : [opener];
+  },
   handler: async (input, ctx) => {
     return runToolSafely('leave_voicemail_and_end_call', async () => {
       const delivery = ctx.verbatimDelivery;
-      if (delivery && !delivery.matched) {
+      if (!delivery?.matched) {
         await transitionTask(ctx.task.id, 'escalated', {
           outcome: {
             kind: 'escalated',
-            reason: `Voicemail delivery could not be verified — what was spoken did not match the intended message. Intended: "${delivery.intended}". Spoken: "${delivery.spoken || '(nothing)'}".`,
+            reason: delivery
+              ? `Voicemail delivery could not be verified — what was spoken did not match the intended message, or it was cut off. Intended: "${delivery.intended}". Spoken: "${delivery.spoken || '(nothing)'}".`
+              : `Voicemail delivery could not be verified — nothing checked what was spoken. Intended: "${input.message}".`,
           },
         });
         await hangUpAfterSpeaking(ctx);

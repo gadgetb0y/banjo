@@ -509,7 +509,7 @@ describe('findMyBookingTool.handler', () => {
 describe('suggestTimesTool.handler', () => {
   it('spreads its 5 suggestions across the whole open day instead of only ever returning the earliest morning slots', async () => {
     // Regression test for live-call feedback: on a day with no busy events
-    // at all, chunkIntoWindows (googleCalendarProvider.ts) produces 16
+    // at all, chunkIntoWindows (src/calendar/freeSlots.ts) produces 16
     // consecutive 30-minute windows for a 9am-5pm business day, in
     // chronological order. A bare .slice(0, 5) always took the first 5 —
     // 9:00, 9:30, 10:00, 10:30, 11:00 — every one of them morning. The
@@ -571,6 +571,37 @@ describe('suggestTimesTool.handler', () => {
     expect(result).toMatchObject({
       times: [{ start: '2026-08-10T15:00:00', end: '2026-08-10T15:30:00' }],
     });
+  });
+});
+
+describe('inbound transfer_to_owner (#7)', () => {
+  it('tells the owner who is being put through, after the redirect succeeds', async () => {
+    // Two earlier tests in this file (bookAppointmentTool/rescheduleBookingTool's
+    // "does not make the caller wait on the owner notification" cases)
+    // leave sendOwnerMessage's mock implementation permanently set to a
+    // never-resolving promise — clearAllMocks() (file-wide beforeEach)
+    // clears call history but not a mockImplementation override. Those
+    // tools fire sendOwnerMessage without awaiting it, so it never mattered to
+    // them; transfer_to_owner's onTransferred does await it, so restore a
+    // resolving implementation here first.
+    sendOwnerMessage.mockImplementation(async () => {});
+    const { inboundTransferToOwnerTool } = await import('../../src/inbound/tools.js');
+    const { config } = await import('../../src/config/index.js');
+    config.TRANSFER_TO_PHONE_NUMBER = '+15557654321';
+    const transferCall = vi.fn(async () => {});
+    // The handler also waits on a setTimeout for trailing playback
+    // (waitForPlayback, src/voice/tools/callTools.ts) before transferring —
+    // the file-wide beforeEach installs fake timers, so advance them
+    // explicitly (matching tests/telephony/transfer.test.ts's own pattern)
+    // instead of leaving that timer pending.
+    const resultPromise = inboundTransferToOwnerTool.handler(
+      { reason: 'wants to talk about an invoice' },
+      { callId: 'CA-in-1', callerPhoneNumber: '+15555550100', telephony: { transferCall }, estimatedAudioDoneAt: Date.now() } as never,
+    );
+    await vi.advanceTimersByTimeAsync(1000);
+    const result = await resultPromise;
+    expect(result).toEqual({ ok: true });
+    expect(sendOwnerMessage).toHaveBeenCalledWith('Transferring inbound caller +15555550100 to you — wants to talk about an invoice');
   });
 });
 
