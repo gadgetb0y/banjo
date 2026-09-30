@@ -3,7 +3,7 @@ import { SlotUnavailableError } from '../calendar/types.js';
 import { config } from '../config/index.js';
 import { childLogger } from '../lib/logger.js';
 import { formatInZone } from '../lib/timezone.js';
-import { sendOwnerSms } from '../notifications/twilioSms.js';
+import { sendOwnerMessage } from '../notifications/owner.js';
 import { defineTransferTool } from '../telephony/transfer.js';
 import { combineDateTimeToIso, hangUpAfterSpeaking, runToolSafely } from '../voice/tools/callTools.js';
 import { defineVoiceTool, toToolDefinition, type VoiceTool } from '../voice/tools/defineVoiceTool.js';
@@ -258,9 +258,9 @@ export const bookAppointmentTool: VoiceTool<
       // call was meant to cover — extra dead air on a live call risks the
       // caller hanging up before ever hearing the confirmation they're
       // actually waiting for.
-      sendOwnerSms(
+      sendOwnerMessage(
         `New inbound booking: ${booking.confirmedStart.toLocaleString('en-US', { timeZone: config.CALENDAR_TIMEZONE })} (${booking.durationMinutes} min) — ${booking.purpose}. Caller: ${ctx.callerPhoneNumber}.`,
-      ).catch((err) => log.error({ err }, 'book_appointment: sendOwnerSms failed'));
+      ).catch((err) => log.error({ err }, 'book_appointment: sendOwnerMessage failed'));
 
       return { ok: true, confirmedStart: formatStartForModel(booking.confirmedStart) };
     });
@@ -353,9 +353,9 @@ export const rescheduleBookingTool: VoiceTool<{ date: string; time: string }, In
         });
 
         // Fire-and-forget — see book_appointment's identical comment above.
-        sendOwnerSms(
+        sendOwnerMessage(
           `Inbound reschedule: ${superseded.confirmedStart.toLocaleString('en-US', { timeZone: config.CALENDAR_TIMEZONE })} (${superseded.durationMinutes} min) — ${superseded.purpose}. Caller: ${ctx.callerPhoneNumber}.`,
-        ).catch((err) => log.error({ err }, 'reschedule_booking: sendOwnerSms failed'));
+        ).catch((err) => log.error({ err }, 'reschedule_booking: sendOwnerMessage failed'));
 
         return { ok: true, confirmedStart: formatStartForModel(superseded.confirmedStart) };
       } catch (err) {
@@ -394,7 +394,9 @@ export const flagForOwnerAndEndCallTool: VoiceTool<{ reason: string }, InboundCa
   endsCall: true,
   handler: async (input, ctx) => {
     return runToolSafely('flag_for_owner_and_end_call', async () => {
-      await sendOwnerSms(`Inbound call from ${ctx.callerPhoneNumber} needs your attention: ${input.reason}`);
+      // Urgent (past quiet hours) only for a caller in contacts: an unknown
+      // caller who gets flagged is as likely a robocall as anything else.
+      await sendOwnerMessage(`Inbound call from ${ctx.callerPhoneNumber} needs your attention: ${input.reason}`, { urgent: ctx.callerKnown });
       await hangUpAfterSpeaking(ctx);
       return { ok: true };
     });
@@ -414,16 +416,24 @@ export const inboundTools: VoiceTool<any, InboundCallContext>[] = [
 
 export const inboundToolDefinitions: ToolDefinition[] = inboundTools.map(toToolDefinition);
 
-/** transfer_to_owner for inbound calls (#7): no task to record, so the owner gets a text saying who is coming through. */
+/** transfer_to_owner for inbound calls (#7): no task to record, so the owner is told who is coming through. */
 export const inboundTransferToOwnerTool = defineTransferTool<InboundCallContext>({
   async onTransferred(input, ctx) {
-    await sendOwnerSms(`Transferring inbound caller ${ctx.callerPhoneNumber} to you — ${input.reason}`);
+    await sendOwnerMessage(`Transferring inbound caller ${ctx.callerPhoneNumber} to you — ${input.reason}`);
   },
 });
 
-/** The inbound tool list for this process's config: inboundTools, plus transfer_to_owner when TRANSFER_ENABLED is on. */
+/**
+ * The inbound tool list for one call: inboundTools, plus transfer_to_owner when
+ * TRANSFER_ENABLED is on AND the caller is recognized from contacts (#66). Any
+ * caller who asks for the principal would otherwise ring their phone,
+ * robocalls included. An unknown caller gets flag_for_owner_and_end_call
+ * instead.
+ */
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-export function inboundToolsFor(): VoiceTool<any, InboundCallContext>[] {
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  return config.TRANSFER_ENABLED ? [...inboundTools, inboundTransferToOwnerTool as VoiceTool<any, InboundCallContext>] : inboundTools;
+export function inboundToolsFor({ transferAllowed }: { transferAllowed: boolean }): VoiceTool<any, InboundCallContext>[] {
+  return config.TRANSFER_ENABLED && transferAllowed
+    ? // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      [...inboundTools, inboundTransferToOwnerTool as VoiceTool<any, InboundCallContext>]
+    : inboundTools;
 }

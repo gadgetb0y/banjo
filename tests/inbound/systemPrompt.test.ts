@@ -129,3 +129,26 @@ describe('buildInboundFrontendPrompt: voice-layer prompt for a split provider (o
     expect(prompt.toLowerCase()).toContain('family member');
   });
 });
+
+describe('inbound transfer rules (#66)', () => {
+  // Any caller who asked for the principal could be put through, robocalls
+  // included. The rules now reach only a caller recognized from contacts.
+  it('are in both prompts only for a recognized caller, and never with TRANSFER_ENABLED off', async () => {
+    const { config } = await import('../../src/config/index.js');
+    try {
+      config.TRANSFER_ENABLED = true;
+      for (const build of [buildInboundSystemPrompt, buildInboundFrontendPrompt]) {
+        expect(build(undefined, { transferAllowed: true })).toContain('transfer_to_owner');
+        expect(build(undefined, { transferAllowed: false })).not.toContain('transfer_to_owner');
+        // Unresolved by default: no caller check means no transfer.
+        expect(build()).not.toContain('transfer_to_owner');
+      }
+      config.TRANSFER_ENABLED = false;
+      for (const build of [buildInboundSystemPrompt, buildInboundFrontendPrompt]) {
+        expect(build(undefined, { transferAllowed: true })).not.toContain('transfer_to_owner');
+      }
+    } finally {
+      config.TRANSFER_ENABLED = false;
+    }
+  });
+});

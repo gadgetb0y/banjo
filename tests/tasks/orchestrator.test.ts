@@ -116,6 +116,7 @@ describe('a task whose requested times have all passed (#3)', () => {
       'task-3',
       'failed',
       expect.objectContaining({ outcome: expect.objectContaining({ kind: 'failed', reason: expect.stringMatching(/already passed/) }) }),
+      expect.objectContaining({ from: ['checking_availability'] }),
     );
     expect(createCallAttempt).not.toHaveBeenCalled();
     expect(CallSession).not.toHaveBeenCalled();
@@ -139,6 +140,7 @@ describe('per-number call cap at dial time', () => {
       'task-cap',
       'failed',
       expect.objectContaining({ outcome: expect.objectContaining({ kind: 'failed', reason: expect.stringMatching(/call limit/i) }) }),
+      expect.objectContaining({ from: ['checking_availability'] }),
     );
     expect(createCallAttempt).not.toHaveBeenCalled();
     expect(CallSession).not.toHaveBeenCalled();
@@ -170,7 +172,7 @@ describe('per-number call cap at dial time', () => {
     await vi.waitFor(() => expect(notifyTaskOutcome).toHaveBeenCalledTimes(1));
 
     expect(createCallAttempt).toHaveBeenCalledTimes(1);
-    expect(transitionTask).toHaveBeenCalledWith(expect.any(String), 'failed', expect.objectContaining({ outcome: expect.objectContaining({ reason: expect.stringMatching(/call limit/i) }) }));
+    expect(transitionTask).toHaveBeenCalledWith(expect.any(String), 'failed', expect.objectContaining({ outcome: expect.objectContaining({ reason: expect.stringMatching(/call limit/i) }) }), expect.objectContaining({ from: ['checking_availability'] }));
     checkCallCap.mockReset();
     checkCallCap.mockResolvedValue({ allowed: true, placed: 0, queued: 0 });
     createCallAttempt.mockReset();
@@ -187,7 +189,51 @@ describe('recording the call attempt fails after the task moved to calling', () 
     triggerOrchestration('task-orphan');
     await vi.waitFor(() => expect(notifyTaskOutcome).toHaveBeenCalledWith('task-orphan'));
 
-    expect(transitionTask).toHaveBeenCalledWith('task-orphan', 'failed', expect.objectContaining({ outcome: expect.objectContaining({ kind: 'failed' }) }));
+    expect(transitionTask).toHaveBeenCalledWith(
+      'task-orphan',
+      'failed',
+      expect.objectContaining({ outcome: expect.objectContaining({ kind: 'failed' }) }),
+      expect.objectContaining({ from: ['calling'] }),
+    );
     expect(CallSession).not.toHaveBeenCalled();
+  });
+});
+
+describe('resuming a checking_availability task (#64)', () => {
+  const readAt = new Date('2026-09-29T12:00:00.000Z');
+  const resumedAt = new Date('2026-09-29T12:00:15.000Z');
+
+  it('claims the resume only if the row is unchanged since it was read, and chains the dial off that claim', async () => {
+    getTask.mockResolvedValue({ id: 'task-r', channel: 'phone', status: 'checking_availability', contactId: 'contact-3', constraints: {}, updatedAt: readAt });
+    getContact.mockResolvedValue({ id: 'contact-3' });
+    transitionTask.mockImplementation(async (id: string, status: string) => ({ id, status, updatedAt: resumedAt }));
+    createCallAttempt.mockRejectedValueOnce(new Error('stop after the dial transition'));
+
+    triggerOrchestration('task-r');
+    await vi.waitFor(() => expect(createCallAttempt).toHaveBeenCalled());
+
+    expect(transitionTask).toHaveBeenNthCalledWith(1, 'task-r', 'checking_availability', undefined, {
+      from: ['checking_availability'],
+      ifUpdatedAt: readAt,
+    });
+    expect(transitionTask).toHaveBeenNthCalledWith(2, 'task-r', 'calling', expect.anything(), {
+      from: ['checking_availability'],
+      ifUpdatedAt: resumedAt,
+    });
+  });
+
+  it('does not dial when another process took the task over before this run reached calling', async () => {
+    getTask.mockResolvedValue({ id: 'task-s', channel: 'phone', status: 'pending', contactId: 'contact-4', constraints: {} });
+    getContact.mockResolvedValue({ id: 'contact-4' });
+    transitionTask.mockImplementation(async (id: string, status: string) =>
+      status === 'calling' ? undefined : { id, status, updatedAt: readAt },
+    );
+
+    triggerOrchestration('task-s');
+    await vi.waitFor(() => expect(logger.info).toHaveBeenCalledWith({ taskId: 'task-s' }, expect.stringMatching(/taken over/)));
+
+    expect(createCallAttempt).not.toHaveBeenCalled();
+    expect(CallSession).not.toHaveBeenCalled();
+    expect(notifyTaskOutcome).not.toHaveBeenCalled();
   });
 });

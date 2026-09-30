@@ -96,8 +96,10 @@ project with one maintainer. Things worth knowing before you build on it:
   set, Banjo can hand a live call straight to you instead of hanging up and notifying — but only after
   asking the other party and getting a yes, and only for one fixed number; the model never chooses who to
   connect. If you don't answer, they hear `TRANSFER_FALLBACK_MESSAGE` and the call ends. No whisper of
-  context before you're bridged in yet, and no warm transfer (Banjo can't stay on the line).
-  ([#7](https://github.com/shatch/banjo/issues/7))
+  context before you're bridged in yet, and no warm transfer (Banjo can't stay on the line). On the
+  inbound line, only callers already in your contacts can be put through; anyone else who asks for you
+  is flagged for you to call back, so a robocall can't ring your phone.
+  ([#7](https://github.com/shatch/banjo/issues/7), [#66](https://github.com/shatch/banjo/issues/66))
 - **AI disclosure is a prompt rule, checked after the call, not enforced.** Banjo is told to open every
   call with `DISCLOSURE_LINE` (default: *"Hi, I'm an AI assistant calling on behalf of {name}."*, and it
   must say "AI"). Afterwards, its first line is checked. A miss is recorded on the call attempt and
@@ -157,7 +159,8 @@ Banjo needs four things before it can place a real call — get these first:
    number capable of voice calls, and note your Account SID, Auth Token, and the number itself. For outcome
    **texts** to a US number, the sending number must also be registered for US A2P 10DLC. Without it, every
    text is silently blocked by the carrier (Twilio error 30034). See `docs/RUNBOOKS.md`, "SMS notifications
-   aren't arriving".
+   aren't arriving". Or skip SMS entirely and get outcomes as [Pushover](https://pushover.net) push
+   notifications (`NOTIFICATION_CHANNEL=pushover`), which need no carrier registration.
 2. **A voice AI provider.** OpenAI Realtime is the most battle-tested option here and the recommended
    default — Gemini Live and ElevenLabs Conversational AI are supported but flagged
    `NEEDS VERIFICATION` in a few places (see `docs/ARCHITECTURE.md`'s Open Risks section) since they haven't
@@ -316,7 +319,7 @@ src/
   inbound/       inbound call handling: booking flow + caller-ID resolution for greeting personalization
   mcp/           remote MCP server for tool-calling clients (e.g. Claude Code)
   session/       per-call state machine wiring telephony <-> voice AI <-> tools
-  notifications/ outcome notifications (SMS by default)
+  notifications/ outcome notifications (SMS by default, or Pushover)
 skills/
   schedule-appointment/  companion Claude Code skill — decides online vs. phone, drives online
                           booking via browser automation, calls into src/mcp/ for the phone path

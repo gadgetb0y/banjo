@@ -49,6 +49,7 @@ function buildOptions() {
     telephony: fakeTelephony,
     calendar: fakeCalendar,
     systemPrompt: 'irrelevant for this test',
+    transferAllowed: false,
   });
 }
 
@@ -82,7 +83,21 @@ describe('buildInboundCallSessionOptions', () => {
       telephony: fakeTelephony,
       calendar: fakeCalendar,
       estimatedAudioDoneAt: 12345,
+      callerKnown: false,
     });
+  });
+
+  it('marks the caller known only when the inbound call matched a contact (#69: urgency of flags)', async () => {
+    const known = buildOpts({
+      inboundCall: { ...fakeInboundCall, contactId: 'contact-1' },
+      callerPhoneNumber: '+15555550100',
+      telephony: fakeTelephony,
+      calendar: fakeCalendar,
+      systemPrompt: 'x',
+      transferAllowed: false,
+    });
+    expect((await known.buildToolContext(0)).callerKnown).toBe(true);
+    expect((await buildOptions().buildToolContext(0)).callerKnown).toBe(false);
   });
 
   it('onStatusChange persists status=ended on the inbound call', async () => {
@@ -120,17 +135,27 @@ describe('buildInboundCallSessionOptions', () => {
   });
 });
 
-describe('transfer_to_owner on inbound calls (#7)', () => {
-  it('is offered only when TRANSFER_ENABLED is on', async () => {
+describe('transfer_to_owner on inbound calls (#7, #66)', () => {
+  it('is offered only when TRANSFER_ENABLED is on and the caller is recognized from contacts', async () => {
     const { config } = await import('../../src/config/index.js');
-    const opts = () =>
-      buildOpts({ inboundCall: fakeInboundCall, callerPhoneNumber: '+15555550100', telephony: fakeTelephony, calendar: fakeCalendar, systemPrompt: 'x' });
+    const tools = (transferAllowed: boolean) =>
+      buildOpts({
+        inboundCall: fakeInboundCall,
+        callerPhoneNumber: '+15555550100',
+        telephony: fakeTelephony,
+        calendar: fakeCalendar,
+        systemPrompt: 'x',
+        transferAllowed,
+      }).tools.map((t) => t.name);
     try {
       config.TRANSFER_ENABLED = false;
-      expect(opts().tools.map((t) => t.name)).not.toContain('transfer_to_owner');
+      expect(tools(true)).not.toContain('transfer_to_owner');
       config.TRANSFER_ENABLED = true;
       config.TRANSFER_TO_PHONE_NUMBER = '+15557654321';
-      expect(opts().tools.map((t) => t.name)).toContain('transfer_to_owner');
+      expect(tools(true)).toContain('transfer_to_owner');
+      // #66: an unknown caller — a robocall asking for the principal — can't ring their phone.
+      expect(tools(false)).not.toContain('transfer_to_owner');
+      expect(tools(false)).toContain('flag_for_owner_and_end_call');
     } finally {
       config.TRANSFER_ENABLED = false;
     }

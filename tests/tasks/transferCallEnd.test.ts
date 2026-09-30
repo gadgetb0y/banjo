@@ -26,9 +26,9 @@ vi.mock('../../src/tasks/service.js', () => ({
 }));
 
 const notify = vi.hoisted(() => vi.fn(async () => {}));
-vi.mock('../../src/notifications/twilioSms.js', () => ({
+vi.mock('../../src/notifications/owner.js', () => ({
   createNotificationChannel: () => ({ notify }),
-  sendOwnerSms: vi.fn(async () => {}),
+  sendOwnerMessage: vi.fn(async () => {}),
 }));
 
 const contact = { id: "contact-1", displayName: "Luigi's", phoneNumber: "+15555550100" } as unknown as Contact;

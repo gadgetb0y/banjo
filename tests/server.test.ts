@@ -83,9 +83,13 @@ vi.mock('../src/inbound/callerContext.js', () => ({
 }));
 
 const sessionStart = vi.fn(async () => {});
+const sessionOptions = vi.fn((_opts: { tools: { name: string }[]; systemPrompt: string }) => {});
 vi.mock('../src/session/callSession.js', () => ({
   CallSession: class {
     start = sessionStart;
+    constructor(opts: { tools: { name: string }[]; systemPrompt: string }) {
+      sessionOptions(opts);
+    }
   },
 }));
 
@@ -280,6 +284,37 @@ describe('POST /telephony/twilio/twiml', () => {
 
     expect(res.status).toBe(403);
     expect(validateRequest).not.toHaveBeenCalled();
+  });
+});
+
+describe('inbound transfer is limited to recognized callers (#66)', () => {
+  async function answer(contactId: string | undefined) {
+    resolveCallerContext.mockResolvedValueOnce({ contactId, greetingContext: undefined } as never);
+    await app.request('/telephony/twilio/inbound', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'X-Twilio-Signature': 'valid-signature' },
+      body: inboundWebhookBody(),
+    });
+    const opts = sessionOptions.mock.calls.at(-1)![0];
+    return { tools: opts.tools.map((t) => t.name), prompt: opts.systemPrompt };
+  }
+
+  it('offers transfer_to_owner to a caller found in contacts, and not to an unknown one', async () => {
+    config.INBOUND_BOOKING_ENABLED = true;
+    config.TRANSFER_ENABLED = true;
+    config.TRANSFER_TO_PHONE_NUMBER = '+15557654321';
+    try {
+      const known = await answer('contact-1');
+      expect(known.tools).toContain('transfer_to_owner');
+      expect(known.prompt).toContain('transfer_to_owner');
+
+      const unknown = await answer(undefined);
+      expect(unknown.tools).not.toContain('transfer_to_owner');
+      expect(unknown.prompt).not.toContain('transfer_to_owner');
+    } finally {
+      config.TRANSFER_ENABLED = false;
+      config.INBOUND_BOOKING_ENABLED = false;
+    }
   });
 });
 

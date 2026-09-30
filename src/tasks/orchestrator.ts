@@ -16,6 +16,7 @@ import {
   listNonTerminalTasks,
   listStartableTasks,
   transitionTask,
+  type TransitionGuard,
 } from './service.js';
 import type { TimeWindow } from './schema.js';
 
@@ -68,15 +69,21 @@ async function runTask(taskId: string): Promise<void> {
   // each step checks it actually moved: a cancel_task landing between the
   // read above and these writes must stop the run before it dials.
   //
-  // A pending task is claimed with a compare-and-set (only from 'pending'):
-  // with scheduled calls, every process polling this database finds the same
-  // due task on the same tick, and without an exclusive claim each one would
-  // place the call. A task already in 'checking_availability' is a restart
-  // resume and keeps the plain transition.
+  // Every step up to dialing is a compare-and-set, chained off the row the
+  // step before it wrote, so only one process can get a task through to
+  // 'calling' (#64). With scheduled calls, every process polling this
+  // database finds the same due task on the same tick. A pending task is
+  // claimed from 'pending'. A task already in 'checking_availability' (a
+  // restart resume) is claimed only if nothing has written it since we read
+  // it; claiming it bumps updatedAt, so a process that was still working on
+  // it loses its own next step instead of dialing too.
   const checking =
     task.status === 'pending'
       ? await transitionTask(task.id, 'checking_availability', undefined, { from: ['pending'] })
-      : await transitionTask(task.id, 'checking_availability');
+      : await transitionTask(task.id, 'checking_availability', undefined, {
+          from: ['checking_availability'],
+          ifUpdatedAt: task.updatedAt,
+        });
   if (checking?.status !== 'checking_availability') {
     logger.info(
       { taskId, status: checking?.status ?? 'claimed by another process or cancelled' },
@@ -84,16 +91,22 @@ async function runTask(taskId: string): Promise<void> {
     );
     return;
   }
+  // Only this run's own claim may move the task on from here.
+  const stillOurs = { from: ['checking_availability'], ifUpdatedAt: checking.updatedAt } satisfies TransitionGuard;
+
   // Every requested window can be over by the time a scheduled call runs.
   // Calling anyway used to go ahead with no pre-checked windows at all, so
   // the model could book any free time (#3) — fail and tell the owner instead.
   const requestedWindows = task.constraints.dateWindows ?? [];
   const dateWindows = requestedWindows.length ? clipWindowsToFuture(requestedWindows) : defaultLookaheadWindow();
   if (!dateWindows.length) {
-    const failed = await transitionTask(task.id, 'failed', {
-      outcome: { kind: 'failed', reason: 'Every time requested for this call had already passed by the time it was due, so no call was placed.' },
-    });
-    if (failed.status === 'failed') await notifyTaskOutcome(task.id);
+    const failed = await transitionTask(
+      task.id,
+      'failed',
+      { outcome: { kind: 'failed', reason: 'Every time requested for this call had already passed by the time it was due, so no call was placed.' } },
+      stillOurs,
+    );
+    if (failed) await notifyTaskOutcome(task.id);
     return;
   }
   // An early, unlocked look at the call cap, so a call that can't be placed
@@ -101,7 +114,7 @@ async function runTask(taskId: string): Promise<void> {
   // locked one below.
   const earlyCap = await checkCallCap(task.contactId, new Date());
   if (!earlyCap.allowed) {
-    await failOverCallCap(task.id, describeCallCapRefusal(earlyCap));
+    await failOverCallCap(task.id, describeCallCapRefusal(earlyCap), stillOurs);
     return;
   }
   const candidateWindows = await calendar.computeCandidateWindows({
@@ -115,8 +128,8 @@ async function runTask(taskId: string): Promise<void> {
   const dial = await withContactDialLock(task.contactId, async () => {
     const cap = await checkCallCap(task.contactId, new Date());
     if (!cap.allowed) return { kind: 'refused', reason: describeCallCapRefusal(cap) } as const;
-    const calling = await transitionTask(task.id, 'calling', { candidateWindows });
-    if (calling.status !== 'calling') return { kind: 'stopped', status: calling.status } as const;
+    const calling = await transitionTask(task.id, 'calling', { candidateWindows }, stillOurs);
+    if (!calling) return { kind: 'stopped' } as const;
     try {
       return { kind: 'dialing', callAttempt: await createCallAttempt(task.id) } as const;
     } catch (err) {
@@ -128,18 +141,26 @@ async function runTask(taskId: string): Promise<void> {
     }
   });
   if (dial.kind === 'refused') {
-    await failOverCallCap(task.id, dial.reason);
+    await failOverCallCap(task.id, dial.reason, stillOurs);
     return;
   }
   if (dial.kind === 'unrecorded') {
-    const failed = await transitionTask(task.id, 'failed', {
-      outcome: { kind: 'failed', reason: 'The call could not be started: recording the call attempt failed. No call was placed.' },
-    });
-    if (failed.status === 'failed') await notifyTaskOutcome(task.id);
+    const failed = await transitionTask(
+      task.id,
+      'failed',
+      { outcome: { kind: 'failed', reason: 'The call could not be started: recording the call attempt failed. No call was placed.' } },
+      // Status only: this run holds 'calling' exclusively, and a stricter
+      // guard that missed would strand the task there with no attempt.
+      { from: ['calling'] },
+    );
+    if (failed) await notifyTaskOutcome(task.id);
     return;
   }
   if (dial.kind === 'stopped') {
-    logger.info({ taskId, status: dial.status }, 'task can no longer be started — not placing the call');
+    logger.info(
+      { taskId },
+      'task was cancelled or taken over by another process before dialing — not placing the call',
+    );
     return;
   }
 
@@ -174,10 +195,10 @@ async function runTask(taskId: string): Promise<void> {
   }
 }
 
-async function failOverCallCap(taskId: string, reason: string): Promise<void> {
+async function failOverCallCap(taskId: string, reason: string, guard: TransitionGuard): Promise<void> {
   logger.warn({ taskId }, 'per-number call cap reached — not placing the call');
-  const failed = await transitionTask(taskId, 'failed', { outcome: { kind: 'failed', reason } });
-  if (failed.status === 'failed') await notifyTaskOutcome(taskId);
+  const failed = await transitionTask(taskId, 'failed', { outcome: { kind: 'failed', reason } }, guard);
+  if (failed) await notifyTaskOutcome(taskId);
 }
 
 /**
