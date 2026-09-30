@@ -26,11 +26,12 @@ npm run db:migrate         # drizzle-kit migrate (runs build first)
 npm run db:studio          # drizzle-kit studio
 npm run test:call          # tsx scripts/manual-test-call.ts — places a real outbound call for manual testing
 npm run dav:check          # read-only: lists CalDAV calendars / CardDAV address books, shows what Banjo sees
+npm run setup              # interactive: asks for required settings, validates with the app's own schema, writes .env (backs up an existing one)
 docker compose up          # Postgres + Banjo in Docker (migrations applied on boot)
 docker compose up -d postgres   # just Postgres (banjo/banjo/banjo on :5432), for `npm run dev`
 ```
 
-Env schema is Zod-validated at process start (`src/config/index.ts`, imported first in `src/index.ts`) — copy `.env.example` to `.env` and fill in credentials for whichever `VOICE_AI_PROVIDER`/telephony/notification vendor you're using; cross-field `.refine()` checks only require the vars matching the *selected* providers.
+Env schema is Zod-validated at process start (`src/config/index.ts`, imported first in `src/index.ts`) — run `npm run setup` (`scripts/setup.ts`, logic in `scripts/setup/lib.ts`), or copy `.env.example` to `.env` and fill in credentials for whichever `VOICE_AI_PROVIDER`/telephony/notification vendor you're using; cross-field `.refine()` checks only require the vars matching the *selected* providers.
 
 Tests don't need a real `.env` — `vitest.config.ts` injects a full baseline of fake-but-valid env vars so provider/tool modules can be imported in isolation. `tests/config.test.ts` is the one place that deliberately overrides individual vars to exercise validation itself.
 

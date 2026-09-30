@@ -197,17 +197,23 @@ Banjo needs four things before it can place a real call — get these first:
 Then, to run the whole thing in Docker:
 
 ```bash
-cp .env.example .env   # fill in ASSISTANT_PRINCIPAL_NAME + everything from steps 1-3 above
+npm install
+npm run setup          # asks for everything from steps 1-3 above and writes .env
 docker compose up      # Postgres + Banjo; migrations are applied on boot
 ```
+
+`npm run setup` checks each answer as you type it (E.164 phone numbers, a bare `PUBLIC_HOSTNAME`), can
+check your Twilio credentials with Twilio, generates `MCP_API_KEY`, and runs the same validation Banjo runs
+at startup before writing anything. Run it again to change a setting: it offers the current values as
+defaults and backs up the old `.env` first. Prefer editing by hand? `cp .env.example .env` and fill it in.
 
 `docker compose up` pulls the published image, `ghcr.io/shatch/banjo`, built for amd64 and arm64 on each release. Set `BANJO_VERSION` in `.env` to pin a release, for example `0.1.0`. The default is `latest`. To run your own checkout instead, use `docker compose up --build`.
 
 Or to develop against it locally, with hot reload:
 
 ```bash
-cp .env.example .env
 npm install
+npm run setup                   # or: cp .env.example .env, and fill it in
 docker compose up -d postgres   # just the database
 npm run dev                     # applies migrations, then starts on $PORT
 ```
@@ -287,6 +293,7 @@ Vitest, Docker.
 
 | Command | What it does |
 | --- | --- |
+| `npm run setup` | Interactive setup: asks for the required settings, checks them, and writes `.env` |
 | `npm run dev` | Run the server with hot reload (`tsx watch`) |
 | `npm run build` | Type-check and compile to `dist/` |
 | `npm test` | Run the Vitest suite |
