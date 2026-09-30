@@ -50,6 +50,7 @@ export function buildInboundCallSessionOptions(params: {
         inboundCallId: inboundCall.id,
         callId: inboundCall.twilioCallSid,
         callerPhoneNumber,
+        callerKnown: !!inboundCall.contactId,
         telephony,
         calendar,
         estimatedAudioDoneAt,

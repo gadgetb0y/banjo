@@ -107,6 +107,16 @@ describe('with NOTIFICATION_CHANNEL=pushover', () => {
     expect(sentForm(1).get('priority')).toBe('1');
   });
 
+  it("sends a failed call at normal priority: it's mostly a busy line or no answer, not worth waking the owner", async () => {
+    fetchMock.mockResolvedValue(ok());
+    const channel = owner.createNotificationChannel();
+
+    await channel.notify('task-3', { kind: 'failed', reason: 'Nobody answered' } as never, "Couldn't complete the call to Luigi");
+
+    expect(sentForm(0).get('title')).toBe('Banjo: call failed');
+    expect(sentForm(0).get('priority')).toBe('0');
+  });
+
   it('sends direct messages to the owner through Pushover too', async () => {
     fetchMock.mockResolvedValue(ok());
 

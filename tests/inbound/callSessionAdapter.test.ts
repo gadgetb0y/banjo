@@ -82,7 +82,20 @@ describe('buildInboundCallSessionOptions', () => {
       telephony: fakeTelephony,
       calendar: fakeCalendar,
       estimatedAudioDoneAt: 12345,
+      callerKnown: false,
     });
+  });
+
+  it('marks the caller known only when the inbound call matched a contact (#69: urgency of flags)', async () => {
+    const known = buildOpts({
+      inboundCall: { ...fakeInboundCall, contactId: 'contact-1' },
+      callerPhoneNumber: '+15555550100',
+      telephony: fakeTelephony,
+      calendar: fakeCalendar,
+      systemPrompt: 'x',
+    });
+    expect((await known.buildToolContext(0)).callerKnown).toBe(true);
+    expect((await buildOptions().buildToolContext(0)).callerKnown).toBe(false);
   });
 
   it('onStatusChange persists status=ended on the inbound call', async () => {

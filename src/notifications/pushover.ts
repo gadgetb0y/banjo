@@ -69,7 +69,12 @@ export async function sendPushover(msg: PushoverMessage, logContext: Record<stri
   if (!result.ok) logger.error({ ...logContext, ...result.detail }, 'Failed to send Pushover notification');
 }
 
-const NEEDS_ATTENTION: ReadonlySet<TaskOutcome['kind']> = new Set(['negotiation_failed', 'escalated', 'failed']);
+/**
+ * Outcomes sent past quiet hours: a call that got stuck and needs the owner.
+ * Not 'failed': that's mostly a busy line or no answer, which the owner can
+ * pick up in the morning.
+ */
+const NEEDS_ATTENTION: ReadonlySet<TaskOutcome['kind']> = new Set(['negotiation_failed', 'escalated']);
 
 const TITLES: Record<TaskOutcome['kind'], string> = {
   confirmed: 'Banjo: booked',

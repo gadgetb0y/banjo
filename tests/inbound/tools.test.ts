@@ -41,6 +41,7 @@ function makeContext(calendar: CalendarProvider, callerPhoneNumber: string = CAL
     inboundCallId: 'inbound-call-1',
     callId: 'CA-fake-sid',
     callerPhoneNumber,
+    callerKnown: false,
     telephony: {
       name: 'fake-telephony',
       nativeAudioFormat: 'g711_ulaw_8k',
@@ -602,6 +603,25 @@ describe('inbound transfer_to_owner (#7)', () => {
     const result = await resultPromise;
     expect(result).toEqual({ ok: true });
     expect(sendOwnerMessage).toHaveBeenCalledWith('Transferring inbound caller +15555550100 to you — wants to talk about an invoice');
+  });
+});
+
+describe('flag_for_owner_and_end_call urgency (#69)', () => {
+  // Urgent Pushover messages break through quiet hours. An unknown caller who
+  // gets flagged is as likely a robocall, so only a caller in contacts is urgent.
+  it.each([
+    [true, true],
+    [false, false],
+  ])('callerKnown=%s sends urgent=%s', async (callerKnown, urgent) => {
+    sendOwnerMessage.mockImplementation(async () => {});
+    const { flagForOwnerAndEndCallTool } = await import('../../src/inbound/tools.js');
+    const ctx = { ...makeContext(fakeCalendar()), callerKnown, estimatedAudioDoneAt: Date.now() };
+
+    const result = flagForOwnerAndEndCallTool.handler({ reason: 'wants a refund' }, ctx);
+    await vi.advanceTimersByTimeAsync(5000);
+    await result;
+
+    expect(sendOwnerMessage).toHaveBeenCalledWith(expect.stringContaining('wants a refund'), { urgent });
   });
 });
 

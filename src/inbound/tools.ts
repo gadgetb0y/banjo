@@ -394,7 +394,9 @@ export const flagForOwnerAndEndCallTool: VoiceTool<{ reason: string }, InboundCa
   endsCall: true,
   handler: async (input, ctx) => {
     return runToolSafely('flag_for_owner_and_end_call', async () => {
-      await sendOwnerMessage(`Inbound call from ${ctx.callerPhoneNumber} needs your attention: ${input.reason}`, { urgent: true });
+      // Urgent (past quiet hours) only for a caller in contacts: an unknown
+      // caller who gets flagged is as likely a robocall as anything else.
+      await sendOwnerMessage(`Inbound call from ${ctx.callerPhoneNumber} needs your attention: ${input.reason}`, { urgent: ctx.callerKnown });
       await hangUpAfterSpeaking(ctx);
       return { ok: true };
     });

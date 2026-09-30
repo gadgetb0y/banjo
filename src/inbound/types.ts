@@ -14,6 +14,8 @@ export interface InboundCallContext {
   callId: string;
   /** Twilio's `From` field for this call — the ONLY source of caller identity; find_my_booking/reschedule_booking resolve off of this, never off of anything the model or caller supplies. */
   callerPhoneNumber: string;
+  /** Whether the caller matched a contact (inboundCalls.contactId, from resolveCallerContext) — only then does a flag break through the owner's quiet hours. */
+  callerKnown: boolean;
   telephony: TelephonyProvider;
   calendar: CalendarProvider;
   /** audioPlaybackTracker.estimatedDoneAt() (session/audioPlaybackTracker.ts) at the moment this context was built — see CallContext's identical field (session/types.ts) for the full rationale. */
