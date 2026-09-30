@@ -94,6 +94,7 @@ describe('buildInboundCallSessionOptions', () => {
       telephony: fakeTelephony,
       calendar: fakeCalendar,
       systemPrompt: 'x',
+      transferAllowed: false,
     });
     expect((await known.buildToolContext(0)).callerKnown).toBe(true);
     expect((await buildOptions().buildToolContext(0)).callerKnown).toBe(false);
