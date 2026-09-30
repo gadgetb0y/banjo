@@ -27,7 +27,16 @@ interface GuidanceSection {
   lines: string[];
 }
 
-function guidanceSections(direction: CallDirection): GuidanceSection[] {
+/**
+ * `transfer`: whether this call gets the transfer_to_owner rules. Defaults to
+ * TRANSFER_ENABLED; an inbound call from an unknown caller passes false, since
+ * the tool is left off that call too (#66).
+ */
+interface GuidanceOptions {
+  transfer?: boolean;
+}
+
+function guidanceSections(direction: CallDirection, { transfer = config.TRANSFER_ENABLED }: GuidanceOptions = {}): GuidanceSection[] {
   const sections: GuidanceSection[] = [
     {
       voiceLayer: true,
@@ -148,7 +157,7 @@ function guidanceSections(direction: CallDirection): GuidanceSection[] {
     },
   ];
 
-  if (config.TRANSFER_ENABLED) sections.push(transferSection(direction));
+  if (transfer) sections.push(transferSection(direction));
   return sections;
 }
 
@@ -176,13 +185,13 @@ function transferSection(direction: CallDirection): GuidanceSection {
  * Appended only to the voice-layer prompt. A voice front-end with no tools of
  * its own reads every "call this tool" line in the shared guidance as
  * "delegate this" — this section says so explicitly. The transfer line is
- * added only when TRANSFER_ENABLED is on, so the flag-off prompt is unchanged
+ * added only when this call can transfer, so the flag-off prompt is unchanged
  * (#7).
  */
-function delegationGuidance(): string[] {
+function delegationGuidance(transfer: boolean): string[] {
   return [
     ...DELEGATION_GUIDANCE_HEAD,
-    ...(config.TRANSFER_ENABLED
+    ...(transfer
       ? [
           `- Connecting the other party to ${config.ASSISTANT_PRINCIPAL_NAME} is also your backend's job: saying "connecting you now" does not connect anyone. Once they have said yes and you have said your one handoff line, delegate the transfer to your backend in that same turn, then say nothing more.`,
         ]
@@ -226,8 +235,8 @@ function renderSections(sections: GuidanceSection[]): string {
  * Every section, in its original order — byte-identical to this function's
  * output from before the voice-layer split existed.
  */
-export function buildBaseSystemPromptGuidance(direction: CallDirection = 'outbound'): string {
-  return renderSections(guidanceSections(direction));
+export function buildBaseSystemPromptGuidance(direction: CallDirection = 'outbound', options: GuidanceOptions = {}): string {
+  return renderSections(guidanceSections(direction, options));
 }
 
 /**
@@ -238,7 +247,8 @@ export function buildBaseSystemPromptGuidance(direction: CallDirection = 'outbou
  * contract is left to the backend, which receives the full prompt. Adds
  * delegation guidance at the end.
  */
-export function buildFrontendSystemPromptGuidance(direction: CallDirection = 'outbound'): string {
-  const voiceSections = guidanceSections(direction).filter((section) => section.voiceLayer);
-  return renderSections([...voiceSections, { voiceLayer: true, lines: delegationGuidance() }]);
+export function buildFrontendSystemPromptGuidance(direction: CallDirection = 'outbound', options: GuidanceOptions = {}): string {
+  const { transfer = config.TRANSFER_ENABLED } = options;
+  const voiceSections = guidanceSections(direction, { transfer }).filter((section) => section.voiceLayer);
+  return renderSections([...voiceSections, { voiceLayer: true, lines: delegationGuidance(transfer) }]);
 }

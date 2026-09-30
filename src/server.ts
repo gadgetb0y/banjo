@@ -246,6 +246,9 @@ app.post('/telephony/twilio/inbound', async (c) => {
     // than latching isAnyCallActive() to true for the life of the process.
     const { contactId, greetingContext } = await resolveCallerContext(from);
     const inboundCall = await createInboundCall({ twilioCallSid: callSid, callerPhoneNumber: from, contactId });
+    // Only a caller recognized from contacts can be put through to the
+    // principal (#66); resolveCallerContext fails closed to no match.
+    const transferAllowed = contactId !== undefined;
 
     // Fire-and-forget, matching src/tasks/orchestrator.ts's triggerOrchestration
     // pattern — a phone call runs for real wall-clock minutes, and this HTTP
@@ -260,8 +263,9 @@ app.post('/telephony/twilio/inbound', async (c) => {
         callerPhoneNumber: from,
         telephony: createTelephonyProvider(),
         calendar,
-        systemPrompt: buildInboundSystemPrompt(greetingContext),
-        frontendSystemPrompt: buildInboundFrontendPrompt(greetingContext),
+        systemPrompt: buildInboundSystemPrompt(greetingContext, { transferAllowed }),
+        frontendSystemPrompt: buildInboundFrontendPrompt(greetingContext, { transferAllowed }),
+        transferAllowed,
       }),
     );
     session.start().catch((err) => logger.error({ err, callSid }, 'Inbound call session failed'));
