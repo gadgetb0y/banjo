@@ -52,6 +52,7 @@ export function buildInboundCallSessionOptions(params: {
         inboundCallId: inboundCall.id,
         callId: inboundCall.twilioCallSid,
         callerPhoneNumber,
+        callerKnown: !!inboundCall.contactId,
         telephony,
         calendar,
         estimatedAudioDoneAt,
@@ -112,7 +113,7 @@ export function buildInboundCallSessionOptions(params: {
       // No-op — inbound has no call-level "outcome" notification the way
       // outbound's buildOutcomeSummary/createNotificationChannel does. Each
       // booking/reschedule already sent its own SMS inline (see
-      // src/inbound/tools.ts's sendOwnerSms calls) at the moment it
+      // src/inbound/tools.ts's sendOwnerMessage calls) at the moment it
       // happened, not deferred to call-end.
     },
   };
