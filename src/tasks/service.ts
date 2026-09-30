@@ -68,6 +68,9 @@ function allowedFromStatuses(): Task['status'][] {
   return NON_TERMINAL_STATUSES;
 }
 
+/** transitionTask's compare-and-set: current status in `from`, and (optionally) the row unchanged since `ifUpdatedAt`. */
+export type TransitionGuard = { from: Task['status'][]; ifUpdatedAt?: Date };
+
 type TransitionPatch = Partial<{
   candidateWindows: TimeWindow[];
   // Nullable so a transition can CLEAR them, not only set them — undoing a
@@ -87,26 +90,41 @@ type TransitionPatch = Partial<{
  * compare-and-set. The orchestrator claims a pending task this way, so two
  * processes polling the same database can't both place its call (the loser
  * would otherwise see the winner's 'checking_availability' as its own).
+ *
+ * `options.ifUpdatedAt` narrows it further: the row must also be unchanged
+ * since that write — pass the `updatedAt` of the row a previous step
+ * returned. A status alone can't tell two processes apart when both resume
+ * the same 'checking_availability' task (#64); the last write can.
  */
 export async function transitionTask(id: string, status: Task['status'], patch?: TransitionPatch): Promise<Task>;
 export async function transitionTask(
   id: string,
   status: Task['status'],
   patch: TransitionPatch | undefined,
-  options: { from: Task['status'][] },
+  options: TransitionGuard,
 ): Promise<Task | undefined>;
 export async function transitionTask(
   id: string,
   status: Task['status'],
   patch?: TransitionPatch,
-  options?: { from: Task['status'][] },
+  options?: TransitionGuard,
 ): Promise<Task | undefined> {
   // Checked in the UPDATE itself rather than read-then-write, so two outcome
   // tools racing on one call can't both land.
   const [row] = await db
     .update(tasks)
     .set({ status, ...patch, updatedAt: new Date() })
-    .where(and(eq(tasks.id, id), inArray(tasks.status, options?.from ?? allowedFromStatuses())))
+    .where(
+      and(
+        eq(tasks.id, id),
+        inArray(tasks.status, options?.from ?? allowedFromStatuses()),
+        // Truncated to milliseconds: a JS Date carries no more, and a row
+        // created with defaultNow() is stored to the microsecond.
+        options?.ifUpdatedAt
+          ? sql`date_trunc('milliseconds', ${tasks.updatedAt}) = ${options.ifUpdatedAt.toISOString()}::timestamptz`
+          : undefined,
+      ),
+    )
     .returning();
   if (row) return row;
   if (options) return undefined;

@@ -423,9 +423,17 @@ export const inboundTransferToOwnerTool = defineTransferTool<InboundCallContext>
   },
 });
 
-/** The inbound tool list for this process's config: inboundTools, plus transfer_to_owner when TRANSFER_ENABLED is on. */
+/**
+ * The inbound tool list for one call: inboundTools, plus transfer_to_owner when
+ * TRANSFER_ENABLED is on AND the caller is recognized from contacts (#66). Any
+ * caller who asks for the principal would otherwise ring their phone,
+ * robocalls included. An unknown caller gets flag_for_owner_and_end_call
+ * instead.
+ */
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-export function inboundToolsFor(): VoiceTool<any, InboundCallContext>[] {
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  return config.TRANSFER_ENABLED ? [...inboundTools, inboundTransferToOwnerTool as VoiceTool<any, InboundCallContext>] : inboundTools;
+export function inboundToolsFor({ transferAllowed }: { transferAllowed: boolean }): VoiceTool<any, InboundCallContext>[] {
+  return config.TRANSFER_ENABLED && transferAllowed
+    ? // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      [...inboundTools, inboundTransferToOwnerTool as VoiceTool<any, InboundCallContext>]
+    : inboundTools;
 }
