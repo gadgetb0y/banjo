@@ -1,3 +1,4 @@
+import { eq } from 'drizzle-orm';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
 // DB-backed (banjo_test — see vitest.config.ts): what these guarantee is what
@@ -91,6 +92,22 @@ describe('resuming a checking_availability task from two processes (#64)', () =>
     });
     expect(stale).toBeUndefined();
     expect((await service.getTask(fresh.id))?.status).toBe('checking_availability');
+  });
+
+  it('advances updatedAt on every transition, even when the clock has not moved past the last write', async () => {
+    // Deterministic version of the race below: a resume landing in the same
+    // millisecond as the claim used to leave updatedAt unchanged, so a
+    // second resume from the same read still matched.
+    const task = await checkingTask('+15551230013');
+    const ahead = new Date(Date.now() + 60 * 60 * 1000);
+    await db.update(tasks).set({ updatedAt: ahead }).where(eq(tasks.id, task.id));
+    const guard = { from: ['checking_availability' as const], ifUpdatedAt: ahead };
+
+    const first = await service.transitionTask(task.id, 'checking_availability', undefined, guard);
+    const second = await service.transitionTask(task.id, 'checking_availability', undefined, guard);
+
+    expect(first!.updatedAt.getTime()).toBeGreaterThan(ahead.getTime());
+    expect(second).toBeUndefined();
   });
 
   it('lets exactly one of two concurrent resumes win', async () => {
