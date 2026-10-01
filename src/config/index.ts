@@ -145,6 +145,19 @@ const envSchema = z
     // contacts access.
     DAV_USERNAME: z.string().min(1).optional(),
     DAV_PASSWORD: z.string().min(1).optional(),
+    // Your own addresses, comma-separated, so CalDAV invitations you declined
+    // don't block time. Optional: by default they're read from the server
+    // (calendar-user-address-set), which Fastmail and iCloud publish. Set this
+    // when that list is missing or wrong, e.g. invitations go to a custom
+    // domain your login isn't on.
+    DAV_OWNER_EMAIL: optionalSetting(
+      z
+        .string()
+        .refine(
+          (v) => v.split(',').every((a) => /^(mailto:)?[^\s@,]+@[^\s@,]+\.[^\s@,]+$/i.test(a.trim())),
+          'DAV_OWNER_EMAIL must be one or more email addresses, comma-separated',
+        ),
+    ),
     // The one calendar collection to read and write, e.g.
     // https://caldav.fastmail.com/dav/calendars/user/you@fastmail.com/<calendar-id>/
     // `npm run dav:check` lists an account's calendars and address books with their URLs.

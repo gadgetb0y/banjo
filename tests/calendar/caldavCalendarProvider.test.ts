@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { CaldavCalendarProvider, resourceNameForKey } from '../../src/calendar/caldavCalendarProvider.js';
+import { CaldavCalendarProvider, parseAddressList, resourceNameForKey } from '../../src/calendar/caldavCalendarProvider.js';
 import { SlotUnavailableError } from '../../src/calendar/types.js';
 
 // Mocked at fetch, the provider's only way out, so these tests exercise its
@@ -44,7 +44,14 @@ function eventBody(lines: string[]): Response {
 }
 
 function provider() {
-  return new CaldavCalendarProvider({ calendarUrl: CALENDAR_URL, username: 'me@example.com', password: 'app-password', timeZone: 'America/New_York' });
+  // Addresses given up front, so these tests see only the requests they're about.
+  return new CaldavCalendarProvider({
+    calendarUrl: CALENDAR_URL,
+    username: 'me@example.com',
+    password: 'app-password',
+    timeZone: 'America/New_York',
+    ownerAddresses: ['me@example.com'],
+  });
 }
 
 function byMethod(method: string) {
@@ -276,5 +283,88 @@ describe('resourceNameForKey', () => {
     const b = resourceNameForKey('inbound-reschedule-1-2026-08-05T18-00-00-000Z');
     expect(a).not.toBe(b);
     expect(a).toMatch(/^banjo-[0-9a-f]{40}\.ics$/);
+  });
+});
+
+describe("CaldavCalendarProvider: the owner's addresses, for declined invitations (#70)", () => {
+  const ORIGIN = new URL(CALENDAR_URL).origin;
+  const PRINCIPAL = '/dav/principals/user/me@example.com/';
+  const declinedAt = (address: string) => [
+    'DTSTART:20260805T181500Z',
+    'DTEND:20260805T190000Z',
+    `ATTENDEE;PARTSTAT=DECLINED:mailto:${address}`,
+  ];
+  const principalResponse = () =>
+    new Response(
+      `<d:multistatus xmlns:d="DAV:"><d:response><d:href>${new URL(CALENDAR_URL).pathname}</d:href><d:propstat><d:prop>
+        <d:current-user-principal><d:href>${PRINCIPAL}</d:href></d:current-user-principal>
+      </d:prop><d:status>HTTP/1.1 200 OK</d:status></d:propstat></d:response></d:multistatus>`,
+      { status: 207 },
+    );
+  const addressSetResponse = (addresses: string[]) =>
+    new Response(
+      `<d:multistatus xmlns:d="DAV:" xmlns:c="urn:ietf:params:xml:ns:caldav"><d:response><d:href>${PRINCIPAL}</d:href><d:propstat><d:prop>
+        <c:calendar-user-address-set>${addresses.map((a) => `<d:href>${a}</d:href>`).join('')}</c:calendar-user-address-set>
+      </d:prop><d:status>HTTP/1.1 200 OK</d:status></d:propstat></d:response></d:multistatus>`,
+      { status: 207 },
+    );
+  /** A provider with no configured addresses, against a server that publishes `addresses` (or none). */
+  function discoveringProvider(username = 'me@fastmail.example') {
+    return new CaldavCalendarProvider({ calendarUrl: CALENDAR_URL, username, password: 'app-password', timeZone: 'America/New_York' });
+  }
+  function server(addresses: string[] | undefined, event: string[]) {
+    handler = (req) => {
+      if (req.method === 'REPORT') return multistatus([event]);
+      if (req.method === 'PROPFIND' && req.url === CALENDAR_URL) return addresses ? principalResponse() : new Response('', { status: 404 });
+      if (req.method === 'PROPFIND' && req.url === `${ORIGIN}${PRINCIPAL}`) return addressSetResponse(addresses ?? []);
+      return new Response('unexpected', { status: 500 });
+    };
+  }
+
+  it("reads the addresses from the server, so a decline sent to a custom-domain alias doesn't block time", async () => {
+    server(['mailto:Me@Custom.example', 'mailto:hello@custom.example', '/principals/me'], declinedAt('me@custom.example'));
+    const p = discoveringProvider();
+
+    expect(await p.isFree({ start: START, durationMinutes: 30 })).toBe(true);
+    expect(await p.ownerAddresses()).toEqual(['me@custom.example', 'hello@custom.example', 'me@fastmail.example']);
+  });
+
+  it('asks the server once, then reuses the addresses', async () => {
+    server(['mailto:me@custom.example'], declinedAt('me@custom.example'));
+    const p = discoveringProvider();
+
+    await p.isFree({ start: START, durationMinutes: 30 });
+    await p.isFree({ start: START, durationMinutes: 30 });
+
+    expect(byMethod('PROPFIND')).toHaveLength(2); // principal + address set, once
+  });
+
+  it("falls back to the username when the server doesn't list addresses, without asking again on every check", async () => {
+    server(undefined, declinedAt('me@fastmail.example'));
+    const p = discoveringProvider();
+
+    expect(await p.isFree({ start: START, durationMinutes: 30 })).toBe(true); // declined at the login address
+    await p.isFree({ start: START, durationMinutes: 30 });
+
+    expect(byMethod('PROPFIND')).toHaveLength(1);
+  });
+
+  it('uses DAV_OWNER_EMAIL as given, without asking the server', async () => {
+    server(['mailto:someone-else@example.com'], declinedAt('alias@custom.example'));
+    const p = new CaldavCalendarProvider({
+      calendarUrl: CALENDAR_URL,
+      username: 'me@fastmail.example',
+      password: 'app-password',
+      timeZone: 'America/New_York',
+      ownerAddresses: parseAddressList('Me@Custom.example, mailto:alias@custom.example'),
+    });
+
+    expect(await p.isFree({ start: START, durationMinutes: 30 })).toBe(true);
+    expect(byMethod('PROPFIND')).toHaveLength(0);
+  });
+
+  it("still counts someone else's decline as busy", async () => {
+    server(['mailto:me@custom.example'], declinedAt('other@example.com'));
+    expect(await discoveringProvider().isFree({ start: START, durationMinutes: 30 })).toBe(false);
   });
 });

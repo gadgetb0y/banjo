@@ -189,8 +189,8 @@ export function eventSpan(event: ICalComponent, defaultTimeZone: string): (BusyI
 export interface BusyOptions {
   /** CALENDAR_TIMEZONE — for floating times and all-day dates. */
   timeZone: string;
-  /** The calendar owner's address, to skip invitations they declined. */
-  ownerEmail?: string;
+  /** The calendar owner's addresses (any case, no "mailto:"), to skip invitations they declined. */
+  ownerEmails?: readonly string[];
 }
 
 /**
@@ -202,9 +202,9 @@ export interface BusyOptions {
  * - all-day events block only when explicitly marked busy (TRANSP:OPAQUE) —
  *   a birthday or a holiday shouldn't make a whole day unbookable.
  */
-export function busyIntervalsFromEvents(events: ICalComponent[], { timeZone, ownerEmail }: BusyOptions): BusyInterval[] {
+export function busyIntervalsFromEvents(events: ICalComponent[], { timeZone, ownerEmails = [] }: BusyOptions): BusyInterval[] {
   const busy: BusyInterval[] = [];
-  const owner = ownerEmail ? `mailto:${ownerEmail.toLowerCase()}` : undefined;
+  const owner = new Set(ownerEmails.map((address) => `mailto:${address.toLowerCase()}`));
 
   for (const event of events) {
     if (getProperty(event, 'RRULE') || getProperty(event, 'RDATE')) {
@@ -215,11 +215,9 @@ export function busyIntervalsFromEvents(events: ICalComponent[], { timeZone, own
     }
     if (getProperty(event, 'STATUS')?.value.toUpperCase() === 'CANCELLED') continue;
 
-    const declined =
-      owner !== undefined &&
-      event.properties.some(
-        (p) => p.name === 'ATTENDEE' && p.value.toLowerCase() === owner && p.params.PARTSTAT?.toUpperCase() === 'DECLINED',
-      );
+    const declined = event.properties.some(
+      (p) => p.name === 'ATTENDEE' && owner.has(p.value.toLowerCase()) && p.params.PARTSTAT?.toUpperCase() === 'DECLINED',
+    );
     if (declined) continue;
 
     const span = eventSpan(event, timeZone);

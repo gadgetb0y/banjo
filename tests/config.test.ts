@@ -23,7 +23,7 @@ const ALL_CONFIG_KEYS = [
   'VOICE_AI_PROVIDER', 'OPENAI_API_KEY', 'OPENAI_REALTIME_MODEL', 'OPENAI_LIVE_MODEL', 'OPENAI_LIVE_BACKEND_MODEL',
   'GEMINI_API_KEY', 'GEMINI_LIVE_MODEL', 'ELEVENLABS_API_KEY', 'ELEVENLABS_AGENT_ID',
   'TWILIO_ACCOUNT_SID', 'TWILIO_AUTH_TOKEN', 'TWILIO_PHONE_NUMBER', 'TWILIO_WEBHOOK_VALIDATION_ENABLED',
-  'CALENDAR_PROVIDER', 'CONTACTS_PROVIDER', 'DAV_USERNAME', 'DAV_PASSWORD', 'CALDAV_CALENDAR_URL', 'CARDDAV_ADDRESSBOOK_URL',
+  'CALENDAR_PROVIDER', 'CONTACTS_PROVIDER', 'DAV_USERNAME', 'DAV_PASSWORD', 'DAV_OWNER_EMAIL', 'CALDAV_CALENDAR_URL', 'CARDDAV_ADDRESSBOOK_URL',
   'GOOGLE_CONTACTS_SYNC_INTERVAL_HOURS', 'CONTACTS_SYNC_INTERVAL_HOURS',
   'GOOGLE_OAUTH_CLIENT_ID', 'GOOGLE_OAUTH_CLIENT_SECRET', 'GOOGLE_OAUTH_REFRESH_TOKEN', 'GOOGLE_CALENDAR_ID',
   'NOTIFICATION_CHANNEL', 'NOTIFY_TO_PHONE_NUMBER', 'NOTIFY_FROM_PHONE_NUMBER', 'PUSHOVER_APP_TOKEN', 'PUSHOVER_USER_KEY', 'PUSHOVER_DEVICE',
@@ -169,6 +169,16 @@ describe('config: env schema', () => {
     });
     const { config } = await import('../src/config/index.js');
     expect(config.CARDDAV_ADDRESSBOOK_URL).toBe('http://localhost:5232/me/contacts/');
+  });
+
+  it('accepts DAV_OWNER_EMAIL as a comma-separated list of addresses, and rejects anything else', async () => {
+    setEnv({ DAV_OWNER_EMAIL: 'me@example.com, Me@Other.example , mailto:alias@example.org' });
+    const { config } = await import('../src/config/index.js');
+    expect(config.DAV_OWNER_EMAIL).toBe('me@example.com, Me@Other.example , mailto:alias@example.org');
+
+    vi.resetModules();
+    setEnv({ DAV_OWNER_EMAIL: 'me@example.com, not-an-address' });
+    await expect(import('../src/config/index.js')).rejects.toThrow(/DAV_OWNER_EMAIL/);
   });
 
   it('fails fast when CONTACTS_PROVIDER=carddav has no address book URL', async () => {
