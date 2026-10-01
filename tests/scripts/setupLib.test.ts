@@ -6,6 +6,7 @@ import {
   backupName,
   E164,
   HOSTNAME,
+  PUSHOVER_KEY,
   renderEnvFile,
   TIMEZONE,
   TWILIO_ACCOUNT_SID,
@@ -47,6 +48,10 @@ describe('setup validators (#39)', () => {
     expect(TWILIO_AUTH_TOKEN('f'.repeat(32))).toBeUndefined();
     expect(TWILIO_AUTH_TOKEN('f'.repeat(31))).toMatch(/32/);
 
+    expect(PUSHOVER_KEY('azGDORePK8gMaC0QOYAMyEEuzJnyUi')).toBeUndefined();
+    expect(PUSHOVER_KEY('uQiRzpo4DXghDmr9QzzfQu27cmVRs')).toMatch(/30/); // 29 characters
+    expect(PUSHOVER_KEY('azGDORePK8gMaC0QOYAMyEEuzJny-i')).toMatch(/30/);
+
     expect(TIMEZONE('Europe/London')).toBeUndefined();
     expect(TIMEZONE('Eastern')).toMatch(/IANA/);
   });
@@ -85,6 +90,16 @@ describe('renderEnvFile (#39)', () => {
 describe('validateWithAppConfig (#39)', () => {
   it("accepts what setup writes for a minimal install, using the app's own schema", () => {
     expect(validateWithAppConfig(renderEnvFile(template, answers), repoRoot)).toEqual([]);
+  }, 30_000);
+
+  it('accepts what setup writes for Pushover notifications', () => {
+    const pushover = {
+      ...answers,
+      NOTIFICATION_CHANNEL: 'pushover',
+      PUSHOVER_APP_TOKEN: 'azGDORePK8gMaC0QOYAMyEEuzJnyUi',
+      PUSHOVER_USER_KEY: 'uQiRzpo4DXghDmr9QzzfQu27cmVRsG',
+    };
+    expect(validateWithAppConfig(renderEnvFile(template, pushover), repoRoot)).toEqual([]);
   }, 30_000);
 
   it('reports the setting and message the app would have failed on at startup', () => {
