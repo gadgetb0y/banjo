@@ -1,9 +1,10 @@
 /**
  * Finds the calendars or address books on a DAV account (RFC 6764 service
  * discovery, then RFC 4791 / RFC 6352 home sets), so the owner can pick one
- * for CALDAV_CALENDAR_URL or CARDDAV_ADDRESSBOOK_URL. Used only by
- * scripts/dav-check.ts — Banjo itself is configured with one URL of each and
- * never discovers at runtime.
+ * for CALDAV_CALENDAR_URL or CARDDAV_ADDRESSBOOK_URL. Used by
+ * scripts/dav-check.ts; Banjo itself is configured with one URL of each. The
+ * one runtime lookup is discoverCalendarUserAddresses below, which finds the
+ * owner's own addresses for skipping invitations they declined.
  */
 
 import { davRequest, okProps, parseMultistatus, textOf, type DavCredentials } from './davHttp.js';
@@ -97,4 +98,30 @@ export async function discoverCollections(serverUrl: string, credentials: DavCre
     });
   }
   return collections;
+}
+
+/**
+ * The calendar owner's own addresses (RFC 6638 calendar-user-address-set on
+ * their principal), lowercased without "mailto:" — what invitations are
+ * addressed to, which on Fastmail can be every alias across custom domains
+ * rather than the login. Found from the calendar collection itself, so it
+ * needs no server URL beyond CALDAV_CALENDAR_URL. Throws when the server
+ * doesn't say; the caller falls back.
+ */
+export async function discoverCalendarUserAddresses(collectionUrl: string, credentials: DavCredentials): Promise<string[]> {
+  const principalLookup = await propfind(collectionUrl, credentials, '0', '<d:current-user-principal/>');
+  const principalHref = principalLookup.responses.map((r) => hrefIn(okProps(r)['current-user-principal'])).find(Boolean);
+  if (!principalHref) throw new Error(`No current-user-principal found at ${collectionUrl}`);
+  const principalUrl = new URL(principalHref, principalLookup.baseUrl).toString();
+  assertSameService(principalUrl, collectionUrl);
+
+  const addressLookup = await propfind(principalUrl, credentials, '0', '<c:calendar-user-address-set/>');
+  const prop = addressLookup.responses.map((r) => okProps(r)['calendar-user-address-set']).find(Boolean);
+  const hrefs = prop && typeof prop === 'object' ? ((prop as { href?: unknown[] }).href ?? []) : [];
+  const addresses = hrefs
+    .map((h) => textOf(h)?.trim())
+    .filter((h): h is string => !!h && /^mailto:/i.test(h))
+    .map((h) => h.replace(/^mailto:/i, '').toLowerCase());
+  if (!addresses.length) throw new Error(`No calendar-user-address-set mailto: addresses for principal ${principalUrl}`);
+  return [...new Set(addresses)];
 }

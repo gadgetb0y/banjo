@@ -111,6 +111,11 @@ passwords and servers.
    calendar it lists the next 7 days of busy times in `CALENDAR_TIMEZONE`; events marked free, declined
    invitations, and all-day events not marked busy are deliberately left out. Nothing is written
    anywhere.
+
+   It also prints the addresses Banjo treats as yours when skipping declined invitations. By default
+   they come from the server (Fastmail and iCloud publish every address on the account). If an
+   address you're invited at is missing — say, a custom domain — list yours in `DAV_OWNER_EMAIL`,
+   comma-separated; that replaces what the server says.
 5. **Switch over.** Set `CALENDAR_PROVIDER=caldav` and/or `CONTACTS_PROVIDER=carddav` and restart.
    Boot fails fast if a URL or the `DAV_*` sign-in is missing. On its first CardDAV sync, Banjo makes
    the contacts cache match the address book exactly, which removes any rows from Google Contacts.

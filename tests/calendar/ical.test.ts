@@ -15,7 +15,7 @@ function vevent(lines: string[]): string {
 }
 
 function busyOf(ics: string, ownerEmail?: string) {
-  return busyIntervalsFromEvents(findEvents(parseICalendar(ics)), { timeZone: TZ, ownerEmail }).map((b) => ({
+  return busyIntervalsFromEvents(findEvents(parseICalendar(ics)), { timeZone: TZ, ownerEmails: ownerEmail ? [ownerEmail] : [] }).map((b) => ({
     start: new Date(b.startMs).toISOString(),
     end: new Date(b.endMs).toISOString(),
   }));

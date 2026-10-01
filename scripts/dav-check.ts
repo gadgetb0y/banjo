@@ -66,10 +66,18 @@ async function summarizeAddressBook(url: string, credentials: DavCredentials) {
 async function showBusy(calendarUrl: string, credentials: DavCredentials) {
   // Imported only now: this loads and validates Banjo's whole config.
   const { config } = await import('../src/config/index.js');
-  const { CaldavCalendarProvider } = await import('../src/calendar/caldavCalendarProvider.js');
+  const { CaldavCalendarProvider, parseAddressList } = await import('../src/calendar/caldavCalendarProvider.js');
   const { formatSpokenInZone } = await import('../src/lib/timezone.js');
 
-  const provider = new CaldavCalendarProvider({ calendarUrl, ...credentials, timeZone: config.CALENDAR_TIMEZONE });
+  const provider = new CaldavCalendarProvider({
+    calendarUrl,
+    ...credentials,
+    timeZone: config.CALENDAR_TIMEZONE,
+    ownerAddresses: config.DAV_OWNER_EMAIL ? parseAddressList(config.DAV_OWNER_EMAIL) : undefined,
+  });
+  const addresses = await provider.ownerAddresses();
+  console.log(`\nYour addresses, for skipping invitations you declined (${config.DAV_OWNER_EMAIL ? 'DAV_OWNER_EMAIL' : 'from the server'}):`);
+  console.log(addresses.length ? `  ${addresses.join(', ')}` : '  (none found; set DAV_OWNER_EMAIL)');
   const now = Date.now();
   const busy = await provider.getBusyIntervals({
     start: new Date(now).toISOString(),

@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { discoverCollections } from '../../../src/lib/dav/discovery.js';
+import { discoverCalendarUserAddresses, discoverCollections } from '../../../src/lib/dav/discovery.js';
 
 const ms = (body: string) =>
   new Response(`<?xml version="1.0"?><D:multistatus xmlns:D="DAV:" xmlns:C="urn:ietf:params:xml:ns:caldav">${body}</D:multistatus>`, { status: 207 });
@@ -109,5 +109,24 @@ describe('discoverCollections across hosts', () => {
       /collector\.example\.net/,
     );
     expect(fetchMock.mock.calls.map(([url]) => new URL(url).hostname)).not.toContain('collector.example.net');
+  });
+});
+
+describe('discoverCalendarUserAddresses (#70)', () => {
+  const credentials = { username: 'me@example.com', password: 'app-password' };
+  const COLLECTION = 'https://caldav.example.com/dav/calendars/user/me@example.com/work/';
+
+  it("won't follow a principal on an unrelated host, which would send it the app password", async () => {
+    const fetchMock = vi.fn(async (url: string) =>
+      url === COLLECTION
+        ? ms(`<D:response><D:href>/dav/calendars/user/me@example.com/work/</D:href><D:propstat><D:prop>
+            <D:current-user-principal><D:href>https://evil.example.net/principal/</D:href></D:current-user-principal>
+          </D:prop><D:status>HTTP/1.1 200 OK</D:status></D:propstat></D:response>`)
+        : new Response('', { status: 404 }),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+
+    await expect(discoverCalendarUserAddresses(COLLECTION, credentials)).rejects.toThrow(/unrelated host/);
+    expect(fetchMock.mock.calls.map(([url]) => url)).toEqual([COLLECTION]);
   });
 });

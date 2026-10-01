@@ -18,6 +18,7 @@ import { logger } from '../lib/logger.js';
 import { zonedTimeToUtcIso } from '../lib/timezone.js';
 import type { TimeWindow } from '../tasks/schema.js';
 import { davRequest, isOkStatus, parseMultistatus, textOf, type DavCredentials } from '../lib/dav/davHttp.js';
+import { discoverCalendarUserAddresses } from '../lib/dav/discovery.js';
 import { chunkIntoWindows, subtractBusyIntervals, type BusyInterval } from './freeSlots.js';
 import { buildBookingCalendar, busyIntervalsFromEvents, eventSpan, findEvents, formatUtc, parseICalendar } from './ical.js';
 import {
@@ -30,6 +31,8 @@ import {
 } from './types.js';
 
 const MS_PER_MINUTE = 60_000;
+/** How long to wait before asking the server for the owner's addresses again after it failed to say. */
+const ADDRESS_RETRY_MS = 60 * 60_000;
 
 export interface CaldavCalendarOptions {
   /** The calendar collection, e.g. https://caldav.fastmail.com/dav/calendars/user/me@fastmail.com/<id>/ */
@@ -38,6 +41,13 @@ export interface CaldavCalendarOptions {
   password: string;
   /** CALENDAR_TIMEZONE — how floating times and all-day dates are read. */
   timeZone: string;
+  /**
+   * The owner's own addresses, for skipping invitations they declined
+   * (DAV_OWNER_EMAIL). When omitted they're read from the server once
+   * (calendar-user-address-set), falling back to the username if it's an
+   * email address.
+   */
+  ownerAddresses?: readonly string[];
 }
 
 function optionsFromConfig(): CaldavCalendarOptions {
@@ -50,7 +60,13 @@ function optionsFromConfig(): CaldavCalendarOptions {
     username: config.DAV_USERNAME,
     password: config.DAV_PASSWORD,
     timeZone: config.CALENDAR_TIMEZONE,
+    ownerAddresses: config.DAV_OWNER_EMAIL ? parseAddressList(config.DAV_OWNER_EMAIL) : undefined,
   };
+}
+
+/** DAV_OWNER_EMAIL: comma-separated, any case, optional "mailto:". */
+export function parseAddressList(value: string): string[] {
+  return [...new Set(value.split(',').map((a) => a.trim().replace(/^mailto:/i, '').toLowerCase()).filter(Boolean))];
 }
 
 /**
@@ -70,16 +86,45 @@ export class CaldavCalendarProvider implements CalendarProvider {
   private readonly calendarUrl: string;
   private readonly credentials: DavCredentials;
   private readonly timeZone: string;
-  private readonly ownerEmail: string | undefined;
+  /** Set when DAV_OWNER_EMAIL (or a test) gives the addresses; otherwise they're discovered. */
+  private readonly configuredAddresses: readonly string[] | undefined;
+  /** The username when it's an email address — the fallback when the server doesn't list addresses. */
+  private readonly usernameAddress: string[];
+  private discovered: { addresses: readonly string[] } | { failedAt: number } | undefined;
 
   constructor(options: CaldavCalendarOptions = optionsFromConfig()) {
     // Resource names resolve relative to the collection, which needs a trailing slash.
     this.calendarUrl = options.calendarUrl.endsWith('/') ? options.calendarUrl : `${options.calendarUrl}/`;
     this.credentials = { username: options.username, password: options.password };
     this.timeZone = options.timeZone;
-    // Fastmail and iCloud usernames are the account's email address — the
-    // address declined invitations are addressed to.
-    this.ownerEmail = options.username.includes('@') ? options.username : undefined;
+    this.configuredAddresses = options.ownerAddresses;
+    this.usernameAddress = options.username.includes('@') ? [options.username.toLowerCase()] : [];
+  }
+
+  /**
+   * The addresses invitations to the owner are sent to. A login isn't always
+   * one of them: a Fastmail user signing in as you@fastmail.com may be
+   * invited at their own domain's addresses (#70). DAV_OWNER_EMAIL wins;
+   * otherwise the server's calendar-user-address-set, read once and cached,
+   * plus the username if it's an email. If the server can't say, the
+   * username alone is used and the server is asked again an hour later.
+   */
+  async ownerAddresses(): Promise<readonly string[]> {
+    if (this.configuredAddresses) return this.configuredAddresses;
+    if (this.discovered && 'addresses' in this.discovered) return this.discovered.addresses;
+    if (this.discovered && Date.now() - this.discovered.failedAt < ADDRESS_RETRY_MS) return this.usernameAddress;
+    try {
+      const addresses = [...new Set([...(await discoverCalendarUserAddresses(this.calendarUrl, this.credentials)), ...this.usernameAddress])];
+      this.discovered = { addresses };
+      return addresses;
+    } catch (err) {
+      this.discovered = { failedAt: Date.now() };
+      logger.warn(
+        { err },
+        "couldn't read the calendar owner's addresses from the CalDAV server; declined invitations are recognized only by the username. Set DAV_OWNER_EMAIL to list them.",
+      );
+      return this.usernameAddress;
+    }
   }
 
   async computeCandidateWindows({ dateWindows, durationMinutes }: CheckAvailabilityInput): Promise<TimeWindow[]> {
@@ -232,6 +277,7 @@ export class CaldavCalendarProvider implements CalendarProvider {
 </c:calendar-query>`,
     });
 
+    const ownerEmails = await this.ownerAddresses();
     const busy: BusyInterval[] = [];
     for (const resource of parseMultistatus(await response.text())) {
       if (resource.status && !isOkStatus(resource.status)) {
@@ -244,7 +290,7 @@ export class CaldavCalendarProvider implements CalendarProvider {
         const calendarData = textOf(propstat.prop['calendar-data']);
         if (!calendarData) continue;
         const events = findEvents(parseICalendar(calendarData));
-        busy.push(...busyIntervalsFromEvents(events, { timeZone: this.timeZone, ownerEmail: this.ownerEmail }));
+        busy.push(...busyIntervalsFromEvents(events, { timeZone: this.timeZone, ownerEmails }));
       }
     }
     return busy;
