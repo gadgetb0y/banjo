@@ -106,11 +106,6 @@ project with one maintainer. Things worth knowing before you build on it:
   noted in your notification, but it isn't prevented.
   **If you're in a jurisdiction with AI-disclosure or two-party-consent rules (TCPA/FCC, California
   AB 2905), check your own calls.** ([#8](https://github.com/shatch/banjo/issues/8))
-- **CalDAV/CardDAV is opt-in and not yet proven on a real call.** Google stays the default. Fastmail,
-  iCloud and Nextcloud work only if you set `CALENDAR_PROVIDER=caldav` and/or `CONTACTS_PROVIDER=carddav`.
-  The code is tested, but no real booking has been made through a CalDAV calendar yet. Until one has,
-  check the first few bookings in your calendar yourself.
-  ([#70](https://github.com/shatch/banjo/pull/70))
 - **Logs are redacted, not access-controlled.** Phone numbers are logged with only the last 4 digits,
   and voicemail text and raw tool arguments as a length. Error messages from vendors can still quote a
   number, and `LOG_TRANSCRIPTS=true` deliberately logs full call text. Treat logs as sensitive.
@@ -168,8 +163,8 @@ Banjo needs four things before it can place a real call — get these first:
 3. **Calendar and contacts access**, if you want live calendar-aware booking and caller ID. Either
    CalDAV/CardDAV (Fastmail, iCloud, Nextcloud) with an app password — set `CALENDAR_PROVIDER=caldav`
    and/or `CONTACTS_PROVIDER=carddav`, see `docs/RUNBOOKS.md`'s "Connecting Fastmail calendar and
-   contacts" — or Google, below. Google is the default. CalDAV/CardDAV is opt-in and hasn't carried
-   a real booking yet (see Known limitations).
+   contacts" — or Google, below. Google is the default. CalDAV has made real bookings on Fastmail
+   ([#70](https://github.com/shatch/banjo/pull/70)).
 
    **A Google OAuth client + refresh token**, if you want Google Calendar and/or Google Contacts
    integration (caller-ID personalization, `find_contact` fallback) — the two share one client and one
