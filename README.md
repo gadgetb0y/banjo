@@ -23,8 +23,9 @@ https://github.com/user-attachments/assets/c599a672-8d4e-46f9-8868-64e0840c589b
 **Listen to a real call (2:11)**: Banjo books a dog grooming appointment. The
 call and the calendar are real; the groomer is role-played. Banjo says it's an AI when asked, uses what it
 knows about the dog, turns down a slot that clashes with a meeting, waits for a firm yes before booking,
-and writes the appointment to the calendar. This is a first pass. It hangs up without reading the booking
-back, which is tracked in [#47](https://github.com/shatch/banjo/issues/47).
+and writes the appointment to the calendar. This was an early call. Since then, Banjo reads the booking back
+before hanging up ([#47](https://github.com/shatch/banjo/issues/47)) and opens every call by saying it's an
+AI rather than waiting to be asked ([#8](https://github.com/shatch/banjo/issues/8)).
 
 <details>
 <summary>Transcript (auto-transcribed, lightly tidied)</summary>
@@ -69,6 +70,42 @@ back, which is tracked in [#47](https://github.com/shatch/banjo/issues/47).
 
 </details>
 
+## What it does
+
+**On the phone**
+- **Books appointments.** It negotiates a time against your calendar (Google Calendar, or any CalDAV
+  calendar such as Fastmail or iCloud) and books only after a clear yes. Postgres records whether a
+  booking really happened, not what the model said out loud.
+- **Has conversations.** `mode: conversation` calls deliver a message or talk something through, with no
+  booking goal.
+- **Calls later.** `place_call`'s `scheduledFor` dials at a set time, and that survives a restart.
+- **Handles voicemail and phone menus.** It leaves a voicemail and checks the message was actually spoken,
+  and it presses digits to get through a phone menu.
+- **Hands a call to you.** Optional cold transfer when the other party asks for a person, with your leg
+  screened so only pressing 1 connects (`TRANSFER_ENABLED`).
+- **Answers your number.** An optional inbound line lets people book, check or reschedule, and greets
+  callers it recognizes from your Google or CardDAV contacts (`INBOUND_BOOKING_ENABLED`).
+
+**Safeguards**
+- **Says it's an AI.** Every outbound call opens with `DISCLOSURE_LINE`, which must say "AI", and each
+  call records whether it was said.
+- **Records only with notice.** Recording is optional (`RECORD_CALLS`), and starts only after Banjo has
+  said the recording notice.
+- **Won't pester anyone.** At most 3 calls to any number in a rolling 24 hours, with no override.
+- **Keeps what you choose.** Transcripts are saved only if you turn them on (`PERSIST_TRANSCRIPTS`),
+  and both transcripts and recordings are deleted after 30 days by default. Logs mask phone numbers
+  and call content.
+
+**Working with it**
+- **11 MCP tools for Claude Code:** place, check, cancel and stop calls, read transcripts, and manage
+  contacts.
+- **Tells you how it went:** an outcome summary after every call, by SMS or [Pushover](https://pushover.net).
+- **Knows your preferences:** an owner profile of standing notes is added to every call (see
+  [below](#making-it-yours-the-owner-profile)).
+- **Easy to run:** `npm run setup` writes a checked `.env`, and `docker compose up` runs the published
+  amd64/arm64 image. To keep it running when your laptop sleeps, see
+  [Running Banjo on an always-on Linux host](docs/RUNBOOKS.md#running-banjo-on-an-always-on-linux-host).
+
 See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for the full design, [`docs/ROADMAP.md`](docs/ROADMAP.md)
 for what's coming next, [`docs/RUNBOOKS.md`](docs/RUNBOOKS.md) for operational procedures, and
 [`docs/COMPETITIVE_LANDSCAPE.md`](docs/COMPETITIVE_LANDSCAPE.md) for how it compares to other
@@ -78,34 +115,31 @@ open-source projects in this space.
 
 ## Known limitations
 
-Banjo places real calls and books real appointments, and has done so reliably. It is also a young
-project with one maintainer. Things worth knowing before you build on it:
+Banjo places real calls and books real appointments, and has done so reliably. It is also a young,
+small project. Things worth knowing before you build on it:
 
 - **One voice provider is actually proven.** OpenAI Realtime is the only adapter carrying live
   traffic. `openai-live` (GPT-Live) has been tested on real calls but isn't the default. **Gemini
   Live and ElevenLabs are scaffolded and unverified** — Gemini additionally emits no caller-side
   transcripts at all.
-- **Transcripts and recordings are saved only if you turn them on.** With `PERSIST_TRANSCRIPTS=true`,
-  every line of every call goes to Postgres and can be read back with the `get_call_transcript` MCP tool.
-  With `RECORD_CALLS=true`, outbound calls are recorded (two-track) in your Twilio account. Banjo's opening
-  line gains *"This call is recorded."*, and recording starts only after Banjo has said it, so the other
-  party's greeting and Banjo's opener aren't on the recording. Both are off by default and deleted after
-  30 days (`TRANSCRIPT_RETENTION_DAYS`, `RECORDING_RETENTION_DAYS`). Inbound calls are never recorded.
-  ([#6](https://github.com/shatch/banjo/issues/6), [#8](https://github.com/shatch/banjo/issues/8))
-- **Call transfer is cold and off by default.** With `TRANSFER_ENABLED=true` and `TRANSFER_TO_PHONE_NUMBER`
-  set, Banjo can hand a live call straight to you instead of hanging up and notifying — but only after
-  asking the other party and getting a yes, and only for one fixed number; the model never chooses who to
-  connect. If you don't answer, they hear `TRANSFER_FALLBACK_MESSAGE` and the call ends. No whisper of
-  context before you're bridged in yet, and no warm transfer (Banjo can't stay on the line). On the
-  inbound line, only callers already in your contacts can be put through; anyone else who asks for you
-  is flagged for you to call back, so a robocall can't ring your phone.
-  ([#7](https://github.com/shatch/banjo/issues/7), [#66](https://github.com/shatch/banjo/issues/66))
 - **AI disclosure is a prompt rule, checked after the call, not enforced.** Banjo is told to open every
-  call with `DISCLOSURE_LINE` (default: *"Hi, I'm an AI assistant calling on behalf of {name}."*, and it
-  must say "AI"). Afterwards, its first line is checked. A miss is recorded on the call attempt and
-  noted in your notification, but it isn't prevented.
+  call with `DISCLOSURE_LINE` (default: *"Hi, I'm an AI assistant calling on behalf of {name}."*), and
+  its first line is checked afterwards. A miss is recorded on the call attempt and noted in your
+  notification, but it isn't prevented.
   **If you're in a jurisdiction with AI-disclosure or two-party-consent rules (TCPA/FCC, California
   AB 2905), check your own calls.** ([#8](https://github.com/shatch/banjo/issues/8))
+- **Recording and transcripts cover outbound calls only.** Recordings live in your Twilio account
+  (two-track), transcripts in Postgres. Both are off by default. Inbound calls are never recorded.
+  ([#6](https://github.com/shatch/banjo/issues/6))
+- **Call transfer is cold, to one fixed number.** Banjo transfers only after the other party says yes,
+  and the model never chooses who to connect. You get no summary of the call before you're connected,
+  and Banjo can't stay on the line. If you don't answer, the caller hears `TRANSFER_FALLBACK_MESSAGE`
+  and the call ends. On the inbound line, only callers already in your contacts can be put through;
+  anyone else who asks for you is flagged for you to call back, so a robocall can't ring your phone.
+  ([#7](https://github.com/shatch/banjo/issues/7), [#66](https://github.com/shatch/banjo/issues/66))
+- **SMS to US numbers needs carrier registration.** Without A2P 10DLC registration, outcome texts are
+  blocked by the carrier. Pushover needs no registration. See `docs/RUNBOOKS.md`, "SMS notifications
+  aren't arriving".
 - **Logs are redacted, not access-controlled.** Phone numbers are logged with only the last 4 digits,
   and voicemail text and raw tool arguments as a length. Error messages from vendors can still quote a
   number, and `LOG_TRANSCRIPTS=true` deliberately logs full call text. Treat logs as sensitive.
@@ -309,8 +343,12 @@ src/
   telephony/     outbound call origination + media streams (Twilio)
   tasks/         task/call-attempt data model, phone-path orchestration
   contacts/      contact directory
-  calendar/      Google Calendar integration (phone-path only — see docs/ARCHITECTURE.md)
-  googleContacts/ Google People API sync/lookup/reconciliation cache — feeds contacts/ and inbound/
+  calendar/      Google Calendar or CalDAV integration (phone-path only — see docs/ARCHITECTURE.md)
+  googleContacts/ contacts cache (sync/lookup/reconciliation) — feeds contacts/ and inbound/
+  carddavContacts/ CardDAV address-book sync into that cache (Fastmail, iCloud, Nextcloud)
+  lib/dav/       shared WebDAV plumbing for CalDAV and CardDAV
+  transcripts/   opt-in call transcript storage and retention
+  recordings/    call recording retention
   inbound/       inbound call handling: booking flow + caller-ID resolution for greeting personalization
   mcp/           remote MCP server for tool-calling clients (e.g. Claude Code)
   session/       per-call state machine wiring telephony <-> voice AI <-> tools
