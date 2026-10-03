@@ -31,9 +31,18 @@ const wsInstances: FakeWs[] = [];
 vi.mock('ws', () => ({ default: FakeWs }));
 const log = vi.hoisted(() => ({ error: vi.fn(), warn: vi.fn(), info: vi.fn(), debug: vi.fn() }));
 vi.mock('../../../src/lib/logger.js', () => ({ childLogger: () => log, logger: log }));
+// vitest.config.ts only pins OpenAI credentials; set the others here so the
+// test doesn't depend on whatever the developer's shell or .env happens to hold.
 vi.mock('../../../src/config/index.js', async (importOriginal) => {
   const { config } = await importOriginal<typeof import('../../../src/config/index.js')>();
-  return { config: { ...config, ELEVENLABS_API_KEY: 'test-key', ELEVENLABS_AGENT_ID: 'test-agent' } };
+  return {
+    config: {
+      ...config,
+      GEMINI_API_KEY: 'test-key',
+      ELEVENLABS_API_KEY: 'test-key',
+      ELEVENLABS_AGENT_ID: 'test-agent',
+    },
+  };
 });
 
 const { OpenAIRealtimeProvider } = await import('../../../src/voice/providers/openai.js');
