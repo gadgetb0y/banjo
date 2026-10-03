@@ -219,3 +219,113 @@ number is the part of `GOOGLE_OAUTH_CLIENT_ID` before the first `-`):
 Costs, per Twilio's help center (check current pricing): a small one-time brand fee, a one-time campaign vetting fee, and a monthly campaign fee. See [A2P 10DLC pricing](https://help.twilio.com/articles/1260803965530-What-pricing-and-fees-are-associated-with-the-A2P-10DLC-service-).
 
 **Alternatives:** a **toll-free** number with toll-free verification also works for US texts, and notifications can be turned off with `NOTIFICATION_CHANNEL=none`. The task outcome is always available from `get_task_status` either way.
+
+## Running Banjo on an always-on Linux host
+
+Banjo on a laptop stops answering when the laptop sleeps: scheduled calls don't start and inbound calls get no answer. These steps move it to any always-on Linux machine (a home server, a VM, an LXC container) with Docker and Docker Compose. The host needs nothing else. The app comes from the published `ghcr.io/shatch/banjo` image (amd64 and arm64), Postgres and the tunnel run as containers, and Banjo keeps no state outside Postgres (recordings stay at Twilio). 2 GB of RAM is plenty: the three containers use about 170 MB at idle.
+
+This keeps the same public hostname by moving the ngrok agent to the host, so Twilio needs no changes. If you use another tunnel, swap the `ngrok` service below for it.
+
+### 1. Prepare the host
+
+```bash
+git clone https://github.com/shatch/banjo.git ~/banjo
+```
+
+Copy your `.env` (and `banjo-profile.md`, if you use one) into `~/banjo/`, then `chmod 600 .env`. `PUBLIC_HOSTNAME` stays as it is, and compose sets `DATABASE_URL` for the container. Add your ngrok token to `.env` as `NGROK_AUTHTOKEN=...` (`ngrok config check` prints where your current config file is).
+
+Create `~/banjo/docker-compose.override.yml` (it's git-ignored):
+
+```yaml
+services:
+  postgres:
+    ports: !reset []              # reachable only on the compose network
+  app:
+    ports: !override
+      - '127.0.0.1:3000:3000'     # Twilio and MCP both come in through ngrok
+    volumes:
+      - ./banjo-profile.md:/app/banjo-profile.md:ro
+  ngrok:
+    image: ngrok/ngrok:latest
+    restart: unless-stopped
+    command: http --url=YOUR-DOMAIN.ngrok-free.dev app:3000 --log=stdout
+    environment:
+      NGROK_AUTHTOKEN: ${NGROK_AUTHTOKEN}
+    depends_on: [app]
+```
+
+`docker compose config` should print the merged file without errors (`!reset` and `!override` need Compose 2.24 or later). Then pull the images and start only the database: `docker compose pull && docker compose up -d postgres`.
+
+You can bind the app to a Tailscale address (for example `'100.x.y.z:3000:3000'`) so MCP stays off the public tunnel. Check that your tailnet's ACL allows that port from your machine: an ACL that only allows SSH to the host makes port 3000 time out, even though `curl` on the host itself works. Docker also needs that address to exist when it starts the container, so `127.0.0.1` is the safer default.
+
+### 2. Move the data and cut over
+
+The free ngrok plan allows one agent per domain, and two Banjo processes can't share a Twilio number's calls. So stop the old copy before starting the new one. Banjo is offline for a minute or two.
+
+1. On the old machine, check that no call is in progress: `list_recent_tasks`, or no task in `pending`, `checking_availability`, `calling` or `negotiating`. A `pending` scheduled call is fine; the new host's poller picks it up.
+2. Stop the old app, then dump its database:
+   ```bash
+   docker compose stop app
+   docker compose exec -T postgres pg_dump -U banjo -Fc banjo > banjo-cutover.dump
+   ```
+3. Copy the dump to the host and restore it into the new, empty database:
+   ```bash
+   docker compose exec -T postgres pg_restore -U banjo -d banjo --no-owner < banjo-cutover.dump
+   ```
+   Compare `select count(*)` on `tasks`, `call_attempts` and `google_contacts` against the old database.
+4. Stop the old machine's ngrok agent, then start everything on the host: `docker compose up -d`. Leave the old machine's app stopped, and keep its Postgres volume for a week or so as a rollback.
+
+### 3. Point Claude Code at the host
+
+```bash
+claude mcp remove banjo -s local
+claude mcp add --transport sse -s local banjo https://YOUR-DOMAIN.ngrok-free.dev/mcp/sse \
+  --header "Authorization: Bearer $MCP_API_KEY"
+```
+
+Then run `/mcp` in any open Claude Code session. Every app restart drops the MCP session (`No transport found for sessionId`), and `/mcp` reconnects it.
+
+### 4. Check it
+
+- `docker compose ps`: `app` and `postgres` are `healthy`, and `ngrok` is up. `docker compose logs app` shows `database migrations up to date` and no config errors.
+- `curl https://YOUR-DOMAIN.ngrok-free.dev/health` returns 200.
+- Place one short call (`mode: conversation`) to your own number. Its `call_attempts` row should have `disclosed = true`, a `recording_sid` if `RECORD_CALLS` is on, and transcript rows if `PERSIST_TRANSCRIPTS` is on.
+- Reboot the host, and confirm all three containers and the tunnel come back by themselves. All services use `restart: unless-stopped`, so this only needs Docker enabled at boot (`systemctl is-enabled docker`).
+
+### Nightly backups
+
+Save as `~/backups/banjo-backup.sh` and `chmod +x` it:
+
+```bash
+#!/bin/bash
+# Nightly pg_dump of Banjo's database; keeps the newest 14.
+set -uo pipefail
+cd "$HOME/banjo" || exit 1
+out="$HOME/backups/banjo-$(date +%F).dump"
+if docker compose exec -T postgres pg_dump -U banjo -Fc banjo > "$out.tmp"; then
+  mv "$out.tmp" "$out"
+else
+  rm -f "$out.tmp"
+  echo "banjo backup failed" >&2
+  exit 1
+fi
+ls -1t "$HOME"/backups/banjo-*.dump | tail -n +15 | xargs -r rm -f
+```
+
+Run it once by hand, then schedule it with `crontab -e`:
+
+```
+30 3 * * * $HOME/backups/banjo-backup.sh >> $HOME/backups/backup.log 2>&1
+```
+
+These dumps sit on the same disk as the database. Copy them to another machine if the host itself might fail.
+
+### Updating
+
+Check for live calls first, then:
+
+```bash
+cd ~/banjo && git pull && docker compose pull && docker compose up -d
+```
+
+Pin a release with `BANJO_VERSION` in `.env` if you don't want `latest`.
