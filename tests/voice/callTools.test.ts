@@ -572,3 +572,19 @@ describe('leave_voicemail_and_end_call: the AI disclosure opens the voicemail (#
     expect(description).toContain('Never tell the callee how the message is delivered');
   });
 });
+
+describe('which call-ending tools require a goodbye (#102)', () => {
+  it('requires one on the normal endings, and not on voicemail or escalation', async () => {
+    const { callTools, endConversationCallTool } = await import('../../src/voice/tools/callTools.js');
+    const requiring = [...callTools, endConversationCallTool]
+      .filter((t) => t.endsCall)
+      .map((t) => [t.name, t.requiresGoodbye === true]);
+    expect(Object.fromEntries(requiring)).toEqual({
+      leave_voicemail_and_end_call: false,
+      report_negotiation_failed: true,
+      escalate_and_end_call: false,
+      end_call: true,
+      end_conversation_call: true,
+    });
+  });
+});
