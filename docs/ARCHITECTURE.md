@@ -24,7 +24,7 @@ Two genuinely different kinds of work are involved in "get this errand done," an
 ## Architecture overview: task lifecycle
 
 ```
-Steve, in conversation with Claude: "Schedule a haircut with Clauda"
+Steve, in conversation with Claude: "Schedule a haircut with Claudia"
   → Claude (running the schedule-appointment skill) calls find_contact("Clauda")
   → contact.preferredChannel known? if not, ask Steve once, persist via update_contact
   │
@@ -38,7 +38,7 @@ Steve, in conversation with Claude: "Schedule a haircut with Clauda"
           had MAX_CALLS_PER_NUMBER_PER_DAY calls (default 3) in the last 24 hours, counting queued ones
           (a call scheduled for later is checked when it comes due instead)
         → Banjo: createTask (status: pending) → returns { taskId, ackMessage } immediately
-        → Claude tells Steve: "Started calling Clauda's Salon, I'll let you know how it goes."
+        → Claude tells Steve: "Started calling Claudia's Salon, I'll let you know how it goes."
         → [async, in Banjo's orchestrator — src/tasks/orchestrator.ts]
            checking_availability (query Steve's Google Calendar → candidateWindows)
            → call cap checked (before the calendar lookup, then again under a per-contact lock right
