@@ -8,7 +8,7 @@ import { logger } from '../lib/logger.js';
 import { buildOutcomeSummary, withDisclosureNote } from '../notifications/channel.js';
 import type { DisclosureResult } from '../session/disclosure.js';
 import { createNotificationChannel } from '../notifications/owner.js';
-import { sendTaskWebhook } from '../notifications/webhook.js';
+import { buildWebhookText, sendTaskWebhook } from '../notifications/webhook.js';
 import { pressDigitsTool } from '../telephony/dtmf.js';
 import type { TelephonyProvider } from '../telephony/providers/types.js';
 import { defineTransferTool } from '../telephony/transfer.js';
@@ -46,7 +46,7 @@ export async function notifyTaskOutcome(taskId: string, disclosure?: DisclosureR
       status: current.status,
       outcome: current.outcome,
       contact: { id: contact.id, name: contact.displayName },
-      text: summary,
+      text: buildWebhookText(contact, current.outcome, disclosure),
       finishedAt: current.updatedAt.toISOString(),
     }),
   ]);
