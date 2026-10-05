@@ -77,6 +77,26 @@ describe('mcp server: Streamable HTTP at /mcp', () => {
     ]);
   });
 
+  it('marks exactly the read tools read-only, and the call tools as reaching the outside world', async () => {
+    // Without annotations, OpenClaw asks for approval before every Banjo
+    // call, reads included (found testing it against Banjo, 2026-10-05).
+    const client = await connect(buildApp());
+    const { tools } = await client.listTools();
+    const byName = Object.fromEntries(tools.map((t) => [t.name, t.annotations ?? {}]));
+
+    expect(tools.filter((t) => t.annotations?.readOnlyHint).map((t) => t.name).sort()).toEqual([
+      'find_contact',
+      'get_call_transcript',
+      'get_task_status',
+      'list_contacts',
+      'list_recent_tasks',
+    ]);
+    expect(tools.filter((t) => t.annotations?.openWorldHint).map((t) => t.name).sort()).toEqual(['place_call', 'stop_call']);
+    expect(byName.stop_call).toMatchObject({ readOnlyHint: false, destructiveHint: true });
+    expect(byName.place_call).toMatchObject({ readOnlyHint: false, idempotentHint: false });
+    for (const tool of tools) expect(tool.annotations?.title, tool.name).toBeTruthy();
+  });
+
   it('carries a tool call there and back', async () => {
     const client = await connect(buildApp());
     const result = await client.callTool({ name: 'list_recent_tasks', arguments: {} });

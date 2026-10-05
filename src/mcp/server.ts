@@ -74,6 +74,16 @@ function adapt<TInput>(handler: (input: TInput) => Promise<unknown>) {
 }
 
 /**
+ * MCP tool annotations: hints a client uses to decide which calls need the
+ * owner's approval. Without them OpenClaw asks before every Banjo call,
+ * reads included (found testing it against Banjo, 2026-10-05). Hints only:
+ * a client may ignore them, so they never replace Banjo's own guards (the
+ * per-number call cap, cancel_task's not-yet-dialed check).
+ */
+const READS = { readOnlyHint: true, openWorldHint: false } as const;
+const RECORDS = { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false } as const;
+
+/**
  * Builds the MCP server and registers all 11 tools. Deliberately separate
  * from the HTTP/SSE wiring below so it can be constructed and exercised
  * (e.g. via an in-memory transport) without spinning up Hono.
@@ -99,6 +109,7 @@ export function createMcpServer(): McpServer {
       'minutes (or at scheduledFor, if given, to call later instead of now). Poll get_task_status with the ' +
       'returned taskId to learn the outcome.',
     placeCallInputSchema.shape,
+    { title: 'Place a phone call', readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
     adapt(placeCallHandler),
   );
 
@@ -107,6 +118,7 @@ export function createMcpServer(): McpServer {
     'Check the current status and (if finished) outcome of a previously started task, whether it was ' +
       'a phone call or a recorded online booking.',
     getTaskStatusInputSchema.shape,
+    { title: 'Get task status', ...READS },
     adapt(getTaskStatusHandler),
   );
 
@@ -116,6 +128,7 @@ export function createMcpServer(): McpServer {
       'party actually said. Only available if this install saves transcripts (PERSIST_TRANSCRIPTS); the result ' +
       'says so if not. Lines marked suspect may not be what was said.',
     getCallTranscriptInputSchema.shape,
+    { title: 'Get call transcript', ...READS },
     adapt(getCallTranscriptHandler),
   );
 
@@ -124,6 +137,7 @@ export function createMcpServer(): McpServer {
     "Call off a phone call that hasn't been placed yet — typically one scheduled for later with place_call's " +
       'scheduledFor. A call already in progress or finished is not affected; the result says whether it was cancelled.',
     cancelTaskInputSchema.shape,
+    { title: 'Cancel a scheduled call', readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: false },
     adapt(cancelTaskHandler),
   );
 
@@ -133,6 +147,7 @@ export function createMcpServer(): McpServer {
       'call that is going wrong or was placed in error. The task is recorded as failed with the reason given, ' +
       'and the usual outcome notification is sent.',
     stopCallInputSchema.shape,
+    { title: 'Hang up a call in progress', readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: true },
     adapt(stopCallHandler),
   );
 
@@ -141,6 +156,7 @@ export function createMcpServer(): McpServer {
     'Fuzzy-search saved contacts by name or notes text. Call this before place_call to resolve a ' +
       'contactId, or to check whether a contact already exists before add_contact.',
     findContactInputSchema.shape,
+    { title: 'Find a contact', ...READS },
     adapt(findContactHandler),
   );
 
@@ -148,6 +164,7 @@ export function createMcpServer(): McpServer {
     'list_contacts',
     'List saved contacts, optionally filtered by category.',
     listContactsInputSchema.shape,
+    { title: 'List contacts', ...READS },
     adapt(listContactsHandler),
   );
 
@@ -155,6 +172,7 @@ export function createMcpServer(): McpServer {
     'add_contact',
     'Save a new contact (business or person) for future calls/bookings.',
     addContactInputSchema.shape,
+    { title: 'Add a contact', ...RECORDS },
     adapt(addContactHandler),
   );
 
@@ -163,6 +181,7 @@ export function createMcpServer(): McpServer {
     "Update an existing contact — e.g. record the assistant's owner's stated preferred booking channel so future " +
       'tasks for this contact skip asking again, or update notes/booking URL.',
     updateContactInputSchema.shape,
+    { title: 'Update a contact', readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: false },
     adapt(updateContactHandler),
   );
 
@@ -172,6 +191,7 @@ export function createMcpServer(): McpServer {
       'booking the skill completed itself via browser automation), so it appears in the same task ' +
       'history as phone-call tasks.',
     recordTaskOutcomeInputSchema.shape,
+    { title: 'Record an online booking', ...RECORDS },
     adapt(recordTaskOutcomeHandler),
   );
 
@@ -179,6 +199,7 @@ export function createMcpServer(): McpServer {
     'list_recent_tasks',
     'List the most recently updated tasks (phone calls and online bookings), most recent first.',
     listRecentTasksInputSchema.shape,
+    { title: 'List recent tasks', ...READS },
     adapt(listRecentTasksHandler),
   );
 
