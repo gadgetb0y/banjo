@@ -5,11 +5,11 @@
  * exact same placeCallHandler() the place_call MCP tool wraps, then polls
  * task status and prints it as the call progresses.
  *
- * Deliberately bypasses the MCP HTTP/SSE transport (mcp/server.ts) so this
+ * Deliberately bypasses the MCP transport (mcp/server.ts) so this
  * script's correctness doesn't depend on that layer — it calls the
  * underlying handler function directly. To test the MCP transport itself,
  * point a real MCP client (e.g. Claude Code) at the running server's
- * /mcp/sse endpoint instead.
+ * /mcp endpoint instead.
  *
  * This script STARTS THE SERVER ITSELF (same startServer()/startOrchestrationPoller()
  * as src/index.ts) in-process, because TwilioProvider keeps its per-call

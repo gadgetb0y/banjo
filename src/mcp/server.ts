@@ -1,9 +1,11 @@
 import { timingSafeEqual } from 'node:crypto';
 import type { IncomingMessage, ServerResponse } from 'node:http';
+import { createRequire } from 'node:module';
 import { RESPONSE_ALREADY_SENT } from '@hono/node-server/utils/response';
 import type { Context, Hono } from 'hono';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { SSEServerTransport } from '@modelcontextprotocol/sdk/server/sse.js';
+import { WebStandardStreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js';
 import { config } from '../config/index.js';
 import { logger } from '../lib/logger.js';
 
@@ -19,8 +21,13 @@ import { updateContactInputSchema, updateContactHandler } from './tools/updateCo
 import { recordTaskOutcomeInputSchema, recordTaskOutcomeHandler } from './tools/recordTaskOutcome.js';
 import { listRecentTasksInputSchema, listRecentTasksHandler } from './tools/listRecentTasks.js';
 
+const MCP_PATH = '/mcp';
 const MCP_SSE_PATH = '/mcp/sse';
 const MCP_MESSAGES_PATH = '/mcp/messages';
+
+// Two levels up from both src/mcp/ (tsx) and dist/mcp/ (built, and in the
+// image, which copies package.json to /app beside dist/).
+const { version: PACKAGE_VERSION } = createRequire(import.meta.url)('../../package.json') as { version: string };
 
 /**
  * Uniform MCP tool result shape.
@@ -67,7 +74,7 @@ function adapt<TInput>(handler: (input: TInput) => Promise<unknown>) {
 }
 
 /**
- * Builds the MCP server and registers all 9 tools. Deliberately separate
+ * Builds the MCP server and registers all 11 tools. Deliberately separate
  * from the HTTP/SSE wiring below so it can be constructed and exercised
  * (e.g. via an in-memory transport) without spinning up Hono.
  *
@@ -81,8 +88,8 @@ function adapt<TInput>(handler: (input: TInput) => Promise<unknown>) {
  */
 export function createMcpServer(): McpServer {
   const server = new McpServer({
-    name: 'ea-executive-assistant',
-    version: '0.1.0',
+    name: 'banjo',
+    version: PACKAGE_VERSION,
   });
 
   server.tool(
@@ -209,7 +216,19 @@ function getRawNodeReqRes(c: Context): { req: IncomingMessage; res: ServerRespon
 }
 
 /**
- * Registers the MCP HTTP/SSE routes on the given Hono app. This runs as a
+ * Registers the MCP routes on the given Hono app.
+ *
+ * `/mcp` is Streamable HTTP, the transport current MCP clients and the MCP
+ * Registry expect (docs/ROADMAP.md, 4.1). It runs stateless: each request
+ * gets its own McpServer and transport, and nothing about a client outlives
+ * the request. Every tool here is plain request/response, so there is nothing
+ * a session would hold; and with no session, a restart (every deploy) no
+ * longer disconnects connected clients, which it did over SSE.
+ *
+ * `/mcp/sse` + `/mcp/messages` below are the older HTTP+SSE transport, which
+ * the MCP spec has deprecated. Kept so existing client configs keep working.
+ *
+ * The rest of this comment describes the SSE routes. This runs as a
  * persistent, internet-reachable AWS-deployed service (not spawned locally
  * via stdio), so we expose MCP over remote HTTP/SSE per the SDK's
  * SSEServerTransport: a long-lived GET stream per client session, with
@@ -236,6 +255,26 @@ export function registerMcpRoutes(app: Hono): void {
   // The per-session `transports` map below was always built for many clients;
   // the server just has to match it.
   const transports = new Map<string, SSEServerTransport>();
+
+  app.on(['GET', 'POST', 'DELETE'], MCP_PATH, async (c) => {
+    if (!requireAuth(c)) {
+      return c.text('Unauthorized', 401);
+    }
+
+    const server = createMcpServer();
+    const transport = new WebStandardStreamableHTTPServerTransport({
+      sessionIdGenerator: undefined,
+      enableJsonResponse: true,
+    });
+    await server.connect(transport);
+    try {
+      return await transport.handleRequest(c.req.raw);
+    } finally {
+      // enableJsonResponse: the Response is complete once handleRequest
+      // resolves, so nothing is left streaming when the server closes.
+      void server.close().catch((err) => logger.warn({ err }, 'MCP request did not close cleanly'));
+    }
+  });
 
   app.get(MCP_SSE_PATH, async (c) => {
     if (!requireAuth(c)) {
