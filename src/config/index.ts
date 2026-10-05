@@ -194,6 +194,26 @@ const envSchema = z
     NOTIFY_TO_PHONE_NUMBER: e164,
     NOTIFY_FROM_PHONE_NUMBER: e164,
 
+    // Optional: POSTed a signed JSON event when a call finishes, so an agent
+    // that placed it (OpenClaw, Hermes Agent, n8n, ...) hears back instead of
+    // polling get_task_status (docs/ROADMAP.md, 4.4). Signed with
+    // TASK_WEBHOOK_SECRET the way Hermes Agent checks generic webhooks;
+    // TASK_WEBHOOK_TOKEN, if set, is also sent as a bearer token, for
+    // receivers such as OpenClaw's hooks that authenticate that way. https
+    // only (except to localhost): the body carries the call's outcome.
+    TASK_WEBHOOK_URL: optionalSetting(
+      z
+        .string()
+        .url()
+        .refine((v) => {
+          const { protocol, hostname } = new URL(v);
+          return protocol === 'https:' || (protocol === 'http:' && LOOPBACK_HOSTS.has(hostname));
+        }, 'TASK_WEBHOOK_URL must use https (plain http is allowed only to localhost)'),
+    ),
+    // Same 32-char floor as MCP_API_KEY: it's what lets the receiver trust the event.
+    TASK_WEBHOOK_SECRET: optionalSetting(z.string().min(32, 'TASK_WEBHOOK_SECRET must be at least 32 characters')),
+    TASK_WEBHOOK_TOKEN: optionalSetting(z.string()),
+
     // 32-char floor (not just non-empty): the MCP endpoint is internet-reachable,
     // so a short key is brute-forceable. RUNBOOKS.md recommends `openssl rand -hex 32`.
     MCP_API_KEY: z
@@ -348,6 +368,10 @@ const envSchema = z
   .refine((v) => v.NOTIFICATION_CHANNEL !== 'pushover' || !!(v.PUSHOVER_APP_TOKEN && v.PUSHOVER_USER_KEY), {
     message: 'PUSHOVER_APP_TOKEN and PUSHOVER_USER_KEY are required when NOTIFICATION_CHANNEL=pushover',
     path: ['PUSHOVER_APP_TOKEN'],
+  })
+  .refine((v) => !v.TASK_WEBHOOK_URL || !!v.TASK_WEBHOOK_SECRET, {
+    message: 'TASK_WEBHOOK_SECRET is required when TASK_WEBHOOK_URL is set',
+    path: ['TASK_WEBHOOK_SECRET'],
   })
   .refine((v) => !v.TRANSFER_ENABLED || !!v.TRANSFER_TO_PHONE_NUMBER, {
     message: 'TRANSFER_TO_PHONE_NUMBER is required when TRANSFER_ENABLED=true',
