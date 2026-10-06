@@ -1,0 +1,15 @@
+{
+  "name": "banjo",
+  "description": "Banjo: a self-hosted AI assistant that places real phone calls for you.",
+  "owner": {
+    "name": "Steve Hatch",
+    "url": "https://github.com/shatch"
+  },
+  "plugins": [
+    {
+      "name": "banjo",
+      "source": "./",
+      "description": "Connects Claude Code to your self-hosted Banjo, which places real phone calls for you, and adds the schedule-appointment skill."
+    }
+  ]
+}

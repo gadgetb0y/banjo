@@ -1,0 +1,34 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-plugin-manifest.json",
+  "name": "banjo",
+  "displayName": "Banjo",
+  "version": "0.1.4",
+  "description": "Connects Claude Code to your self-hosted Banjo, which places real phone calls for you, and adds the schedule-appointment skill.",
+  "author": { "name": "Steve Hatch", "url": "https://github.com/shatch" },
+  "homepage": "https://github.com/shatch/banjo",
+  "repository": "https://github.com/shatch/banjo",
+  "license": "MIT",
+  "keywords": ["phone", "calls", "appointments", "voice", "mcp", "self-hosted"],
+  "userConfig": {
+    "banjo_url": {
+      "type": "string",
+      "title": "Banjo URL",
+      "description": "Your Banjo's public base URL, without /mcp, e.g. https://banjo.example.com",
+      "required": true
+    },
+    "mcp_api_key": {
+      "type": "string",
+      "title": "MCP API key",
+      "description": "The MCP_API_KEY from your Banjo's .env",
+      "required": true,
+      "sensitive": true
+    }
+  },
+  "mcpServers": {
+    "banjo": {
+      "type": "http",
+      "url": "${user_config.banjo_url}/mcp",
+      "headers": { "Authorization": "Bearer ${user_config.mcp_api_key}" }
+    }
+  }
+}
