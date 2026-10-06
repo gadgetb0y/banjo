@@ -236,15 +236,19 @@ contacts. It's safe to put in an agent's prompt. The free-text fields in `outcom
 person said on the call, so anyone who answers the phone can influence them. Show them to a
 person, or pass them to an agent as clearly marked data, never as instructions.
 
-### Plain http only to localhost
+### Plain http only to localhost or a Docker service name
 
-`TASK_WEBHOOK_URL` must be `https`, except to `localhost` / `127.0.0.1` / `[::1]`, because the
-body carries the call's outcome. An agent on the same machine can use plain `http` on localhost.
-Anything else needs `https`, for example through your reverse proxy or a tunnel.
+`TASK_WEBHOOK_URL` must be `https`, because the body carries the call's outcome. There are two
+exceptions:
 
-That includes another container on the same Docker network: `http://hermes:8644/...` is
-refused. To run an agent next to Banjo in Docker over plain `http`, give the agent Banjo's
-network namespace, so each can reach the other on `127.0.0.1`:
+- `localhost` / `127.0.0.1` / `[::1]`, for an agent on the same machine.
+- A single-label hostname, such as a Docker Compose service name, for an agent in another
+  container on the same Docker network.
+
+Anything else needs `https`, for example through your reverse proxy or a tunnel. That includes
+dotted hostnames and IP addresses other than loopback.
+
+To run an agent next to Banjo in Docker, point the webhook at the agent's service name:
 
 ```yaml
 services:
@@ -252,14 +256,16 @@ services:
     image: ghcr.io/shatch/banjo:latest
     # … Banjo's usual settings, plus:
     environment:
-      TASK_WEBHOOK_URL: http://127.0.0.1:8644/webhooks/banjo
+      TASK_WEBHOOK_URL: http://hermes:8644/webhooks/banjo
   hermes:
     image: nousresearch/hermes-agent:latest
     command: gateway run
-    network_mode: service:banjo   # Banjo is at 127.0.0.1:3000; Hermes listens on 127.0.0.1:8644
     volumes:
       - ./hermes-data:/opt/data
 ```
 
-In this layout the agent's MCP URL is `http://127.0.0.1:3000/mcp`. Any ports the agent publishes
-go on the `banjo` service, since that's whose network the agent is using.
+In this layout the agent's MCP URL is `http://banjo:3000/mcp`.
+
+The event is signed but not encrypted, so anything else on that Docker network can read the call's
+outcome. Keep the agent on a network that only it and Banjo share. Encrypting this hop is tracked in
+[#115](https://github.com/shatch/banjo/issues/115).
