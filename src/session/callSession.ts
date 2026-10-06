@@ -10,6 +10,7 @@ import { createAudioPlaybackTracker, type AudioPlaybackTracker } from './audioPl
 import { negotiateAudioFormats, resolveAudioPipeline, type AudioPipeline } from './audioPipeline.js';
 import type { CallContext } from './types.js';
 import { checkDisclosure, type DisclosureResult } from './disclosure.js';
+import { saidGoodbye } from './goodbye.js';
 import { classifyTranscript } from './transcriptQuality.js';
 
 export type CallSessionState = 'connecting' | 'active' | 'tool-pending' | 'ending' | 'ended' | 'error';
@@ -180,6 +181,11 @@ export class CallSession<TCtx = CallContext> {
   private transcriptSeq = 0;
   /** The first thing Banjo said — what the disclosure check (#8) judges. */
   private firstAssistantLine: string | undefined;
+  /** Who spoke the latest transcribed line, and Banjo's latest line — what the goodbye check (#102) judges. */
+  private lastSpeaker: 'user' | 'assistant' | undefined;
+  private lastAssistantLine = '';
+  /** A requiresGoodbye tool is refused at most once per call (#102). */
+  private goodbyeRefused = false;
   /**
    * idle → (notice in Banjo's final line) awaiting_turn_end → (turn_end)
    * scheduled → started. An interruption before turn_end drops back to idle:
@@ -375,6 +381,8 @@ export class CallSession<TCtx = CallContext> {
             if (openerPlayedAt !== undefined && Date.now() >= openerPlayedAt) this.cutOffVerbatimDelivery();
           }
           if (event.role === 'assistant' && this.firstAssistantLine === undefined) this.firstAssistantLine = event.text;
+          this.lastSpeaker = event.role;
+          if (event.role === 'assistant') this.lastAssistantLine = event.text;
           if (event.role === 'assistant' && RECORDING_NOTICE.test(event.text) && this.opts.recordCalls && this.recordingState === 'idle') {
             this.recordingState = 'awaiting_turn_end';
             this.recordingNoticeFraction = noticeFraction(event.text);
@@ -430,6 +438,13 @@ export class CallSession<TCtx = CallContext> {
         // call over a condition the provider itself flags as retryable tore
         // down a call that was otherwise fine — log and keep going instead.
         // A non-retryable error still ends the call exactly as before.
+        // Once the call is ending, an error can't change anything: it's
+        // usually the voice AI connection closing because the call ended
+        // first (#100).
+        if (this.isEnding()) {
+          logger.debug({ callId: this.opts.callId, err: event.error }, 'Voice AI error after the call ended — ignored');
+          break;
+        }
         if (event.error.retryable) {
           logger.warn({ callId: this.opts.callId, err: event.error }, 'Retryable Voice AI error — continuing the call rather than ending it');
           break;
@@ -629,6 +644,26 @@ export class CallSession<TCtx = CallContext> {
     if (tool.endsCall) this.callEndingToolCallId = toolCallId;
     try {
       if (tool.endsCall) await this.waitForTurnEnd(TURN_END_WAIT_MS);
+      // #102: the model can end a call having only described wrapping up.
+      // Judged only when Banjo's line for this turn has been transcribed
+      // (openai-live finalizes transcripts late), and refused once per call,
+      // so a missed match can delay a hang-up but never block it.
+      if (tool.requiresGoodbye && !this.goodbyeRefused && this.lastSpeaker === 'assistant' && !saidGoodbye(this.lastAssistantLine)) {
+        this.goodbyeRefused = true;
+        logger.warn({ callId: this.opts.callId, toolCallId, name }, 'Refusing a call-ending tool once: no goodbye was said');
+        this.voiceAI.sendToolResult(
+          toolCallId,
+          {
+            ok: false,
+            error: 'no_goodbye',
+            message:
+              `You have not said goodbye yet. Say an actual goodbye to them now (e.g. "Thanks so much, take care. Bye!"), then call ${name} again in the same turn. ` +
+              'Do not describe ending the call, just say goodbye.',
+          },
+          true,
+        );
+        return;
+      }
       // A tool with its own handler budget (VoiceTool.handlerBudgetMs) gets it
       // from here — the same point toolBudgetMs counts it from.
       if (tool.handlerBudgetMs !== undefined && !tool.verbatimMessage) this.armToolPendingWatchdog(toolCallId, name, tool.handlerBudgetMs);
