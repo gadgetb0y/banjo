@@ -38,19 +38,27 @@ export async function notifyTaskOutcome(taskId: string, disclosure?: DisclosureR
   const contact = await getContact(current.contactId);
   if (!contact) return;
   const summary = withDisclosureNote(buildOutcomeSummary(contact, current.outcome), disclosure);
-  const [notified, webhook] = await Promise.allSettled([
-    createNotificationChannel().notify(current.id, current.outcome, summary),
-    sendTaskWebhook({
+  const outcome = current.outcome;
+  // Built inside the async function, not as an argument: an exception while
+  // building the event then rejects this promise, which allSettled holds,
+  // instead of throwing before allSettled runs and skipping the owner's
+  // notification with it (caught in CI, 2026-10-05).
+  const sendWebhook = async () => {
+    if (!config.TASK_WEBHOOK_URL) return;
+    await sendTaskWebhook({
       event: 'task.finished',
       taskId: current.id,
       status: current.status,
-      outcome: current.outcome,
+      outcome,
       contact: { id: contact.id, name: contact.displayName },
-      text: buildWebhookText(contact, current.outcome, disclosure),
+      text: buildWebhookText(contact, outcome, disclosure),
       finishedAt: current.updatedAt.toISOString(),
-    }),
+    });
+  };
+  const [notified, webhook] = await Promise.allSettled([
+    createNotificationChannel().notify(current.id, outcome, summary),
+    sendWebhook(),
   ]);
-  // sendTaskWebhook doesn't throw; this is for the day it does.
   if (webhook.status === 'rejected') logger.error({ err: webhook.reason, taskId }, 'Failed to send task webhook');
   if (notified.status === 'rejected') throw notified.reason;
 }

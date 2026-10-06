@@ -24,6 +24,10 @@ vi.mock('../../src/notifications/webhook.js', async (importOriginal) => ({
   sendTaskWebhook,
 }));
 
+// vitest.config.ts pins TASK_WEBHOOK_URL empty; turn it on for this file.
+process.env.TASK_WEBHOOK_URL = 'https://agent.example.test/hook';
+process.env.TASK_WEBHOOK_SECRET = 'x'.repeat(32);
+
 const { notifyTaskOutcome } = await import('../../src/tasks/callSessionAdapter.js');
 
 const finished = {
@@ -78,6 +82,29 @@ describe('notifyTaskOutcome', () => {
     await expect(notifyTaskOutcome('task-1')).resolves.toBeUndefined();
 
     expect(notify).toHaveBeenCalledTimes(1);
+  });
+
+  it("still notifies the owner when the webhook event can't even be built", async () => {
+    // CI, 2026-10-05: a task with no updatedAt made building the event throw
+    // before allSettled, which skipped the owner's notification as well.
+    getTask.mockResolvedValue({ ...finished, updatedAt: undefined } as unknown as Task);
+
+    await expect(notifyTaskOutcome('task-1')).resolves.toBeUndefined();
+
+    expect(notify).toHaveBeenCalledTimes(1);
+  });
+
+  it('builds and sends no webhook when TASK_WEBHOOK_URL is unset', async () => {
+    process.env.TASK_WEBHOOK_URL = '';
+    vi.resetModules();
+    const { notifyTaskOutcome: unconfigured } = await import('../../src/tasks/callSessionAdapter.js');
+    getTask.mockResolvedValue({ ...finished, updatedAt: undefined } as unknown as Task);
+
+    await expect(unconfigured('task-1')).resolves.toBeUndefined();
+
+    expect(notify).toHaveBeenCalledTimes(1);
+    expect(sendTaskWebhook).not.toHaveBeenCalled();
+    process.env.TASK_WEBHOOK_URL = 'https://agent.example.test/hook';
   });
 
   it('sends neither for a task that has not finished', async () => {
