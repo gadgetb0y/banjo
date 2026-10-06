@@ -7,13 +7,19 @@ description: >-
   booked?" Figures out whether to book online or place an actual phone call, and carries it out —
   either directly via browser automation, or by delegating to Banjo, which places real outbound
   calls with a Voice AI.
-license: MIT
+license: MIT-0
 compatibility: >-
   Requires a running, self-hosted Banjo instance (https://github.com/shatch/banjo) connected as an
   MCP server. Works in any agent that supports Agent Skills and remote MCP servers (e.g. Claude Code,
   OpenClaw, Hermes Agent). Browser automation and calendar tools are optional.
 metadata:
   homepage: https://github.com/shatch/banjo
+  openclaw:
+    emoji: "📞"
+    homepage: https://github.com/shatch/banjo
+    envVars:
+      - name: ASSISTANT_PRINCIPAL_NAME
+        required: false
 ---
 
 # Schedule Appointment

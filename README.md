@@ -320,6 +320,15 @@ whether to book online or by phone and driving an online booking with browser au
 supports Agent Skills and remote MCP servers. Install it, then connect the agent to Banjo's MCP
 server (see the Quickstart).
 
+The skill file is licensed MIT-0 (MIT without the attribution requirement), as ClawHub requires; the
+rest of the repo is MIT.
+
+**Any agent, with the [skills CLI](https://skills.sh):**
+
+```bash
+npx skills add shatch/banjo --skill schedule-appointment
+```
+
 **Claude Code.** Symlink rather than copy, so later edits to the skill take effect without a
 separate sync step:
 
@@ -327,9 +336,10 @@ separate sync step:
 ln -s "$(pwd)/skills/schedule-appointment" ~/.claude/skills/schedule-appointment
 ```
 
-**OpenClaw** (not yet tested with Banjo):
+**OpenClaw** (not yet tested with Banjo), from [ClawHub](https://clawhub.ai) or a local checkout:
 
 ```bash
+clawhub install @shatch/banjo-schedule-appointment
 openclaw skills install ./skills/schedule-appointment --global
 ```
 
