@@ -1,0 +1,42 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "io.github.shatch/banjo",
+  "title": "Banjo",
+  "description": "Self-hosted AI assistant that places real phone calls for you: bookings, reservations, errands.",
+  "repository": {
+    "url": "https://github.com/shatch/banjo",
+    "source": "github"
+  },
+  "websiteUrl": "https://github.com/shatch/banjo",
+  "version": "0.1.4",
+  "packages": [
+    {
+      "registryType": "oci",
+      "identifier": "ghcr.io/shatch/banjo:0.1.4",
+      "transport": {
+        "type": "streamable-http",
+        "url": "http://localhost:3000/mcp",
+        "headers": [
+          {
+            "name": "Authorization",
+            "description": "Bearer token: \"Bearer \" followed by the MCP_API_KEY you gave the server.",
+            "isRequired": true,
+            "isSecret": true
+          }
+        ]
+      },
+      "environmentVariables": [
+        { "name": "DATABASE_URL", "description": "Postgres connection URL. Migrations run on boot.", "isRequired": true, "isSecret": true },
+        { "name": "MCP_API_KEY", "description": "Bearer token MCP clients must send (at least 32 characters, e.g. openssl rand -hex 32).", "isRequired": true, "isSecret": true },
+        { "name": "ASSISTANT_PRINCIPAL_NAME", "description": "The name of the person Banjo calls on behalf of.", "isRequired": true },
+        { "name": "PUBLIC_HOSTNAME", "description": "Public hostname Twilio reaches this server on (no scheme), e.g. a tunnel or reverse proxy.", "isRequired": true },
+        { "name": "VOICE_AI_PROVIDER", "description": "Voice AI vendor. openai is the one carrying live traffic.", "isRequired": true, "default": "openai", "choices": ["openai", "openai-live", "gemini", "elevenlabs"] },
+        { "name": "OPENAI_API_KEY", "description": "OpenAI API key, for VOICE_AI_PROVIDER=openai or openai-live.", "isRequired": false, "isSecret": true },
+        { "name": "TWILIO_ACCOUNT_SID", "description": "Twilio account SID.", "isRequired": true },
+        { "name": "TWILIO_AUTH_TOKEN", "description": "Twilio auth token.", "isRequired": true, "isSecret": true },
+        { "name": "TWILIO_PHONE_NUMBER", "description": "The Twilio number Banjo calls from, in E.164 (+15551234567).", "isRequired": true },
+        { "name": "NOTIFICATION_CHANNEL", "description": "How Banjo tells you a call's outcome. twilio_sms also needs NOTIFY_TO_PHONE_NUMBER and NOTIFY_FROM_PHONE_NUMBER; pushover needs PUSHOVER_APP_TOKEN and PUSHOVER_USER_KEY.", "isRequired": false, "default": "twilio_sms", "choices": ["twilio_sms", "pushover", "none"] }
+      ]
+    }
+  ]
+}

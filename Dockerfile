@@ -11,6 +11,9 @@ RUN npm run build
 
 # ---- runtime stage: production deps only ----
 FROM node:22-alpine AS runtime
+# Proves to the MCP Registry that this image is the server server.json names
+# (io.github.shatch/banjo). Must match server.json's `name` exactly.
+LABEL io.modelcontextprotocol.server.name="io.github.shatch/banjo"
 ENV NODE_ENV=production
 WORKDIR /app
 

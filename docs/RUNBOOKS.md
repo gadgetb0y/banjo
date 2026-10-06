@@ -329,3 +329,31 @@ cd ~/banjo && git pull && docker compose pull && docker compose up -d
 ```
 
 Pin a release with `BANJO_VERSION` in `.env` if you don't want `latest`.
+
+## Cutting a release
+
+A release is a `vX.Y.Z` tag on `main`. The tag builds and publishes the multi-arch image
+(`.github/workflows/publish-image.yml`). The MCP Registry listing and the Claude Code plugin
+then point at that version.
+
+1. **Bump the version in three files**, in one commit: `package.json` (with
+   `npm version X.Y.Z --no-git-tag-version`, so `package-lock.json` follows), `server.json`
+   (`version` and the image tag in `packages[0].identifier`), and `.claude-plugin/plugin.json`.
+   `tests/releaseManifests.test.ts` fails if they disagree, so CI catches a missed one.
+2. **Tag and push**: `git tag vX.Y.Z && git push origin vX.Y.Z`. Wait for the publish workflow,
+   then check that `ghcr.io/shatch/banjo:X.Y.Z` exists and that its
+   `io.modelcontextprotocol.server.name` label reads `io.github.shatch/banjo`:
+   ```bash
+   docker buildx imagetools inspect ghcr.io/shatch/banjo:X.Y.Z --format '{{json .Image}}' | grep modelcontextprotocol
+   ```
+3. **Publish the GitHub Release** for the tag, with notes.
+4. **Update the MCP Registry listing** from the repo root. The image must already exist: the
+   registry checks its label against `server.json`'s `name`.
+   ```bash
+   brew install mcp-publisher     # once
+   mcp-publisher login github     # authenticates as shatch, which owns io.github.shatch/*
+   mcp-publisher publish
+   ```
+5. **The plugin needs no extra step.** Users who added the marketplace
+   (`/plugin marketplace add shatch/banjo`) get the new `version` from `main` the next time they
+   update.
