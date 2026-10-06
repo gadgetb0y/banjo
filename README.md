@@ -308,20 +308,36 @@ facts to answer questions, and only shares one when it matters to the call.
 - **Outbound only, for now.** The inbound booking line answers strangers, so it doesn't get your personal
   notes.
 
-## Companion Claude Code skill
+## Companion skill
 
-Banjo only handles the phone-calling half of "get this errand done." The other half — deciding
-whether to book online or by phone, and driving the online booking flow via browser automation —
-is a Claude Code skill that ships alongside this repo at [`skills/schedule-appointment/`](skills/schedule-appointment/SKILL.md).
-Install it by symlinking (not copying) into your Claude Code skills directory, so future edits to
-the skill stay live without a separate sync step:
+Banjo only handles the phone-calling half of "get this errand done." The other half, deciding
+whether to book online or by phone and driving an online booking with browser automation, is an
+[Agent Skill](https://agentskills.io) that ships with this repo at
+[`skills/schedule-appointment/`](skills/schedule-appointment/SKILL.md). It works in any agent that
+supports Agent Skills and remote MCP servers. Install it, then connect the agent to Banjo's MCP
+server (see the Quickstart).
+
+**Claude Code.** Symlink rather than copy, so later edits to the skill take effect without a
+separate sync step:
 
 ```bash
 ln -s "$(pwd)/skills/schedule-appointment" ~/.claude/skills/schedule-appointment
 ```
 
+**OpenClaw** (not yet tested with Banjo):
+
+```bash
+openclaw skills install ./skills/schedule-appointment --global
+```
+
+**Hermes Agent** (not yet tested with Banjo):
+
+```bash
+hermes skills install shatch/banjo/skills/schedule-appointment
+```
+
 The skill reads `$ASSISTANT_PRINCIPAL_NAME` for how to address you, matching the same env var
-Banjo's backend uses — set it once in your shell/`.env` and both halves stay consistent.
+Banjo's backend uses. Set it once in your shell/`.env` and both halves stay consistent.
 
 ## Stack
 
@@ -364,7 +380,7 @@ src/
   session/       per-call state machine wiring telephony <-> voice AI <-> tools
   notifications/ outcome notifications (SMS by default, or Pushover)
 skills/
-  schedule-appointment/  companion Claude Code skill — decides online vs. phone, drives online
+  schedule-appointment/  companion Agent Skill — decides online vs. phone, drives online
                           booking via browser automation, calls into src/mcp/ for the phone path
 ```
 
