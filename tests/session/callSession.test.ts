@@ -31,6 +31,7 @@ vi.mock('../../src/voice/factory.js', () => ({
 }));
 
 const { CallSession } = await import('../../src/session/callSession.js');
+const { logger } = await import('../../src/lib/logger.js');
 
 function makeFakeTelephony() {
   const emitter = new EventEmitter();
@@ -2035,5 +2036,120 @@ describe('CallSession: call ends while the voice AI is still connecting (#79)', 
     );
     expect(fakeVoiceAI.disconnect.mock.calls.length).toBe(disconnectsBeforeConnect + 1);
     expect(options.onFailure).not.toHaveBeenCalled();
+  });
+
+  it('ignores Voice AI errors that arrive after the call has ended (#100)', async () => {
+    // Closing a socket that never opened makes the provider report an error
+    // after end() has run. The call is over, so it is neither a retryable
+    // hiccup to warn about nor a failure to record.
+    voiceAIEmitter.removeAllListeners('event');
+    const warn = vi.spyOn(logger, 'warn');
+    const telephony = makeFakeTelephony();
+    const options = makeFakeCallSessionOptions(telephony.provider);
+    const session = new CallSession(options);
+    await session.start();
+
+    telephony.emit({ callId: callAttempt.id, type: 'ended', reason: 'The call was not answered.' });
+    await vi.waitFor(() => expect(options.notifyIfTerminal).toHaveBeenCalled());
+    warn.mockClear();
+
+    voiceAIEmitter.emit('event', {
+      type: 'error',
+      error: new VoiceAIError('WebSocket was closed before the connection was established', true),
+    } satisfies VoiceAIEvent);
+    voiceAIEmitter.emit('event', { type: 'error', error: new VoiceAIError('late fatal error', false) } satisfies VoiceAIEvent);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(warn).not.toHaveBeenCalled();
+    expect(options.onFailure).not.toHaveBeenCalled();
+    expect(options.onStatusChange).not.toHaveBeenCalledWith(expect.objectContaining({ kind: 'failed' }));
+    warn.mockRestore();
+  });
+});
+
+describe('CallSession: a call-ending tool needs a spoken goodbye first (#102)', () => {
+  // Live call (2026-10-04): the callee answered "Mhm" to "anything else?", and
+  // the model said "Okay, sounds like we're about ready to close this out
+  // together." and called end_conversation_call, so the call ended with no
+  // goodbye despite the prompt rule.
+  beforeEach(() => {
+    voiceAIEmitter.removeAllListeners('event');
+  });
+
+  const say = (role: 'user' | 'assistant', text: string) =>
+    voiceAIEmitter.emit('event', { type: 'transcript', role, text, isFinal: true } satisfies VoiceAIEvent);
+
+  async function startWithEndTool(opts: { requiresGoodbye?: boolean } = { requiresGoodbye: true }) {
+    const telephony = makeFakeTelephony();
+    const options = makeFakeCallSessionOptions(telephony.provider);
+    const handler = vi.fn(async () => ({ ok: true }));
+    options.tools = [
+      { name: 'end_conversation_call', description: 'test', schema: z.object({}), handler, endsCall: true, ...opts },
+    ];
+    const session = new CallSession(options);
+    await session.start();
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const callTool = (id: string) => (session as any).handleToolCall(id, 'end_conversation_call', {}) as Promise<void>;
+    return { handler, callTool };
+  }
+
+  async function endTurnAndSettle(pending: Promise<void>) {
+    voiceAIEmitter.emit('event', { type: 'turn_end' } satisfies VoiceAIEvent);
+    await pending;
+  }
+
+  it('refuses once when the last thing Banjo said is not a goodbye, then allows the retry', async () => {
+    const { handler, callTool } = await startWithEndTool();
+    say('assistant', 'Anything else you want to add before we wrap up?');
+    say('user', 'Mhm.');
+    say('assistant', "Okay, sounds like we're about ready to close this out together.");
+
+    await endTurnAndSettle(callTool('call-1'));
+    expect(handler).not.toHaveBeenCalled();
+    expect(fakeVoiceAI.sendToolResult).toHaveBeenCalledWith('call-1', expect.objectContaining({ ok: false, error: 'no_goodbye' }), true);
+
+    say('assistant', 'Thanks so much, take care. Bye!');
+    await endTurnAndSettle(callTool('call-2'));
+    expect(handler).toHaveBeenCalledTimes(1);
+  });
+
+  it('refuses at most once per call, even if the retry still has no goodbye', async () => {
+    const { handler, callTool } = await startWithEndTool();
+    say('user', 'Mhm.');
+    say('assistant', "Okay, let's close this out.");
+    await endTurnAndSettle(callTool('call-1'));
+    say('assistant', 'Alright, wrapping up.');
+    await endTurnAndSettle(callTool('call-2'));
+
+    expect(handler).toHaveBeenCalledTimes(1);
+  });
+
+  it('lets the tool run when the last line is a goodbye', async () => {
+    const { handler, callTool } = await startWithEndTool();
+    say('user', 'Mhm.');
+    say('assistant', 'Okay, take care—bye!');
+    await endTurnAndSettle(callTool('call-1'));
+
+    expect(handler).toHaveBeenCalledTimes(1);
+  });
+
+  it("doesn't refuse when Banjo's line for this turn hasn't been transcribed yet", async () => {
+    // openai-live finalizes transcripts after a 1.2s idle, which can be after
+    // the tool call: the latest line is then still the other party's.
+    const { handler, callTool } = await startWithEndTool();
+    say('assistant', 'Anything else?');
+    say('user', 'No, that is all.');
+    await endTurnAndSettle(callTool('call-1'));
+
+    expect(handler).toHaveBeenCalledTimes(1);
+  });
+
+  it('never refuses a tool that does not require a goodbye', async () => {
+    const { handler, callTool } = await startWithEndTool({});
+    say('user', 'Press 1 for sales.');
+    say('assistant', 'I cannot get through this menu.');
+    await endTurnAndSettle(callTool('call-1'));
+
+    expect(handler).toHaveBeenCalledTimes(1);
   });
 });

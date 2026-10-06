@@ -47,7 +47,7 @@ Rotate on any of:
    For Claude Code sessions using `claude mcp add` (as this session did):
    ```bash
    claude mcp remove banjo
-   claude mcp add banjo "http://localhost:3000/mcp/sse" --transport sse \
+   claude mcp add banjo "http://localhost:3000/mcp" --transport http \
      -H "Authorization: Bearer <NEW_KEY>"
    ```
    (Adjust the URL if connecting over the ngrok `PUBLIC_HOSTNAME` instead of `localhost`, or once
@@ -279,11 +279,11 @@ The free ngrok plan allows one agent per domain, and two Banjo processes can't s
 
 ```bash
 claude mcp remove banjo -s local
-claude mcp add --transport sse -s local banjo https://YOUR-DOMAIN.ngrok-free.dev/mcp/sse \
+claude mcp add --transport http -s local banjo https://YOUR-DOMAIN.ngrok-free.dev/mcp \
   --header "Authorization: Bearer $MCP_API_KEY"
 ```
 
-Then run `/mcp` in any open Claude Code session. Every app restart drops the MCP session (`No transport found for sessionId`), and `/mcp` reconnects it.
+Then run `/mcp` in any open Claude Code session. `/mcp` is stateless, so app restarts don't disconnect it. A client still on the older `/mcp/sse` endpoint loses its session on every restart (`No transport found for sessionId`) and needs `/mcp` to reconnect.
 
 ### 4. Check it
 

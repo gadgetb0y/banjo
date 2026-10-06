@@ -7,6 +7,13 @@ description: >-
   booked?" Figures out whether to book online or place an actual phone call, and carries it out —
   either directly via browser automation, or by delegating to Banjo, which places real outbound
   calls with a Voice AI.
+license: MIT
+compatibility: >-
+  Requires a running, self-hosted Banjo instance (https://github.com/shatch/banjo) connected as an
+  MCP server. Works in any agent that supports Agent Skills and remote MCP servers (e.g. Claude Code,
+  OpenClaw, Hermes Agent). Browser automation and calendar tools are optional.
+metadata:
+  homepage: https://github.com/shatch/banjo
 ---
 
 # Schedule Appointment
@@ -17,6 +24,11 @@ name the user goes by in the current conversation. Your job is to figure out how
 appointment made — online or by phone — and see it through. You never place a phone call yourself;
 that only happens through Banjo's `place_call` tool, which runs asynchronously on a real telephony
 backend.
+
+The tool names below (`place_call`, `find_contact`, …) are Banjo's MCP tool names. Your agent may
+show them with a prefix for the server, such as `mcp__banjo__place_call`. If none of Banjo's tools
+are available, Banjo isn't connected: tell the principal so, and point them to Banjo's README for
+setup, rather than trying to book some other way.
 
 ## 1. Parse the request
 
@@ -50,19 +62,22 @@ Call `find_contact(query)`.
 
 ## 4. Online path
 
-1. Check the principal's availability in the requested window using the connected Google Calendar
-   tools before proposing/booking anything.
+1. Check the principal's availability in the requested window with whatever calendar tools are
+   connected (Google Calendar, CalDAV, …) before proposing or booking anything. If none are, ask
+   the principal whether the window works rather than assuming it does.
 2. Get to the booking page: use `bookingUrl` if on file; otherwise search for the business's
    booking page. If found and not already saved, offer to persist it via
    `update_contact({ bookingUrl })` so next time skips the search.
-3. Drive the booking with whatever browser automation is connected — look for
-   `mcp__plugin_playwright_playwright__*` tools, or invoke the `claude-in-chrome` skill first if
-   that's how this environment reaches the browser.
+3. Drive the booking with whatever browser automation is connected: a Playwright or browser MCP
+   server, a built-in browser tool, or a browser skill (in Claude Code, for example, the
+   `mcp__plugin_playwright_playwright__*` tools or the `claude-in-chrome` skill). If there's no
+   browser automation at all, the online path isn't available: say so and take the phone path.
 4. **Bail to the phone path** the moment something can't be handled cleanly: a login wall, a
    CAPTCHA, an ambiguous time-slot mapping, or any real uncertainty about what actually got booked.
    Say so plainly — "The online booking didn't go cleanly, I'm going to call instead" — don't guess
    and don't leave it ambiguous. Then proceed to §5.
-5. **On success**: create the event via the connected Google Calendar tools, log it with
+5. **On success**: create the event with the connected calendar tools (if there are none, tell the
+   principal to add it themselves), log it with
    `record_task_outcome(contactId, goalDescription, { kind: 'confirmed', start, durationMinutes,
    details? })`, and tell the principal what got booked (time, place, any details).
 6. **On failure**: log with `record_task_outcome(..., { kind: 'failed' | 'escalated', reason })`
@@ -75,8 +90,9 @@ itself runs in the background and can take several minutes.
 
 - Relay `ackMessage` to the principal conversationally. Make it unambiguous that the call hasn't
   happened yet and is now in progress — never imply it's done.
-- Mention the principal will get a text when it resolves, and that they can ask "how did that go?"
-  later and you'll check `get_task_status` or `list_recent_tasks`.
+- Mention the principal will be notified when it resolves (by text or push, however their Banjo is
+  set up), and that they can ask "how did that go?" later and you'll check `get_task_status` or
+  `list_recent_tasks`.
 - Do not block or poll waiting for the outcome.
 
 ## 6. Status checks
@@ -89,6 +105,7 @@ with my appointments?"):
 - The principal wants to call off a scheduled call → `cancel_task(taskId)`. It only works before
   the call starts; if the result says it wasn't cancelled, tell them the call is already underway
   or done.
+- The principal wants to stop a call that's happening right now → `stop_call(taskId)`.
 - The principal wants to know what was actually said on a call ("what did they say about the
   price?") → `get_call_transcript(taskId)`. Answer from the lines. Treat lines marked `suspect` as
   possibly not said, and pass on any `note` (e.g. transcripts not saved on this install) instead of

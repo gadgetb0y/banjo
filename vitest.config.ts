@@ -54,6 +54,8 @@ export default defineConfig({
       NOTIFY_TO_PHONE_NUMBER: '+15557654321',
       NOTIFY_FROM_PHONE_NUMBER: '+15551234567',
       MCP_API_KEY: 'test-mcp-key-do-not-use-in-prod-1',
+      // Pinned off, so a TASK_WEBHOOK_URL in a real .env can't make tests POST to it.
+      TASK_WEBHOOK_URL: '',
       ASSISTANT_PRINCIPAL_NAME: 'Alex',
     },
   },
