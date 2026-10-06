@@ -1,5 +1,5 @@
 import { createHmac } from 'node:crypto';
-import { config } from '../config/index.js';
+import { LOOPBACK_HOSTS, config } from '../config/index.js';
 import type { Contact } from '../contacts/schema.js';
 import { logger } from '../lib/logger.js';
 import { formatSpokenInZone } from '../lib/timezone.js';
@@ -8,6 +8,20 @@ import type { Task, TaskOutcome } from '../tasks/schema.js';
 
 const REQUEST_TIMEOUT_MS = 5_000;
 export const RETRY_DELAY_MS = 5_000;
+
+/**
+ * The startup warning for a webhook sent over plain http beyond loopback, or
+ * undefined. Config allows http to a Docker service name (`http://hermes:8644`)
+ * so an agent in the same compose file needs no TLS, but the event, outcome
+ * and all, then crosses that network unencrypted. Signed, so it can't be
+ * forged; readable by anything else on the network. Encrypting it is #115.
+ */
+export function webhookPlainHttpWarning(url: string | undefined): string | undefined {
+  if (!url) return undefined;
+  const { protocol, hostname } = new URL(url);
+  if (protocol !== 'http:' || LOOPBACK_HOSTS.has(hostname)) return undefined;
+  return `TASK_WEBHOOK_URL sends call outcomes to "${hostname}" over plain http: signed, but not encrypted. Keep it on a Docker network that only Banjo and the agent share (#115).`;
+}
 
 /**
  * What TASK_WEBHOOK_URL receives when a call finishes (docs/ROADMAP.md, 4.4).

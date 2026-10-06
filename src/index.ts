@@ -7,6 +7,7 @@ import { runMigrations } from './db/migrate.js';
 import { startCardDavContactsSyncPoller } from './carddavContacts/sync.js';
 import { startGoogleContactsSyncPoller } from './googleContacts/sync.js';
 import { logger } from './lib/logger.js';
+import { webhookPlainHttpWarning } from './notifications/webhook.js';
 import { startServer } from './server.js';
 import { startOrchestrationPoller } from './tasks/orchestrator.js';
 import { loadOwnerProfile } from './tasks/ownerProfile.js';
@@ -25,6 +26,9 @@ if (!config.PUBLIC_HOSTNAME) {
     'PUBLIC_HOSTNAME is not set — Twilio webhooks and media streams will point at "undefined" and every call will fail. See README Quickstart.',
   );
 }
+
+const webhookWarning = webhookPlainHttpWarning(config.TASK_WEBHOOK_URL);
+if (webhookWarning) logger.warn(webhookWarning);
 
 // A wrong path or an oversized profile stops the deploy here, rather than
 // quietly dropping out of every call's prompt. Re-read per call after this, so

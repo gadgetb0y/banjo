@@ -267,5 +267,6 @@ services:
 In this layout the agent's MCP URL is `http://banjo:3000/mcp`.
 
 The event is signed but not encrypted, so anything else on that Docker network can read the call's
-outcome. Keep the agent on a network that only it and Banjo share. Encrypting this hop is tracked in
+outcome. Keep the agent on a network that only it and Banjo share. Banjo logs a warning at startup
+whenever the webhook uses plain `http` to anything but localhost. Encrypting this hop is tracked in
 [#115](https://github.com/shatch/banjo/issues/115).
