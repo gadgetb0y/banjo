@@ -1,7 +1,8 @@
 # Roadmap
 
-Three pieces of work, in dependency order. Each has a tracking issue; this file holds the
-reasoning and the seams, so the issues can stay short.
+Items 1–3 were the first three pieces of work, in dependency order; most of each has shipped.
+[Next](#next) is what comes after them. Each item has (or will get) a tracking issue; this file
+holds the reasoning and the seams, so the issues can stay short.
 
 Everything here is deliberately scoped to what Banjo already is. What it isn't — and won't become —
 is in [`CONTRIBUTING.md`](../CONTRIBUTING.md).
@@ -204,3 +205,106 @@ The good pattern is already in the codebase: the provider adapters log `textLeng
 Whether OpenAI Realtime's *audio* modality falls inside BAA scope is publicly unanswered. Get it in
 writing from OpenAI before Banjo makes any HIPAA claim, or goes anywhere near a medical booking use
 case as a supported path.
+
+---
+
+## Next
+
+**Why:** the gap now is reach, not capability. Banjo works, but almost nobody who would want it can
+find it, and almost nobody who finds it can try it. Meanwhile hosted calling services (ClawCall,
+Ring-a-Ding) have started filling the "give my agent a phone" slot in the OpenClaw and MCP
+ecosystems. They can't offer what Banjo can: self-hosted, your own number, your calendar and
+contacts, Postgres-checked bookings, and guardrails (call cap, AI disclosure) that make it safe to
+hand to an autonomous agent. Everything below either gets that in front of people or makes it
+easier to try. None of it changes what Banjo is (see `CONTRIBUTING.md`): no UI, no tenants,
+outbound first.
+
+Roughly in order. 4.1–4.4 are cheap and unblock each other; 4.5 should land before any launch.
+
+### 4.1 Streamable HTTP transport for the MCP server
+
+`src/mcp/server.ts` serves only the legacy HTTP+SSE transport (`/mcp/sse` + `/mcp/messages`),
+which the MCP spec has deprecated in favour of Streamable HTTP. Newer clients and the official MCP
+Registry expect Streamable HTTP, so this is the prerequisite for 4.2 and 4.3. Add a `/mcp` endpoint
+on `StreamableHTTPServerTransport` behind the same bearer-token middleware, and keep SSE for now
+so existing Claude Code configs don't break. Stateless mode is worth considering: it would also
+stop every app restart from dropping the client's MCP session.
+
+### 4.2 Agent-neutral skill, published to the skill registries
+
+`skills/schedule-appointment/SKILL.md` is already in the open SKILL.md format that ClawHub
+(OpenClaw), agentskills.io (Hermes Agent) and skills.sh index. What ties it to Claude Code is
+its step 3, which names `mcp__plugin_playwright_playwright__*` and `claude-in-chrome` for the
+online path. Rewrite those references by capability ("whatever browser and calendar tools are
+connected") so one file works in any agent, then publish it. Consider a second, smaller skill
+(`phone-errand`) for non-booking calls, once 4.7 makes them first-class.
+
+### 4.3 Directory listings and per-agent setup guides
+
+- List the MCP server where people search for one: the official MCP Registry (needs a
+  `server.json`), Glama, Smithery, and the Claude Code plugin marketplaces.
+- A `docs/AGENTS.md` (or README section) with a tested connection snippet for each client: Claude
+  Code, OpenClaw, Hermes Agent. Hermes and OpenClaw both sit behind messaging gateways (Telegram,
+  WhatsApp, …), which is the best demo Banjo has: text your agent "get me a haircut Thursday",
+  and a booking confirmation arrives on your phone.
+- A Claude Code plugin bundling the skill and the MCP server config, so it installs in one step.
+
+Each guide must say whether it was tested against a real install. Listing an untested client as
+supported is how a two-star repo gets a one-star review.
+
+### 4.4 Push task results to the caller
+
+Agents learn a call's outcome today by polling `get_task_status`. Claude Code with the skill can
+manage that, but an autonomous agent woken by a chat message has nothing to poll from. Add an
+opt-in outbound webhook (`TASK_WEBHOOK_URL`, HMAC-signed) fired on every terminal transition, from
+the same place `notifyIfTerminal` fires, so it can't disagree with the owner notification. Like
+notifications, a failed webhook must never throw into a call or a transition.
+
+### 4.5 A text-mode simulator
+
+`CONTRIBUTING.md` says it plainly: there is no offline simulator. Trying Banjo today takes Twilio,
+a voice-AI key, a public hostname and, for SMS, A2P registration. That's too much to ask of
+someone who just landed on the README. `npm run sim` should run the real system prompt and real
+tool handlers against a stub `TelephonyProvider` and a text-only model session, with you typing as
+the business. A first-time visitor could watch Banjo negotiate a booking in two minutes, and a
+contributor could exercise a prompt change without spending a call.
+
+Seams: the `TelephonyProvider` interface is already the mock boundary in tests. The open question
+is the voice side. A text-mode `VoiceAIProvider` (OpenAI Realtime supports text-only sessions)
+keeps the real event flow through `CallSession`. Tools should hit a throwaway database, never the
+dev `banjo` DB, and calendar writes should go to a dry-run `CalendarProvider`.
+
+### 4.6 Owner approval before dialing
+
+An autonomous agent can now place calls on a principal's behalf without a human in the loop. An
+opt-in `REQUIRE_CALL_APPROVAL` makes `place_call` create the task as pending approval and send the
+owner an accept/decline prompt (Pushover supports reply callbacks; a signed link works for any
+channel). Dialing starts only on accept, and the task expires to `cancelled` if nobody answers.
+Together with the per-number call cap and AI disclosure, this is the "safe to give an agent a
+phone" story that hosted services don't tell.
+
+### 4.7 Errands beyond booking
+
+- **Call and ask:** hours, stock, a quote, availability, with a structured answer back to the
+  agent. Mostly prompt and outcome-shape work; `end_conversation_call` already covers the ending.
+- **Cancel or reschedule** an appointment Banjo booked, keyed off the stored outcome so Postgres
+  stays the source of truth.
+- **Wait on hold:** get through the phone tree with `press_digits`, detect hold music or silence
+  without hanging up, and `transfer_to_owner` when a human answers. Needs a hold-aware silence
+  watchdog (today's would end the call) and an upper time limit. This is the feature people
+  would share.
+
+### 4.8 Easier self-hosting and more vendors
+
+- A Home Assistant add-on, Unraid/CasaOS templates, and a Railway or Fly template.
+- Notification channels people ask for: Telegram, ntfy, Discord, a generic webhook. All go
+  behind `createNotificationChannel()` / `sendOwnerMessage()`.
+- A second telephony provider (Telnyx or a generic SIP trunk). It's cheaper and avoids the 10DLC
+  wall, and it would show the `TelephonyProvider` seam working with more than one vendor.
+- Finish verifying the Gemini and ElevenLabs adapters (Open Risks in `docs/ARCHITECTURE.md`), and
+  add a Microsoft 365 `CalendarProvider`.
+
+### Then launch
+
+Once 4.1–4.5 are in: Show HN, r/selfhosted and r/LocalLLaMA, pitched as the self-hosted alternative
+to hosted calling APIs, led by the "Hear it" audio and the simulator.
