@@ -109,7 +109,8 @@ AI rather than waiting to be asked ([#8](https://github.com/shatch/banjo/issues/
   [Running Banjo on an always-on Linux host](docs/RUNBOOKS.md#running-banjo-on-an-always-on-linux-host).
 
 See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for the full design, [`docs/ROADMAP.md`](docs/ROADMAP.md)
-for what's coming next, [`docs/RUNBOOKS.md`](docs/RUNBOOKS.md) for operational procedures, and
+for what's coming next, [`docs/AGENT_SETUP.md`](docs/AGENT_SETUP.md) for connecting Claude Code, Hermes Agent or
+OpenClaw, [`docs/RUNBOOKS.md`](docs/RUNBOOKS.md) for operational procedures, and
 [`docs/COMPETITIVE_LANDSCAPE.md`](docs/COMPETITIVE_LANDSCAPE.md) for how it compares to other
 open-source projects in this space.
 
