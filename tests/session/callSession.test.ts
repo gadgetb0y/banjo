@@ -30,7 +30,7 @@ vi.mock('../../src/voice/factory.js', () => ({
   createVoiceAIProvider: () => fakeVoiceAI,
 }));
 
-const { CallSession } = await import('../../src/session/callSession.js');
+const { CallSession, openingLineCue } = await import('../../src/session/callSession.js');
 const { logger } = await import('../../src/lib/logger.js');
 
 function makeFakeTelephony() {
@@ -985,6 +985,54 @@ describe('CallSession: silence watchdog — the model going quiet after a user t
       await vi.advanceTimersByTimeAsync(7000); // SILENCE_WATCHDOG_MS
 
       expect(fakeVoiceAI.triggerResponse).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  // #118: on a v0.1.4 voicemail the model rightly stayed quiet through
+  // "Your call has been forwarded to voicemail.", the open-ended nudge made it
+  // say "One moment.", and the call opened without the AI disclosure.
+  it('cues the opening line if it has to nudge before Banjo has said anything', async () => {
+    vi.useFakeTimers();
+    try {
+      const telephony = makeFakeTelephony();
+      const opening = "Hi, I'm an AI assistant calling on behalf of Steve.";
+      const options = { ...makeFakeCallSessionOptions(telephony.provider), openingLine: opening };
+      const session = new CallSession(options);
+      await session.start();
+
+      voiceAIEmitter.emit('event', { type: 'transcript', role: 'user', text: 'Your call has been forwarded to voicemail.', isFinal: true } satisfies VoiceAIEvent);
+      await vi.advanceTimersByTimeAsync(7000); // SILENCE_WATCHDOG_MS
+
+      expect(fakeVoiceAI.triggerResponse).toHaveBeenCalledTimes(1);
+      expect(fakeVoiceAI.triggerResponse).toHaveBeenCalledWith(openingLineCue(opening));
+      expect(openingLineCue(opening)).toContain(JSON.stringify(opening));
+      // Not sayVerbatim: openai-live would hold turn_end for its delivery report.
+      expect(fakeVoiceAI.sayVerbatim).not.toHaveBeenCalled();
+      // It counts as the nudge: still nothing after another window gives up.
+      await vi.advanceTimersByTimeAsync(7000);
+      expect(fakeVoiceAI.triggerResponse).toHaveBeenCalledTimes(1);
+      expect(options.onStatusChange).toHaveBeenCalledWith(expect.objectContaining({ kind: 'failed', reason: 'assistant_silence_watchdog' }));
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('nudges with an open-ended trigger once Banjo has spoken, even with an openingLine', async () => {
+    vi.useFakeTimers();
+    try {
+      const telephony = makeFakeTelephony();
+      const session = new CallSession({ ...makeFakeCallSessionOptions(telephony.provider), openingLine: 'This is an AI.' });
+      await session.start();
+
+      voiceAIEmitter.emit('event', { type: 'transcript', role: 'assistant', text: "Hi, I'm an AI assistant.", isFinal: true } satisfies VoiceAIEvent);
+      voiceAIEmitter.emit('event', { type: 'turn_end' } satisfies VoiceAIEvent);
+      voiceAIEmitter.emit('event', { type: 'transcript', role: 'user', text: 'Okay.', isFinal: true } satisfies VoiceAIEvent);
+      await vi.advanceTimersByTimeAsync(7000); // SILENCE_WATCHDOG_MS
+
+      expect(fakeVoiceAI.triggerResponse).toHaveBeenCalledTimes(1);
+      expect(fakeVoiceAI.triggerResponse).toHaveBeenCalledWith();
     } finally {
       vi.useRealTimers();
     }

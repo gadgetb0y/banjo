@@ -200,7 +200,7 @@ export class ElevenLabsProvider implements VoiceAIProvider {
     log.debug('interrupt() called on ElevenLabsProvider — no confirmed client-initiated cancel message exists; relying on server-side VAD barge-in detection.');
   }
 
-  triggerResponse(): void {
+  triggerResponse(_cue?: string): void {
     // NEEDS VERIFICATION: elevenlabs is not the active provider
     // (VOICE_AI_PROVIDER=openai) — the greeting-first fix was only
     // verified against a live OpenAI call. Left as a stub consistent with

@@ -88,6 +88,26 @@ describe('OpenAIRealtimeProvider.triggerResponse: race with connect()', () => {
 
     expect(sentTypes(ws)).not.toContain('response.create');
   });
+
+  // #118: the silence nudge before Banjo's first words cues the disclosure.
+  it('sends a cue as response.instructions, and a bare response.create without one, open or queued', async () => {
+    const provider = new OpenAIRealtimeProvider();
+    const connectPromise = provider.connect(sessionConfig);
+    const ws = wsInstances[wsInstances.length - 1]!;
+    provider.triggerResponse('Say the opening line.');
+    ws.readyState = FakeWs.OPEN;
+    ws.emit('open');
+    await connectPromise;
+    provider.triggerResponse('Say it again.');
+    provider.triggerResponse();
+
+    const creates = ws.sent.map((s) => JSON.parse(s)).filter((m) => m.type === 'response.create');
+    expect(creates).toEqual([
+      { type: 'response.create', response: { instructions: 'Say the opening line.' } },
+      { type: 'response.create', response: { instructions: 'Say it again.' } },
+      { type: 'response.create' },
+    ]);
+  });
 });
 
 describe('OpenAIRealtimeProvider tool-call argument parsing', () => {
