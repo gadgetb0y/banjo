@@ -148,15 +148,20 @@ describe('config: env schema', () => {
     await expect(import('../src/config/index.js')).rejects.toThrow(/at least 32/);
   });
 
-  it('TASK_WEBHOOK_URL must be https, except to localhost', async () => {
+  it('TASK_WEBHOOK_URL must be https, except to localhost or a Docker service name', async () => {
     const secret = 'x'.repeat(32);
-    setEnv({ TASK_WEBHOOK_URL: 'http://agent.example.test/hook', TASK_WEBHOOK_SECRET: secret });
-    await expect(import('../src/config/index.js')).rejects.toThrow(/must use https/);
+    for (const refused of ['http://agent.example.test/hook', 'http://10.0.0.5:8644/hook', 'http://[fd00::1]:8644/hook']) {
+      vi.resetModules();
+      setEnv({ TASK_WEBHOOK_URL: refused, TASK_WEBHOOK_SECRET: secret });
+      await expect(import('../src/config/index.js')).rejects.toThrow(/must use https/);
+    }
 
-    vi.resetModules();
-    setEnv({ TASK_WEBHOOK_URL: 'http://127.0.0.1:9000/hook', TASK_WEBHOOK_SECRET: secret });
-    const { config } = await import('../src/config/index.js');
-    expect(config.TASK_WEBHOOK_URL).toBe('http://127.0.0.1:9000/hook');
+    for (const allowed of ['http://127.0.0.1:9000/hook', 'http://hermes:8644/webhooks/banjo']) {
+      vi.resetModules();
+      setEnv({ TASK_WEBHOOK_URL: allowed, TASK_WEBHOOK_SECRET: secret });
+      const { config } = await import('../src/config/index.js');
+      expect(config.TASK_WEBHOOK_URL).toBe(allowed);
+    }
   });
 
   it('defaults CALENDAR_PROVIDER to google, with no CalDAV vars required', async () => {

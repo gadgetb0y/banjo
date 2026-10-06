@@ -28,6 +28,10 @@ const e164 = optionalSetting(
  * e.g. a Radicale server for development.
  */
 const LOOPBACK_HOSTS = new Set(['localhost', '127.0.0.1', '[::1]']);
+// A dotless hostname is a Docker Compose service or container name; public DNS
+// never resolves one. Bracketed IPv6 literals are excluded (only [::1] is local).
+const isLocalWebhookHost = (hostname: string) =>
+  LOOPBACK_HOSTS.has(hostname) || (!hostname.includes('.') && !hostname.startsWith('['));
 const davUrl = (name: string) =>
   z
     .string()
@@ -200,15 +204,18 @@ const envSchema = z
     // TASK_WEBHOOK_SECRET the way Hermes Agent checks generic webhooks;
     // TASK_WEBHOOK_TOKEN, if set, is also sent as a bearer token, for
     // receivers such as OpenClaw's hooks that authenticate that way. https
-    // only (except to localhost): the body carries the call's outcome.
+    // only, since the body carries the call's outcome, except to localhost or
+    // a single-label host such as a Docker Compose service name (`hermes`),
+    // which never leaves the machine's own network. That exception sends the
+    // outcome unencrypted across the Docker network; see issue #115.
     TASK_WEBHOOK_URL: optionalSetting(
       z
         .string()
         .url()
         .refine((v) => {
           const { protocol, hostname } = new URL(v);
-          return protocol === 'https:' || (protocol === 'http:' && LOOPBACK_HOSTS.has(hostname));
-        }, 'TASK_WEBHOOK_URL must use https (plain http is allowed only to localhost)'),
+          return protocol === 'https:' || (protocol === 'http:' && isLocalWebhookHost(hostname));
+        }, 'TASK_WEBHOOK_URL must use https (plain http is allowed only to localhost or a Docker service name)'),
     ),
     // Same 32-char floor as MCP_API_KEY: it's what lets the receiver trust the event.
     TASK_WEBHOOK_SECRET: optionalSetting(z.string().min(32, 'TASK_WEBHOOK_SECRET must be at least 32 characters')),
