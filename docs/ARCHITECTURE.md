@@ -2,7 +2,7 @@
 
 ## What this is
 
-Banjo is the phone-calling half of a two-part system that lets you hand errands to Claude in normal conversation — "Schedule a haircut with Clauda," "Schedule an appointment with Dr. Smith," "Make a reservation at Luigi's for Friday at 7pm" — and have them actually get done. This half handles the outbound-calling flow described below; Banjo also supports an inbound booking line — see `src/inbound/` — gated behind `INBOUND_BOOKING_ENABLED` until you're ready to expose it.
+Banjo is the phone-calling half of a two-part system that lets you hand errands to Claude in normal conversation — "Schedule a haircut with Claudia," "Schedule an appointment with Dr. Smith," "Make a reservation at Luigi's for Friday at 7pm" — and have them actually get done. This half handles the outbound-calling flow described below; Banjo also supports an inbound booking line — see `src/inbound/` — gated behind `INBOUND_BOOKING_ENABLED` until you're ready to expose it.
 
 **The other half is a Claude Code skill** (`schedule-appointment`, shipped in this repo at [`skills/schedule-appointment/SKILL.md`](../skills/schedule-appointment/SKILL.md) — symlink it into `~/.claude/skills/schedule-appointment` to install). See [Skill vs. service split](#skill-vs-service-split) for why the system is split this way and what each half owns.
 
@@ -24,8 +24,8 @@ Two genuinely different kinds of work are involved in "get this errand done," an
 ## Architecture overview: task lifecycle
 
 ```
-Steve, in conversation with Claude: "Schedule a haircut with Clauda"
-  → Claude (running the schedule-appointment skill) calls find_contact("Clauda")
+Steve, in conversation with Claude: "Schedule a haircut with Claudia"
+  → Claude (running the schedule-appointment skill) calls find_contact("Claudia")
   → contact.preferredChannel known? if not, ask Steve once, persist via update_contact
   │
   ├─ ONLINE path (handled entirely by the skill, synchronously, via browser automation +
@@ -38,7 +38,7 @@ Steve, in conversation with Claude: "Schedule a haircut with Clauda"
           had MAX_CALLS_PER_NUMBER_PER_DAY calls (default 3) in the last 24 hours, counting queued ones
           (a call scheduled for later is checked when it comes due instead)
         → Banjo: createTask (status: pending) → returns { taskId, ackMessage } immediately
-        → Claude tells Steve: "Started calling Clauda's Salon, I'll let you know how it goes."
+        → Claude tells Steve: "Started calling Claudia's Salon, I'll let you know how it goes."
         → [async, in Banjo's orchestrator — src/tasks/orchestrator.ts]
            checking_availability (query Steve's Google Calendar → candidateWindows)
            → call cap checked (before the calendar lookup, then again under a per-contact lock right
