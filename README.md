@@ -100,6 +100,8 @@ AI rather than waiting to be asked ([#8](https://github.com/shatch/banjo/issues/
 - **11 MCP tools for Claude Code:** place, check, cancel and stop calls, read transcripts, and manage
   contacts.
 - **Tells you how it went:** an outcome summary after every call, by SMS or [Pushover](https://pushover.net).
+- **Tells your agent too:** set `TASK_WEBHOOK_URL` and every finished call is POSTed as a signed JSON
+  event, so an agent such as OpenClaw or Hermes Agent hears back without polling.
 - **Knows your preferences:** an owner profile of standing notes is added to every call (see
   [below](#making-it-yours-the-owner-profile)).
 - **Easy to run:** `npm run setup` writes a checked `.env`, and `docker compose up` runs the published

@@ -8,6 +8,7 @@ import { logger } from '../lib/logger.js';
 import { buildOutcomeSummary, withDisclosureNote } from '../notifications/channel.js';
 import type { DisclosureResult } from '../session/disclosure.js';
 import { createNotificationChannel } from '../notifications/owner.js';
+import { buildWebhookText, sendTaskWebhook } from '../notifications/webhook.js';
 import { pressDigitsTool } from '../telephony/dtmf.js';
 import type { TelephonyProvider } from '../telephony/providers/types.js';
 import { defineTransferTool } from '../telephony/transfer.js';
@@ -23,6 +24,13 @@ import { saveTranscriptTurn } from '../transcripts/service.js';
  * status. Extracted from the CallSessionOptions closure so the stale-call
  * sweep can notify too — a task whose process died mid-call has no session
  * left to do it, which is exactly why those failures used to be silent.
+ *
+ * Also sends the task webhook (TASK_WEBHOOK_URL, docs/ROADMAP.md 4.4) from
+ * here rather than from transitionTask: an outcome is usually settled
+ * mid-call, and this runs only once the call has ended, so the agent that
+ * hears back can read a complete transcript. Sent alongside the owner's
+ * notification, never instead of it: allSettled, so neither can stop the
+ * other.
  */
 export async function notifyTaskOutcome(taskId: string, disclosure?: DisclosureResult): Promise<void> {
   const current = await getTask(taskId);
@@ -30,7 +38,29 @@ export async function notifyTaskOutcome(taskId: string, disclosure?: DisclosureR
   const contact = await getContact(current.contactId);
   if (!contact) return;
   const summary = withDisclosureNote(buildOutcomeSummary(contact, current.outcome), disclosure);
-  await createNotificationChannel().notify(current.id, current.outcome, summary);
+  const outcome = current.outcome;
+  // Built inside the async function, not as an argument: an exception while
+  // building the event then rejects this promise, which allSettled holds,
+  // instead of throwing before allSettled runs and skipping the owner's
+  // notification with it (caught in CI, 2026-10-05).
+  const sendWebhook = async () => {
+    if (!config.TASK_WEBHOOK_URL) return;
+    await sendTaskWebhook({
+      event: 'task.finished',
+      taskId: current.id,
+      status: current.status,
+      outcome,
+      contact: { id: contact.id, name: contact.displayName },
+      text: buildWebhookText(contact, outcome, disclosure),
+      finishedAt: current.updatedAt.toISOString(),
+    });
+  };
+  const [notified, webhook] = await Promise.allSettled([
+    createNotificationChannel().notify(current.id, outcome, summary),
+    sendWebhook(),
+  ]);
+  if (webhook.status === 'rejected') logger.error({ err: webhook.reason, taskId }, 'Failed to send task webhook');
+  if (notified.status === 'rejected') throw notified.reason;
 }
 
 /**

@@ -27,6 +27,7 @@ const ALL_CONFIG_KEYS = [
   'GOOGLE_CONTACTS_SYNC_INTERVAL_HOURS', 'CONTACTS_SYNC_INTERVAL_HOURS',
   'GOOGLE_OAUTH_CLIENT_ID', 'GOOGLE_OAUTH_CLIENT_SECRET', 'GOOGLE_OAUTH_REFRESH_TOKEN', 'GOOGLE_CALENDAR_ID',
   'NOTIFICATION_CHANNEL', 'NOTIFY_TO_PHONE_NUMBER', 'NOTIFY_FROM_PHONE_NUMBER', 'PUSHOVER_APP_TOKEN', 'PUSHOVER_USER_KEY', 'PUSHOVER_DEVICE',
+  'TASK_WEBHOOK_URL', 'TASK_WEBHOOK_SECRET', 'TASK_WEBHOOK_TOKEN',
   'MCP_API_KEY', 'TOOL_TIMEOUT_MS', 'LOG_TRANSCRIPTS',
   'INBOUND_BOOKING_ENABLED', 'BUSINESS_HOURS_DAYS', 'BUSINESS_HOURS_START', 'BUSINESS_HOURS_END',
   'INBOUND_DEFAULT_DURATION_MINUTES', 'INBOUND_MAX_LOOKAHEAD_DAYS', 'ASSISTANT_PRINCIPAL_NAME', 'DISCLOSURE_LINE', 'RECORD_CALLS', 'RECORDING_RETENTION_DAYS',
@@ -129,6 +130,38 @@ describe('config: env schema', () => {
     setEnv({ NOTIFICATION_CHANNEL: 'pushover', PUSHOVER_APP_TOKEN: 'app-token', PUSHOVER_USER_KEY: 'user-key' });
     const { config } = await import('../src/config/index.js');
     expect(config.NOTIFICATION_CHANNEL).toBe('pushover');
+  });
+
+  it('TASK_WEBHOOK_URL is optional, and an empty value means off', async () => {
+    setEnv({ TASK_WEBHOOK_URL: '' });
+    const { config } = await import('../src/config/index.js');
+    expect(config.TASK_WEBHOOK_URL).toBeUndefined();
+  });
+
+  it('TASK_WEBHOOK_URL needs TASK_WEBHOOK_SECRET', async () => {
+    setEnv({ TASK_WEBHOOK_URL: 'https://agent.example.test/hook' });
+    await expect(import('../src/config/index.js')).rejects.toThrow(/TASK_WEBHOOK_SECRET is required/);
+  });
+
+  it('TASK_WEBHOOK_SECRET must be at least 32 characters', async () => {
+    setEnv({ TASK_WEBHOOK_URL: 'https://agent.example.test/hook', TASK_WEBHOOK_SECRET: 'short' });
+    await expect(import('../src/config/index.js')).rejects.toThrow(/at least 32/);
+  });
+
+  it('TASK_WEBHOOK_URL must be https, except to localhost or a Docker service name', async () => {
+    const secret = 'x'.repeat(32);
+    for (const refused of ['http://agent.example.test/hook', 'http://10.0.0.5:8644/hook', 'http://[fd00::1]:8644/hook']) {
+      vi.resetModules();
+      setEnv({ TASK_WEBHOOK_URL: refused, TASK_WEBHOOK_SECRET: secret });
+      await expect(import('../src/config/index.js')).rejects.toThrow(/must use https/);
+    }
+
+    for (const allowed of ['http://127.0.0.1:9000/hook', 'http://hermes:8644/webhooks/banjo']) {
+      vi.resetModules();
+      setEnv({ TASK_WEBHOOK_URL: allowed, TASK_WEBHOOK_SECRET: secret });
+      const { config } = await import('../src/config/index.js');
+      expect(config.TASK_WEBHOOK_URL).toBe(allowed);
+    }
   });
 
   it('defaults CALENDAR_PROVIDER to google, with no CalDAV vars required', async () => {
