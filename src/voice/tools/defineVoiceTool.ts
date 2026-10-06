@@ -24,6 +24,14 @@ export interface VoiceTool<TInput = unknown, TCtx = CallContext> {
    */
   endsCall?: boolean;
   /**
+   * For an endsCall tool that closes a normal call with a person (#102):
+   * CallSession refuses it once if Banjo's latest line has no goodbye in it
+   * (session/goodbye.ts), so the model says one and calls it again. Leave it
+   * off where a goodbye may not fit: escalations (a phone menu, a hostile
+   * caller), a voicemail (its message is verified separately) and a transfer.
+   */
+  requiresGoodbye?: boolean;
+  /**
    * For a tool whose argument IS content meant to reach the other party
    * (e.g. a voicemail message) — extracts that text from the validated
    * input. When present, CallSession forces the model to speak this text

@@ -1,9 +1,11 @@
 import { timingSafeEqual } from 'node:crypto';
 import type { IncomingMessage, ServerResponse } from 'node:http';
+import { createRequire } from 'node:module';
 import { RESPONSE_ALREADY_SENT } from '@hono/node-server/utils/response';
 import type { Context, Hono } from 'hono';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { SSEServerTransport } from '@modelcontextprotocol/sdk/server/sse.js';
+import { WebStandardStreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js';
 import { config } from '../config/index.js';
 import { logger } from '../lib/logger.js';
 
@@ -19,8 +21,13 @@ import { updateContactInputSchema, updateContactHandler } from './tools/updateCo
 import { recordTaskOutcomeInputSchema, recordTaskOutcomeHandler } from './tools/recordTaskOutcome.js';
 import { listRecentTasksInputSchema, listRecentTasksHandler } from './tools/listRecentTasks.js';
 
+const MCP_PATH = '/mcp';
 const MCP_SSE_PATH = '/mcp/sse';
 const MCP_MESSAGES_PATH = '/mcp/messages';
+
+// Two levels up from both src/mcp/ (tsx) and dist/mcp/ (built, and in the
+// image, which copies package.json to /app beside dist/).
+const { version: PACKAGE_VERSION } = createRequire(import.meta.url)('../../package.json') as { version: string };
 
 /**
  * Uniform MCP tool result shape.
@@ -67,7 +74,17 @@ function adapt<TInput>(handler: (input: TInput) => Promise<unknown>) {
 }
 
 /**
- * Builds the MCP server and registers all 9 tools. Deliberately separate
+ * MCP tool annotations: hints a client uses to decide which calls need the
+ * owner's approval. Without them OpenClaw asks before every Banjo call,
+ * reads included (found testing it against Banjo, 2026-10-05). Hints only:
+ * a client may ignore them, so they never replace Banjo's own guards (the
+ * per-number call cap, cancel_task's not-yet-dialed check).
+ */
+const READS = { readOnlyHint: true, openWorldHint: false } as const;
+const RECORDS = { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false } as const;
+
+/**
+ * Builds the MCP server and registers all 11 tools. Deliberately separate
  * from the HTTP/SSE wiring below so it can be constructed and exercised
  * (e.g. via an in-memory transport) without spinning up Hono.
  *
@@ -81,8 +98,8 @@ function adapt<TInput>(handler: (input: TInput) => Promise<unknown>) {
  */
 export function createMcpServer(): McpServer {
   const server = new McpServer({
-    name: 'ea-executive-assistant',
-    version: '0.1.0',
+    name: 'banjo',
+    version: PACKAGE_VERSION,
   });
 
   server.tool(
@@ -92,6 +109,7 @@ export function createMcpServer(): McpServer {
       'minutes (or at scheduledFor, if given, to call later instead of now). Poll get_task_status with the ' +
       'returned taskId to learn the outcome.',
     placeCallInputSchema.shape,
+    { title: 'Place a phone call', readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
     adapt(placeCallHandler),
   );
 
@@ -100,6 +118,7 @@ export function createMcpServer(): McpServer {
     'Check the current status and (if finished) outcome of a previously started task, whether it was ' +
       'a phone call or a recorded online booking.',
     getTaskStatusInputSchema.shape,
+    { title: 'Get task status', ...READS },
     adapt(getTaskStatusHandler),
   );
 
@@ -109,6 +128,7 @@ export function createMcpServer(): McpServer {
       'party actually said. Only available if this install saves transcripts (PERSIST_TRANSCRIPTS); the result ' +
       'says so if not. Lines marked suspect may not be what was said.',
     getCallTranscriptInputSchema.shape,
+    { title: 'Get call transcript', ...READS },
     adapt(getCallTranscriptHandler),
   );
 
@@ -117,6 +137,7 @@ export function createMcpServer(): McpServer {
     "Call off a phone call that hasn't been placed yet — typically one scheduled for later with place_call's " +
       'scheduledFor. A call already in progress or finished is not affected; the result says whether it was cancelled.',
     cancelTaskInputSchema.shape,
+    { title: 'Cancel a scheduled call', readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: false },
     adapt(cancelTaskHandler),
   );
 
@@ -126,6 +147,7 @@ export function createMcpServer(): McpServer {
       'call that is going wrong or was placed in error. The task is recorded as failed with the reason given, ' +
       'and the usual outcome notification is sent.',
     stopCallInputSchema.shape,
+    { title: 'Hang up a call in progress', readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: true },
     adapt(stopCallHandler),
   );
 
@@ -134,6 +156,7 @@ export function createMcpServer(): McpServer {
     'Fuzzy-search saved contacts by name or notes text. Call this before place_call to resolve a ' +
       'contactId, or to check whether a contact already exists before add_contact.',
     findContactInputSchema.shape,
+    { title: 'Find a contact', ...READS },
     adapt(findContactHandler),
   );
 
@@ -141,6 +164,7 @@ export function createMcpServer(): McpServer {
     'list_contacts',
     'List saved contacts, optionally filtered by category.',
     listContactsInputSchema.shape,
+    { title: 'List contacts', ...READS },
     adapt(listContactsHandler),
   );
 
@@ -148,6 +172,7 @@ export function createMcpServer(): McpServer {
     'add_contact',
     'Save a new contact (business or person) for future calls/bookings.',
     addContactInputSchema.shape,
+    { title: 'Add a contact', ...RECORDS },
     adapt(addContactHandler),
   );
 
@@ -156,6 +181,7 @@ export function createMcpServer(): McpServer {
     "Update an existing contact — e.g. record the assistant's owner's stated preferred booking channel so future " +
       'tasks for this contact skip asking again, or update notes/booking URL.',
     updateContactInputSchema.shape,
+    { title: 'Update a contact', readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: false },
     adapt(updateContactHandler),
   );
 
@@ -165,6 +191,7 @@ export function createMcpServer(): McpServer {
       'booking the skill completed itself via browser automation), so it appears in the same task ' +
       'history as phone-call tasks.',
     recordTaskOutcomeInputSchema.shape,
+    { title: 'Record an online booking', ...RECORDS },
     adapt(recordTaskOutcomeHandler),
   );
 
@@ -172,6 +199,7 @@ export function createMcpServer(): McpServer {
     'list_recent_tasks',
     'List the most recently updated tasks (phone calls and online bookings), most recent first.',
     listRecentTasksInputSchema.shape,
+    { title: 'List recent tasks', ...READS },
     adapt(listRecentTasksHandler),
   );
 
@@ -209,7 +237,19 @@ function getRawNodeReqRes(c: Context): { req: IncomingMessage; res: ServerRespon
 }
 
 /**
- * Registers the MCP HTTP/SSE routes on the given Hono app. This runs as a
+ * Registers the MCP routes on the given Hono app.
+ *
+ * `/mcp` is Streamable HTTP, the transport current MCP clients and the MCP
+ * Registry expect (docs/ROADMAP.md, 4.1). It runs stateless: each request
+ * gets its own McpServer and transport, and nothing about a client outlives
+ * the request. Every tool here is plain request/response, so there is nothing
+ * a session would hold; and with no session, a restart (every deploy) no
+ * longer disconnects connected clients, which it did over SSE.
+ *
+ * `/mcp/sse` + `/mcp/messages` below are the older HTTP+SSE transport, which
+ * the MCP spec has deprecated. Kept so existing client configs keep working.
+ *
+ * The rest of this comment describes the SSE routes. This runs as a
  * persistent, internet-reachable AWS-deployed service (not spawned locally
  * via stdio), so we expose MCP over remote HTTP/SSE per the SDK's
  * SSEServerTransport: a long-lived GET stream per client session, with
@@ -236,6 +276,26 @@ export function registerMcpRoutes(app: Hono): void {
   // The per-session `transports` map below was always built for many clients;
   // the server just has to match it.
   const transports = new Map<string, SSEServerTransport>();
+
+  app.on(['GET', 'POST', 'DELETE'], MCP_PATH, async (c) => {
+    if (!requireAuth(c)) {
+      return c.text('Unauthorized', 401);
+    }
+
+    const server = createMcpServer();
+    const transport = new WebStandardStreamableHTTPServerTransport({
+      sessionIdGenerator: undefined,
+      enableJsonResponse: true,
+    });
+    await server.connect(transport);
+    try {
+      return await transport.handleRequest(c.req.raw);
+    } finally {
+      // enableJsonResponse: the Response is complete once handleRequest
+      // resolves, so nothing is left streaming when the server closes.
+      void server.close().catch((err) => logger.warn({ err }, 'MCP request did not close cleanly'));
+    }
+  });
 
   app.get(MCP_SSE_PATH, async (c) => {
     if (!requireAuth(c)) {
