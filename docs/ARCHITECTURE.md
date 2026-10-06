@@ -2,7 +2,7 @@
 
 ## What this is
 
-Banjo is the phone-calling half of a two-part system that lets you hand errands to Claude in normal conversation — "Schedule a haircut with Clauda," "Schedule an appointment with Dr. Smith," "Make a reservation at Luigi's for Friday at 7pm" — and have them actually get done. This half handles the outbound-calling flow described below; Banjo also supports an inbound booking line — see `src/inbound/` — gated behind `INBOUND_BOOKING_ENABLED` until you're ready to expose it.
+Banjo is the phone-calling half of a two-part system that lets you hand errands to Claude in normal conversation — "Schedule a haircut with Claudia," "Schedule an appointment with Dr. Smith," "Make a reservation at Luigi's for Friday at 7pm" — and have them actually get done. This half handles the outbound-calling flow described below; Banjo also supports an inbound booking line — see `src/inbound/` — gated behind `INBOUND_BOOKING_ENABLED` until you're ready to expose it.
 
 **The other half is a Claude Code skill** (`schedule-appointment`, shipped in this repo at [`skills/schedule-appointment/SKILL.md`](../skills/schedule-appointment/SKILL.md) — symlink it into `~/.claude/skills/schedule-appointment` to install). See [Skill vs. service split](#skill-vs-service-split) for why the system is split this way and what each half owns.
 
@@ -25,7 +25,7 @@ Two genuinely different kinds of work are involved in "get this errand done," an
 
 ```
 Steve, in conversation with Claude: "Schedule a haircut with Claudia"
-  → Claude (running the schedule-appointment skill) calls find_contact("Clauda")
+  → Claude (running the schedule-appointment skill) calls find_contact("Claudia")
   → contact.preferredChannel known? if not, ask Steve once, persist via update_contact
   │
   ├─ ONLINE path (handled entirely by the skill, synchronously, via browser automation +
