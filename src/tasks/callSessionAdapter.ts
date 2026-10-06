@@ -3,7 +3,7 @@ import type { Contact } from '../contacts/schema.js';
 import { getContact } from '../contacts/service.js';
 import type { CallSessionOptions } from '../session/callSession.js';
 import type { CallContext } from '../session/types.js';
-import { config } from '../config/index.js';
+import { config, disclosureLine } from '../config/index.js';
 import { logger } from '../lib/logger.js';
 import { buildOutcomeSummary, withDisclosureNote } from '../notifications/channel.js';
 import type { DisclosureResult } from '../session/disclosure.js';
@@ -164,6 +164,9 @@ export function buildOutboundCallSessionOptions(params: {
     // Outbound only: the notice that starts a recording is part of
     // DISCLOSURE_LINE, which only outbound calls open with (#8).
     recordCalls: config.RECORD_CALLS,
+    // What a silence nudge says if Banjo hasn't spoken yet, so the call still
+    // opens with the disclosure (#118).
+    openingLine: disclosureLine(),
 
     async beginCall() {
       // No answering-machine detection (#32). Twilio's verdict misread a

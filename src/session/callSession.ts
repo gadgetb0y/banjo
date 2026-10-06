@@ -86,6 +86,15 @@ const VERBATIM_TOOL_PENDING_BUDGET_MS = SPEAK_VERBATIM_TIMEOUT_MS + VERBATIM_PLA
 // toolPendingWatchdog's "don't hang forever" philosophy for a stuck tool.
 const SILENCE_WATCHDOG_MS = 7000;
 
+/**
+ * The silence nudge's cue when Banjo hasn't spoken yet (#118). One-time and
+ * self-contained: openai-live keeps appended instructions for the rest of the
+ * call, and OpenAI Realtime uses a cue in place of the session instructions.
+ */
+export function openingLineCue(openingLine: string): string {
+  return `One-time cue for this moment only: you haven't said anything on this call yet. Say exactly the following, word for word, and nothing else, then stop and listen: ${JSON.stringify(openingLine)} Disregard this cue on every later turn.`;
+}
+
 // The session-level tool-pending watchdog for an ordinary tool call (see
 // handleToolCall) — also that tool's budget when the call ends around it.
 const TOOL_PENDING_WATCHDOG_MS = 15_000;
@@ -139,6 +148,14 @@ export interface CallSessionOptions<TCtx = CallContext> {
   recordCalls?: boolean;
   /** Whether CallSession should prompt the model to speak first once the call connects, before any caller input. Inbound: true. Outbound: unset/false — the callee naturally speaks first. */
   greetOnConnect?: boolean;
+  /**
+   * What Banjo must say before anything else (outbound: the AI disclosure,
+   * disclosureLine()). If the silence watchdog has to nudge before Banjo has
+   * said a word, it cues the model to say exactly this (openingLineCue)
+   * instead of an open-ended trigger, which once made a call open "One
+   * moment." (#118). Unset: always open-ended.
+   */
+  openingLine?: string;
   /** Originates the call (outbound) or resolves the already-connected call's identity (inbound). */
   beginCall(): Promise<{ providerCallId: string }>;
   /** Built fresh on every tool invocation so handlers see current state, not a snapshot taken at session construction. `estimatedAudioDoneAt` is audioPlaybackTracker.estimatedDoneAt() at the moment of this call — see hangUpAfterSpeaking (voice/tools/callTools.ts) for why a hang-up tool needs it. `verbatimDelivery` is VoiceAIProvider.verbatimDeliveryReport()'s result after a tool's forced verbatim speech — undefined for a tool without verbatimMessage, or a provider that doesn't report. */
@@ -502,9 +519,18 @@ export class CallSession<TCtx = CallContext> {
         logger.warn({ callId: this.opts.callId }, 'Silence watchdog fired but a response already appears to be in flight — skipping the nudge');
         return;
       }
-      logger.warn({ callId: this.opts.callId }, 'Voice AI went silent after a user turn — nudging with an explicit response trigger');
       this.silenceNudgeSent = true;
-      this.triggerVoiceAIResponse();
+      if (this.opts.openingLine !== undefined && this.firstAssistantLine === undefined) {
+        // Nothing said yet, so whatever this nudge makes Banjo say opens the
+        // call, and the call must open with the disclosure (#118). A cue, not
+        // sayVerbatim(): openai-live holds turn_end for a verbatim message
+        // until a delivery report is read, which only tool messages get.
+        logger.warn({ callId: this.opts.callId }, 'Voice AI went silent before saying anything — nudging with the opening line');
+        this.triggerVoiceAIResponse(openingLineCue(this.opts.openingLine));
+      } else {
+        logger.warn({ callId: this.opts.callId }, 'Voice AI went silent after a user turn — nudging with an explicit response trigger');
+        this.triggerVoiceAIResponse();
+      }
       this.silenceWatchdog = setTimeout(() => this.handleSilenceWatchdogFired(), SILENCE_WATCHDOG_MS);
       return;
     }
@@ -550,9 +576,10 @@ export class CallSession<TCtx = CallContext> {
   }
 
   /** Wraps voiceAI.triggerResponse() so every self-initiated response (greeting, silence-watchdog nudge) is reflected in responseActive — see its doc comment. */
-  private triggerVoiceAIResponse(): void {
+  private triggerVoiceAIResponse(cue?: string): void {
     this.responseActive = true;
-    this.voiceAI.triggerResponse();
+    if (cue === undefined) this.voiceAI.triggerResponse();
+    else this.voiceAI.triggerResponse(cue);
   }
 
   private async handleToolCall(

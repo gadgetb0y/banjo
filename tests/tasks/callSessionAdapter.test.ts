@@ -82,6 +82,20 @@ describe('buildOutboundCallSessionOptions', () => {
     });
   }
 
+  it('gives the session the disclosure line as its opening line (#118)', async () => {
+    const { disclosureLine } = await import('../../src/config/index.js');
+    const options = buildOutboundCallSessionOptions({
+      task: { ...fakeTask, mode: 'conversation' } as Task,
+      callAttempt: fakeCallAttempt,
+      contact: fakeContact,
+      telephony: fakeTelephony,
+      calendar: fakeCalendar,
+      systemPrompt: 'irrelevant for this test',
+    });
+    expect(options.openingLine).toBe(disclosureLine());
+    expect(options.openingLine).toMatch(/\bAI\b/);
+  });
+
   it('stores the recording id on the call attempt when recording starts (#8)', async () => {
     const options = buildOutboundCallSessionOptions({
       task: { ...fakeTask, mode: 'booking' } as Task,

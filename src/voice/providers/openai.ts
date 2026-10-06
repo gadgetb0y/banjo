@@ -112,6 +112,14 @@ function toOpenAITools(tools: ToolDefinition[]): unknown[] {
   }));
 }
 
+/**
+ * response.create, with a cue as `response.instructions` when there is one. That field replaces the session's
+ * instructions for this one response only (see sayVerbatim), so a cue has to say everything that response needs.
+ */
+function responseCreate(cue?: string): Record<string, unknown> {
+  return cue === undefined ? { type: 'response.create' } : { type: 'response.create', response: { instructions: cue } };
+}
+
 interface PendingFunctionCall {
   callId: string;
   name: string;
@@ -130,7 +138,8 @@ export class OpenAIRealtimeProvider implements VoiceAIProvider {
   private emittedCallIds = new Set<string>();
   /** The rate we negotiated for output audio (session.audio.output.format.rate) — used to tag emitted audio_chunks correctly instead of assuming a fixed rate. */
   private outputSampleRate = 24000;
-  private pendingTriggerResponse = false;
+  /** A triggerResponse() that arrived before the socket opened: false for none, else its cue (undefined for none). */
+  private pendingTriggerResponse: false | { cue?: string } = false;
 
   connect(sessionConfig: VoiceAISessionConfig): Promise<void> {
     const apiKey = config.OPENAI_API_KEY;
@@ -191,8 +200,9 @@ export class OpenAIRealtimeProvider implements VoiceAIProvider {
         }
         this.emitEvent({ type: 'connected' });
         if (this.pendingTriggerResponse) {
+          const { cue } = this.pendingTriggerResponse;
           this.pendingTriggerResponse = false;
-          ws.send(JSON.stringify({ type: 'response.create' }));
+          ws.send(JSON.stringify(responseCreate(cue)));
         }
         if (!settled) {
           settled = true;
@@ -257,7 +267,7 @@ export class OpenAIRealtimeProvider implements VoiceAIProvider {
     this.ws.send(JSON.stringify({ type: 'response.cancel' }));
   }
 
-  triggerResponse(): void {
+  triggerResponse(cue?: string): void {
     if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
       // The telephony 'connected' event (which calls this for an inbound
       // greeting) can race voiceAI.connect() — Twilio's Media Stream WS
@@ -266,13 +276,13 @@ export class OpenAIRealtimeProvider implements VoiceAIProvider {
       // so connect() should usually win, but "usually" isn't a guarantee.
       // Queue it instead of silently dropping it, so the greeting still
       // fires once the connection actually opens.
-      this.pendingTriggerResponse = true;
+      this.pendingTriggerResponse = { cue };
       return;
     }
     // Same message sendToolResult() already sends after a tool result
     // (line ~232) — CONFIRMED working in this codebase, just fired here
     // with no prior tool result, to make the model speak first.
-    this.ws.send(JSON.stringify({ type: 'response.create' }));
+    this.ws.send(JSON.stringify(responseCreate(cue)));
   }
 
   sayVerbatim(text: string): void {

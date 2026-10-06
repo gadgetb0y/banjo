@@ -561,6 +561,25 @@ describe('OpenAILiveProvider: triggerResponse / interrupt / disconnect', () => {
     expect(appends()).toHaveLength(2);
   });
 
+  // #118: the silence nudge before Banjo's first words cues the disclosure,
+  // without sayVerbatim's turn_end hold.
+  it('appends a given cue in place of the generic one, and does not hold turn_end for it', async () => {
+    const { provider, ws, events } = await startSession();
+    provider.triggerResponse('One-time cue: say the opening line.');
+    const appends = sent(ws).filter((m) => m.type === 'session.instructions.append');
+    expect(appends).toHaveLength(1);
+    expect(appends[0].content).toBe('One-time cue: say the opening line.');
+
+    vi.useFakeTimers();
+    try {
+      serverSends(ws, { type: 'session.output_transcript.delta', delta: 'Something else entirely.' });
+      await vi.advanceTimersByTimeAsync(5000);
+      expect(events.some((e) => e.type === 'turn_end')).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('interrupt() sends nothing — Live has no cancel event', async () => {
     const { provider, ws } = await startSession();
     const before = ws.sent.length;

@@ -119,8 +119,13 @@ export interface VoiceAIProvider {
   sendToolResult(toolCallId: string, result: unknown, isError?: boolean): void;
   /** Tell the model to stop speaking (barge-in). */
   interrupt(): void;
-  /** Prompt the model to start speaking now, with no caller input needed — used for an inbound call's opening greeting. */
-  triggerResponse(): void;
+  /**
+   * Prompt the model to start speaking now, with no caller input needed — used for an inbound call's opening greeting
+   * and the silence watchdog's nudge. `cue`, if given, is a one-time instruction for this response only (CallSession
+   * uses it so a nudge before Banjo's first words says the disclosure, #118). Unlike sayVerbatim() there's no delivery
+   * tracking. A provider with no way to send it ignores it.
+   */
+  triggerResponse(cue?: string): void;
   /**
    * Forces the model's next turn to say `text` verbatim, as a one-off
    * per-response instruction override rather than a change to the session's
