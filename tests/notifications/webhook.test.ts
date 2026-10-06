@@ -148,3 +148,24 @@ describe('buildWebhookText', () => {
     expect(webhook.buildWebhookText(contact, outcomes[4], 'missed')).toContain("didn't say it was an AI");
   });
 });
+
+// #115: plain http to a Docker service name is allowed, but the event then
+// crosses that network unencrypted. Startup says so once.
+describe('webhookPlainHttpWarning', () => {
+  it('warns for plain http to a Docker service name', () => {
+    const warning = webhook.webhookPlainHttpWarning('http://hermes:8644/webhooks/banjo');
+    expect(warning).toContain('hermes');
+    expect(warning).toMatch(/not encrypted/);
+    expect(warning).toContain('#115');
+  });
+
+  it.each([
+    ['https', 'https://agent.example.test/hook'],
+    ['localhost', 'http://localhost:8644/hook'],
+    ['127.0.0.1', 'http://127.0.0.1:8644/hook'],
+    ['[::1]', 'http://[::1]:8644/hook'],
+    ['no webhook', undefined],
+  ])('says nothing for %s', (_label, url) => {
+    expect(webhook.webhookPlainHttpWarning(url)).toBeUndefined();
+  });
+});

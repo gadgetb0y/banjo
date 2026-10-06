@@ -27,7 +27,7 @@ const e164 = optionalSetting(
  * password as Basic auth, so plain http is refused — except to this machine,
  * e.g. a Radicale server for development.
  */
-const LOOPBACK_HOSTS = new Set(['localhost', '127.0.0.1', '[::1]']);
+export const LOOPBACK_HOSTS = new Set(['localhost', '127.0.0.1', '[::1]']);
 // A dotless hostname is a Docker Compose service or container name; public DNS
 // never resolves one. Bracketed IPv6 literals are excluded (only [::1] is local).
 const isLocalWebhookHost = (hostname: string) =>
