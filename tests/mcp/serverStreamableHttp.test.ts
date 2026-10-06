@@ -47,6 +47,23 @@ describe('mcp server: Streamable HTTP at /mcp', () => {
     expect(res.status).toBe(401);
   });
 
+  // #119: stateless, so there's no stream to offer on GET and no session to
+  // end on DELETE. A GET that opened a stream and closed it at once made
+  // Claude Code reconnect about once a second.
+  it.each(['GET', 'DELETE'])('answers %s with 405 and Allow: POST', async (method) => {
+    const res = await buildApp().request('/mcp', {
+      method,
+      headers: { Authorization: `Bearer ${config.MCP_API_KEY}`, Accept: 'text/event-stream' },
+    });
+    expect(res.status).toBe(405);
+    expect(res.headers.get('Allow')).toBe('POST');
+  });
+
+  it('still asks for auth on GET before anything else', async () => {
+    const res = await buildApp().request('/mcp', { method: 'GET' });
+    expect(res.status).toBe(401);
+  });
+
   it('rejects the wrong bearer token', async () => {
     await expect(connect(buildApp(), 'wrong-token')).rejects.toThrow();
   });
