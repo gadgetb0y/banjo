@@ -281,6 +281,15 @@ export function registerMcpRoutes(app: Hono): void {
     if (!requireAuth(c)) {
       return c.text('Unauthorized', 401);
     }
+    // Stateless: there's no stream to offer on GET and no session to end on
+    // DELETE. The transport would open a GET stream that closing the server
+    // below ends at once, and clients reconnected about once a second (#119).
+    // 405 is how the spec says "no stream here".
+    if (c.req.method !== 'POST') {
+      return c.json({ jsonrpc: '2.0', error: { code: -32000, message: 'Method not allowed.' }, id: null }, 405, {
+        Allow: 'POST',
+      });
+    }
 
     const server = createMcpServer();
     const transport = new WebStandardStreamableHTTPServerTransport({
