@@ -247,6 +247,16 @@ docker compose up -d postgres   # just the database
 npm run dev                     # applies migrations, then starts on $PORT
 ```
 
+Then connect your agent to Banjo's MCP server at `https://<PUBLIC_HOSTNAME>/mcp` (Streamable HTTP),
+with `MCP_API_KEY` as a bearer token. For Claude Code:
+
+```bash
+claude mcp add --transport http banjo https://YOUR-HOSTNAME/mcp \
+  --header "Authorization: Bearer $MCP_API_KEY"
+```
+
+Older clients that only speak the deprecated HTTP+SSE transport can use `/mcp/sse` instead.
+
 ### Test database
 
 `npm test`'s DB-backed suites run against a separate `banjo_test` database on the same Postgres
