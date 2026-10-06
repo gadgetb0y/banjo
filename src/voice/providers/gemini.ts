@@ -220,7 +220,7 @@ export class GeminiLiveProvider implements VoiceAIProvider {
     }
   }
 
-  triggerResponse(): void {
+  triggerResponse(_cue?: string): void {
     // NEEDS VERIFICATION: gemini is not the active provider
     // (VOICE_AI_PROVIDER=openai) — the greeting-first fix was only
     // verified against a live OpenAI call. Left as a stub consistent with

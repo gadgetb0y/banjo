@@ -201,7 +201,8 @@ export class OpenAILiveProvider implements VoiceAIProvider {
   /** session.started received — no command other than session.start may be sent before it. */
   private started = false;
   private disconnectedEmitted = false;
-  private pendingTriggerResponse = false;
+  /** A triggerResponse() that arrived before session.started: false for none, else its cue (undefined for none). */
+  private pendingTriggerResponse: false | { cue?: string } = false;
   private outputSampleRate = 8000;
   /** Tracks function_call ids already emitted as tool_call, so a repeated output_item.done can't double-dispatch a tool. */
   private emittedCallIds = new Set<string>();
@@ -369,18 +370,18 @@ export class OpenAILiveProvider implements VoiceAIProvider {
     // the model handles itself, not a barge-in to flush. See file header.
   }
 
-  triggerResponse(): void {
+  triggerResponse(cue?: string): void {
     if (!this.isStarted()) {
       // Same connect() race as the Realtime adapter's triggerResponse(), plus
       // one more gate: nothing but session.start may be sent before
       // session.started. Queue it rather than drop the inbound greeting.
-      this.pendingTriggerResponse = true;
+      this.pendingTriggerResponse = { cue };
       return;
     }
     // response.create would only prompt the delegated BACKEND; the voice
     // front-end has no response trigger, so steer it with an instruction.
     // NEEDS VERIFICATION (file header, item 1).
-    this.appendTriggerCue();
+    this.appendTriggerCue(cue);
   }
 
   sayVerbatim(text: string): void {
@@ -460,13 +461,14 @@ export class OpenAILiveProvider implements VoiceAIProvider {
    * them (and piles up "respond now" against the turn-taking guidance), so
    * skip it while one is still outstanding.
    */
-  private appendTriggerCue(): void {
+  /** `cue` replaces the generic one; CallSession writes it as a one-time cue too, since instructions stay appended. */
+  private appendTriggerCue(cue?: string): void {
     if (this.triggerCueOutstanding) {
       log.debug('a response cue is already outstanding — not appending another');
       return;
     }
     this.triggerCueOutstanding = true;
-    this.appendInstructions(TRIGGER_RESPONSE_INSTRUCTION);
+    this.appendInstructions(cue ?? TRIGGER_RESPONSE_INSTRUCTION);
   }
 
   /** The model visibly responded (speech audio or a delegated tool call). */
@@ -515,8 +517,9 @@ export class OpenAILiveProvider implements VoiceAIProvider {
         this.emitEvent({ type: 'connected' });
         this.settleConnect();
         if (this.pendingTriggerResponse) {
+          const { cue } = this.pendingTriggerResponse;
           this.pendingTriggerResponse = false;
-          this.appendTriggerCue();
+          this.appendTriggerCue(cue);
         }
         return;
       }
