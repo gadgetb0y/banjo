@@ -181,6 +181,15 @@ describe('the goodbye is said, not announced', () => {
   it('carries that into the voice layer', () => {
     expect(buildFrontendSystemPromptGuidance('outbound')).toMatch(/never describe it/i);
   });
+
+  // #144: "Tell him thank you." got two narrating lines, and the callee hung up first.
+  it('makes the reply to a done signal one short goodbye, with nothing before it', () => {
+    for (const prompt of [buildBaseSystemPromptGuidance('outbound'), buildFrontendSystemPromptGuidance('outbound')]) {
+      expect(prompt).toContain('When the other party is done');
+      expect(prompt).toContain("You're welcome — take care, bye!");
+      expect(prompt).toContain("I'll keep this brief");
+    }
+  });
 });
 
 describe('the call stays open while the other party is redirecting it (#133)', () => {
