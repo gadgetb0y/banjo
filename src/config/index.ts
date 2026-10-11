@@ -93,6 +93,12 @@ const envSchema = z
     VOICE_AI_PROVIDER: z.enum(['openai', 'openai-live', 'gemini', 'elevenlabs']),
     OPENAI_API_KEY: z.string().optional(),
     OPENAI_REALTIME_MODEL: z.string().default('gpt-realtime'),
+    // Input noise reduction for VOICE_AI_PROVIDER=openai, applied before
+    // turn detection (#143): a pickup click, or Banjo's own voice echoing
+    // back from a speakerphone, was read as the callee talking and kept
+    // cutting off the opener. 'far_field' suits speakerphones, 'near_field'
+    // handsets; 'off' sends none (OpenAI's default).
+    OPENAI_NOISE_REDUCTION: z.enum(['far_field', 'near_field', 'off']).default('far_field'),
     // VOICE_AI_PROVIDER=openai-live (src/voice/providers/openaiLive.ts): the
     // GPT-Live full-duplex voice front-end, with reasoning and tool calls
     // delegated to a separate Responses backend model. Ships dark — tested on
