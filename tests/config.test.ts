@@ -20,7 +20,7 @@ const originalEnv = { ...process.env };
 // validation failure this test is specifically trying to trigger.
 const ALL_CONFIG_KEYS = [
   'NODE_ENV', 'PORT', 'LOG_LEVEL', 'PUBLIC_HOSTNAME', 'DATABASE_URL',
-  'VOICE_AI_PROVIDER', 'OPENAI_API_KEY', 'OPENAI_REALTIME_MODEL', 'OPENAI_LIVE_MODEL', 'OPENAI_LIVE_BACKEND_MODEL',
+  'VOICE_AI_PROVIDER', 'OPENAI_API_KEY', 'OPENAI_REALTIME_MODEL', 'OPENAI_NOISE_REDUCTION', 'OPENAI_LIVE_MODEL', 'OPENAI_LIVE_BACKEND_MODEL',
   'GEMINI_API_KEY', 'GEMINI_LIVE_MODEL', 'ELEVENLABS_API_KEY', 'ELEVENLABS_AGENT_ID',
   'TWILIO_ACCOUNT_SID', 'TWILIO_AUTH_TOKEN', 'TWILIO_PHONE_NUMBER', 'TWILIO_WEBHOOK_VALIDATION_ENABLED',
   'CALENDAR_PROVIDER', 'CONTACTS_PROVIDER', 'DAV_USERNAME', 'DAV_PASSWORD', 'DAV_OWNER_EMAIL', 'CALDAV_CALENDAR_URL', 'CARDDAV_ADDRESSBOOK_URL',
@@ -89,6 +89,22 @@ describe('config: env schema', () => {
     expect(config.VOICE_AI_PROVIDER).toBe('openai-live');
     expect(config.OPENAI_LIVE_MODEL).toBe('gpt-live-1');
     expect(config.OPENAI_LIVE_BACKEND_MODEL).toBe('gpt-5.6-terra');
+  });
+
+  // #143: noise and speakerphone echo were cutting off the opener as barge-ins.
+  it('OPENAI_NOISE_REDUCTION defaults to far_field, and accepts near_field and off', async () => {
+    setEnv({});
+    expect((await import('../src/config/index.js')).config.OPENAI_NOISE_REDUCTION).toBe('far_field');
+    for (const [value, expected] of [['near_field', 'near_field'], ['off', 'off']]) {
+      vi.resetModules();
+      setEnv({ OPENAI_NOISE_REDUCTION: value });
+      expect((await import('../src/config/index.js')).config.OPENAI_NOISE_REDUCTION).toBe(expected);
+    }
+  });
+
+  it('rejects an unknown OPENAI_NOISE_REDUCTION', async () => {
+    setEnv({ OPENAI_NOISE_REDUCTION: 'loud' });
+    await expect(import('../src/config/index.js')).rejects.toThrow(/OPENAI_NOISE_REDUCTION/);
   });
 
   it('fails fast when Twilio credentials are missing — Twilio is the only telephony provider', async () => {
