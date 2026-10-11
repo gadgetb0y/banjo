@@ -28,8 +28,13 @@ vi.mock('../../../src/lib/logger.js', () => ({
     debug: vi.fn(),
   }),
 }));
+const mockConfig = vi.hoisted<Record<string, string>>(() => ({
+  OPENAI_API_KEY: 'test-key',
+  OPENAI_REALTIME_MODEL: 'gpt-realtime',
+  OPENAI_NOISE_REDUCTION: 'far_field',
+}));
 vi.mock('../../../src/config/index.js', () => ({
-  config: { OPENAI_API_KEY: 'test-key', OPENAI_REALTIME_MODEL: 'gpt-realtime' },
+  config: mockConfig,
 }));
 
 const { OpenAIRealtimeProvider } = await import('../../../src/voice/providers/openai.js');
@@ -45,6 +50,41 @@ const sessionConfig = {
 function sentTypes(ws: FakeWs): string[] {
   return ws.sent.map((s) => JSON.parse(s).type);
 }
+
+async function sessionUpdateInput(): Promise<Record<string, unknown>> {
+  const provider = new OpenAIRealtimeProvider();
+  const connectPromise = provider.connect(sessionConfig);
+  const ws = wsInstances[wsInstances.length - 1]!;
+  ws.readyState = FakeWs.OPEN;
+  ws.emit('open');
+  await connectPromise;
+  const update = ws.sent.map((s) => JSON.parse(s)).find((m) => m.type === 'session.update');
+  return update.session.audio.input;
+}
+
+// #143: a pickup click and speakerphone echo cut off the opener as barge-ins.
+describe('OpenAIRealtimeProvider: input noise reduction', () => {
+  it('sends OPENAI_NOISE_REDUCTION as audio.input.noise_reduction', async () => {
+    expect((await sessionUpdateInput()).noise_reduction).toEqual({ type: 'far_field' });
+    mockConfig.OPENAI_NOISE_REDUCTION = 'near_field';
+    try {
+      expect((await sessionUpdateInput()).noise_reduction).toEqual({ type: 'near_field' });
+    } finally {
+      mockConfig.OPENAI_NOISE_REDUCTION = 'far_field';
+    }
+  });
+
+  it("sends no noise_reduction when it is 'off'", async () => {
+    mockConfig.OPENAI_NOISE_REDUCTION = 'off';
+    try {
+      const input = await sessionUpdateInput();
+      expect(input).not.toHaveProperty('noise_reduction');
+      expect(input.transcription).toEqual({ model: 'gpt-4o-mini-transcribe' });
+    } finally {
+      mockConfig.OPENAI_NOISE_REDUCTION = 'far_field';
+    }
+  });
+});
 
 describe('OpenAIRealtimeProvider.triggerResponse: race with connect()', () => {
   it('queues a triggerResponse() call made before the WS opens, and fires it once open', async () => {

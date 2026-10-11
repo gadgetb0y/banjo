@@ -463,6 +463,8 @@ The LiveKit `TelephonyProvider` adapter (`src/telephony/providers/livekit.ts` â€
 
     **Still not done:** a live call that hits the refusal, to check the reworded message is followed and, if not, that the fallback goodbye is heard before the hang-up.
 
+28. **[MITIGATED, not yet verified against a live call]** Pickup noise and speakerphone echo cut off the opener (#143). On a live call on `openai` (2026-10-11, v0.1.7), the pickup click started Banjo's opener, the callee's "Hello?" interrupted it, and a third "callee" line, "Hi, I'm a", was very likely Banjo's own opener echoing back from a speakerphone. Each was a server-VAD barge-in, so Banjo kept restarting, and the callee said "I can't hear you. You keep cutting off." The adapter had sent no `noise_reduction`. It now sends `audio.input.noise_reduction` from `OPENAI_NOISE_REDUCTION` (default `far_field`), which OpenAI filters before VAD. **Not covered:** turn detection is still the default `server_vad`. If noise reduction isn't enough, the next steps are a higher VAD `threshold` or `semantic_vad` with low eagerness, both of which slow every reply. `openai-live` has no barge-in flush at all (#15).
+
 ### Operational, not a code fix
 
 7. IVR navigation reliability â€” genuinely the least deterministic part of the system; no IVR-specific logic exists to patch. Track the real rate of `escalated` outcomes on IVR-heavy contacts over time; improves only with prompt tuning against real usage, not a bug to find.

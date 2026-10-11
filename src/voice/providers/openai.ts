@@ -189,6 +189,11 @@ export class OpenAIRealtimeProvider implements VoiceAIProvider {
                   input: {
                     format: toOpenAIAudioFormat(sessionConfig.inputAudioFormat),
                     transcription: { model: 'gpt-4o-mini-transcribe' },
+                    // Filtered before server VAD sees it, so noise and echo
+                    // don't count as a barge-in (#143).
+                    ...(config.OPENAI_NOISE_REDUCTION !== 'off' && {
+                      noise_reduction: { type: config.OPENAI_NOISE_REDUCTION },
+                    }),
                   },
                   output: { format: outputFormat, voice: sessionConfig.voice },
                 },
