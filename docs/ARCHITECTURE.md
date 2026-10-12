@@ -238,6 +238,55 @@ transfer shows only on the call attempt: `call_attempts.transfer_result`, writte
 The owner's text is the confirmation; nothing tells them the call was handed to them afterwards other
 than their phone ringing.
 
+### Warm transfer (`TRANSFER_MODE=warm`, #149)
+
+Opt-in, and not yet verified on a live call. Default `cold` is everything above. In warm mode the same
+`transfer_to_owner` tool reaches the principal on a **second line** while the other party stays on
+Banjo's media stream, so Banjo is still with them throughout:
+
+1. The model asks them to hold ("Let me see if Steve can join. It may take a minute…"), then calls the
+   tool. Its `reason` (at most 300 characters) is now a **brief**, read to the principal.
+2. `TwilioProvider.loopInOwner()` places a separate call (`calls.create` with inline TwiML, 25s ring) to
+   `TRANSFER_TO_PHONE_NUMBER`. It plays a fixed greeting, the brief, and "Press 1 to talk to them now.
+   Or hang up, and I'll carry on without you." That's two one-digit `<Gather>`s, then `<Hangup/>`.
+   The brief comes from the call, but it is XML-escaped and only ever read to the principal.
+3. **On 1** (`POST /telephony/twilio/loop-in-result`): stop any recording, as on a cold transfer.
+   Then REST-redirect the other party's call to `<Dial><Conference endConferenceOnExit="true">banjo-{callId}</Conference></Dial>`.
+   That ends Banjo's stream, and the principal's leg joins the same room with "Connecting." Either
+   side hanging up ends the conference. The call is forgotten as after `transferCall()`, the tool
+   returns `ok`, and the task becomes `transferred`, as on a cold transfer.
+4. **Anything else.** These all settle with the call still Banjo's, and the owner's leg is gone:
+   - a different key (`declined`);
+   - the owner's leg ending with no key: busy, unanswered, or their voicemail, since a greeting
+     never presses 1 (`/loop-in-status` → `no_answer`);
+   - `LOOP_IN_TIMEOUT_MS` (60s) passing;
+   - the other party hanging up first (`forgetCall` hangs up the owner's line).
+
+   The tool returns `{ ok: false, error: 'owner_unavailable', result }`, with a message telling the
+   model to say in one sentence that the principal isn't available, carry on, and not try again.
+   Nobody is bridged into voicemail.
+
+`call_attempts.transfer_result` gets `answered`, `declined` or `no_answer` from the tool handler, so
+a timeout is recorded too. The handler budget grows by the wait and one REST call
+(`WARM_TRANSFER_HANDLER_BUDGET_MS`, about 2¾ minutes by default), and the rest of the call-ending-tool machinery above
+applies unchanged. While the tool waits, nothing else can end the call and the silence watchdog
+doesn't nudge, but the other party can still talk to Banjo. The prompt tells Banjo to say only that
+it's still trying (Open Risk #24 is what makes it reply at all).
+
+Decisions for #149:
+- **Recording** stops at the bridge, as on a cold transfer. There's no setting to keep it: the other
+  party agreed to a recorded call with Banjo, not with the principal.
+- **The per-number cap** doesn't count the principal's leg. It isn't a `call_attempts` row, it only
+  ever rings the principal's own configured number, and that number must press 1 to be connected.
+- **Pending loop-ins** live in memory (`TwilioProvider.loopIns`), like `calls`. A restart mid-wait
+  drops the call anyway.
+- **A late 1**, after the wait is over, gets "Sorry, that call has already ended."
+
+Not covered: if the principal's leg drops in the moment between their 1 and joining the conference,
+the other party sits alone in a silent conference until they hang up.
+
+The sim covers all three answers with no phone: `npm run sim -- --warm --owner accept|decline|no-answer`.
+
 ---
 
 ## Data model (`src/contacts/`, `src/tasks/`)

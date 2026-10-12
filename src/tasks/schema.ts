@@ -69,8 +69,12 @@ export const tasks = pgTable('tasks', {
   updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
 });
 
-/** How a transfer_to_owner dial ended, from Twilio's <Dial action> callback (#7). */
-export type TransferResult = 'answered' | 'no_answer' | 'busy' | 'failed';
+/**
+ * How a transfer_to_owner dial ended (#7): from Twilio's <Dial action> callback
+ * for a cold transfer, or the owner's own leg for a warm one (#149), where
+ * 'declined' means they answered and pressed something other than 1.
+ */
+export type TransferResult = 'answered' | 'no_answer' | 'busy' | 'failed' | 'declined';
 
 export const callAttempts = pgTable('call_attempts', {
   id: uuid('id').primaryKey().defaultRandom(),

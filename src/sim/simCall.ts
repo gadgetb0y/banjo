@@ -6,6 +6,7 @@ import type { NewContact } from '../contacts/schema.js';
 import { db } from '../db/index.js';
 import { placeCallHandler } from '../mcp/tools/placeCall.js';
 import { overrideTelephonyProvider } from '../telephony/factory.js';
+import type { LoopInResult } from '../telephony/providers/types.js';
 import { callAttempts, type Task } from '../tasks/schema.js';
 import { getTask, isTerminalStatus } from '../tasks/service.js';
 import { overrideVoiceAIProvider } from '../voice/factory.js';
@@ -27,6 +28,8 @@ export interface SimCallOptions {
   durationMinutes: number;
   windowDays: number;
   createVoiceAI: () => TextVoiceAIProvider;
+  /** What the owner does if Banjo tries a warm transfer (#149). Defaults to accepting. */
+  owner?: LoopInResult;
   /** Everything the sim shows, other than what the person types. */
   print: (line: string) => void;
 }
@@ -51,7 +54,7 @@ const POLL_MS = 250;
  * swapped, through the factories' override seams.
  */
 export async function startSimCall(opts: SimCallOptions): Promise<SimCall> {
-  const telephony = new SimTelephonyProvider(opts.print);
+  const telephony = new SimTelephonyProvider(opts.print, opts.owner);
   const calendar = new SimCalendarProvider(config.CALENDAR_TIMEZONE, opts.print);
   overrideTelephonyProvider(telephony);
   overrideCalendarProvider(calendar);

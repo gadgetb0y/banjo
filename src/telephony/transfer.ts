@@ -1,9 +1,11 @@
 import { z } from 'zod';
 import { config } from '../config/index.js';
 import { childLogger } from '../lib/logger.js';
+import type { TransferResult } from '../tasks/schema.js';
+import { recordTransferResult } from '../tasks/service.js';
 import { MAX_HANGUP_WAIT_MS, waitForPlayback } from '../voice/tools/callTools.js';
 import { defineVoiceTool, type VoiceTool } from '../voice/tools/defineVoiceTool.js';
-import type { TelephonyProvider } from './providers/types.js';
+import type { LoopInResult, TelephonyProvider } from './providers/types.js';
 
 const log = childLogger({ module: 'telephony.transfer' });
 
@@ -18,6 +20,9 @@ const log = childLogger({ module: 'telephony.transfer' });
  * Offered to the model only when TRANSFER_ENABLED is on.
  */
 export const TRANSFER_TOOL_NAME = 'transfer_to_owner';
+
+/** A warm transfer's reason is read aloud to the owner while the other party holds (#149): a brief, not a report. */
+const TRANSFER_REASON_MAX_CHARS = 300;
 
 export type TransferContext = { telephony: TelephonyProvider; callId: string; estimatedAudioDoneAt: number };
 
@@ -39,9 +44,25 @@ const TWILIO_REST_TIMEOUT_MS = 30_000;
  * recording, then redirect), each bounded only by the SDK's own timeout, then
  * recording the transfer (one TOOL_TIMEOUT_MS, which its one retry shares).
  * That is ~74s by default — a limit for a stuck call, not a normal duration:
- * a healthy transfer takes a second or two after the handoff line.
+ * a healthy transfer takes a second or two after the handoff line. A warm
+ * transfer (#149) adds its wait for the owner: WARM_TRANSFER_HANDLER_BUDGET_MS.
  */
 export const TRANSFER_HANDLER_BUDGET_MS = MAX_HANGUP_WAIT_MS + 2 * TWILIO_REST_TIMEOUT_MS + config.TOOL_TIMEOUT_MS;
+
+/**
+ * How long a warm transfer waits for the owner (#149) before going back to the
+ * other party: their line rings for 25s, then the brief and two "press 1"
+ * prompts. The other party is holding all this time, so it is kept short.
+ */
+export const LOOP_IN_TIMEOUT_MS = 60_000;
+
+/**
+ * A warm transfer adds the wait for the owner, and placing their call, to the
+ * cold transfer's budget. The bridge's own REST calls (stop the recording,
+ * redirect) start when they press 1 and may run past LOOP_IN_TIMEOUT_MS; the
+ * cold budget's two REST timeouts cover those.
+ */
+export const WARM_TRANSFER_HANDLER_BUDGET_MS = TRANSFER_HANDLER_BUDGET_MS + LOOP_IN_TIMEOUT_MS + TWILIO_REST_TIMEOUT_MS;
 
 /** Lets the handoff line finish ("connecting you now"), then redirects the call to TRANSFER_TO_PHONE_NUMBER. */
 export async function transferAfterSpeaking(ctx: TransferContext): Promise<void> {
@@ -51,24 +72,70 @@ export async function transferAfterSpeaking(ctx: TransferContext): Promise<void>
   await ctx.telephony.transferCall(ctx.callId, { to: config.TRANSFER_TO_PHONE_NUMBER });
 }
 
+/**
+ * Warm transfer (#149): lets the hold line finish ("let me see if they can
+ * join, one moment"), then calls the owner on a second line with `brief`.
+ * Records how it went on the call attempt, as a cold transfer's callback does.
+ */
+export async function loopInAfterSpeaking(ctx: TransferContext, brief: string): Promise<LoopInResult> {
+  if (!ctx.telephony.loopInOwner) throw new Error(`transfer: telephony provider ${ctx.telephony.name} cannot do a warm transfer`);
+  if (!config.TRANSFER_TO_PHONE_NUMBER) throw new Error('transfer: TRANSFER_TO_PHONE_NUMBER is not set');
+  await waitForPlayback(ctx);
+  const result = await ctx.telephony.loopInOwner(ctx.callId, { to: config.TRANSFER_TO_PHONE_NUMBER, brief, timeoutMs: LOOP_IN_TIMEOUT_MS });
+  const recorded: Record<LoopInResult, TransferResult> = { accepted: 'answered', declined: 'declined', no_answer: 'no_answer' };
+  await recordTransferResult(ctx.callId, recorded[result]).catch((err: unknown) =>
+    log.error({ err, callId: ctx.callId, result }, 'could not record the warm transfer result'),
+  );
+  return result;
+}
+
+/** What the model hears when the owner doesn't take a warm transfer (#149): the call is still its own, so it says so and carries on. */
+function ownerUnavailable(result: Exclude<LoopInResult, 'accepted'>) {
+  const principal = config.ASSISTANT_PRINCIPAL_NAME;
+  return {
+    ok: false as const,
+    error: 'owner_unavailable' as const,
+    result,
+    message:
+      `${principal} ${result === 'declined' ? "can't take the call right now" : "didn't pick up"}. You are still on the call. ` +
+      `Tell them in one short sentence that ${principal} isn't available right now, then carry on: help with what you can ` +
+      'yourself, or, if only they can help, end the call as your instructions say for when you are stuck. Do not try to ' +
+      `reach ${principal} again on this call.`,
+  };
+}
+
+const COLD_DESCRIPTION = `Connect the other party to ${config.ASSISTANT_PRINCIPAL_NAME} directly, by phone. Use only when they need ${config.ASSISTANT_PRINCIPAL_NAME} personally and have said yes to being connected. Say one short handoff line first; you are off the call once this runs.`;
+const WARM_DESCRIPTION =
+  `Call ${config.ASSISTANT_PRINCIPAL_NAME} on a second line, read them your reason, and connect them to this call if they accept. ` +
+  `Use only when the other party needs ${config.ASSISTANT_PRINCIPAL_NAME} personally and has said yes to being connected. ` +
+  'First tell them you will try to reach them and it may take up to a minute. If they accept, you are off the call; if ' +
+  'not, the result says so, and the call is still yours.';
+const COLD_REASON = `Why they need ${config.ASSISTANT_PRINCIPAL_NAME}, e.g. "they need a card number to hold the table". Sent to ${config.ASSISTANT_PRINCIPAL_NAME}; not spoken to the other party.`;
+const WARM_REASON =
+  `One or two sentences for ${config.ASSISTANT_PRINCIPAL_NAME}: who you are talking to and what they need from them, e.g. ` +
+  `"Dr. Smith's office can do 3 or 4:30 tomorrow and wants you to choose." Read aloud to ${config.ASSISTANT_PRINCIPAL_NAME} ` +
+  'before they decide, and sent to them afterwards; never to the other party.';
+
 export function defineTransferTool<Ctx extends TransferContext>(opts: {
   onTransferred: (input: { reason: string }, ctx: Ctx) => Promise<void>;
 }): VoiceTool<{ reason: string }, Ctx> {
   return defineVoiceTool<{ reason: string }, Ctx>({
     name: TRANSFER_TOOL_NAME,
-    description: `Connect the other party to ${config.ASSISTANT_PRINCIPAL_NAME} directly, by phone. Use only when they need ${config.ASSISTANT_PRINCIPAL_NAME} personally and have said yes to being connected. Say one short handoff line first; you are off the call once this runs.`,
+    description: config.TRANSFER_MODE === 'warm' ? WARM_DESCRIPTION : COLD_DESCRIPTION,
     schema: z.object({
-      reason: z
-        .string()
-        .min(1)
-        .describe(`Why they need ${config.ASSISTANT_PRINCIPAL_NAME}, e.g. "they need a card number to hold the table". Sent to ${config.ASSISTANT_PRINCIPAL_NAME}; not spoken to the other party.`),
+      reason: (config.TRANSFER_MODE === 'warm' ? z.string().min(1).max(TRANSFER_REASON_MAX_CHARS) : z.string().min(1)).describe(config.TRANSFER_MODE === 'warm' ? WARM_REASON : COLD_REASON),
     }),
     endsCall: true,
-    handlerBudgetMs: TRANSFER_HANDLER_BUDGET_MS,
+    handlerBudgetMs: config.TRANSFER_MODE === 'warm' ? WARM_TRANSFER_HANDLER_BUDGET_MS : TRANSFER_HANDLER_BUDGET_MS,
     // Deliberately not wrapped in runToolSafely — see TRANSFER_HANDLER_BUDGET_MS.
     handler: async (input, ctx: Ctx) => {
       try {
-        await transferAfterSpeaking(ctx);
+        if (config.TRANSFER_MODE === 'warm') {
+          const result = await loopInAfterSpeaking(ctx, input.reason);
+          if (result !== 'accepted') return ownerUnavailable(result);
+        } else {
+          await transferAfterSpeaking(ctx);
+        }
       } catch (err) {
         log.warn({ err, callId: ctx.callId }, 'transfer failed — the call is still ours');
         return { ok: false as const, error: 'transfer_failed' as const, message: err instanceof Error ? err.message : String(err) };

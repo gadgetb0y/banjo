@@ -38,6 +38,8 @@ interface TwilioHttpHooks {
   buildTransferScreenTwiml(callId: string): string;
   acceptTransferScreen(callId: string, digits: string): string;
   takeTransferAccepted(callId: string): boolean;
+  acceptLoopIn(callId: string, digits: string): Promise<string>;
+  handleLoopInStatus(callId: string, callStatus: string): void;
 }
 
 /**
@@ -201,6 +203,37 @@ app.post('/telephony/twilio/transfer-screen-result', async (c) => {
   const digits = typeof body.Digits === 'string' ? body.Digits : '';
   logger.info({ callId, accepted: digits === '1' }, 'transfer screen answered');
   return c.body(telephony.acceptTransferScreen(callId, digits), 200, { 'Content-Type': 'text/xml' });
+});
+
+/**
+ * The owner's key press on a warm transfer (#149), from the <Gather action> on
+ * their leg. The TwiML returned runs on their leg: the bridge on a 1, a
+ * hang-up otherwise. transfer_to_owner records the result, timeouts included.
+ */
+app.post('/telephony/twilio/loop-in-result', async (c) => {
+  const body = await c.req.parseBody();
+  if (!isValidTwilioSignature(c, body as Record<string, string>)) {
+    logger.warn({ path: c.req.path }, 'rejected Twilio webhook with invalid or missing signature');
+    return c.body(null, 403);
+  }
+  const callId = c.req.query('callId') ?? '';
+  const digits = typeof body.Digits === 'string' ? body.Digits : '';
+  logger.info({ callId, accepted: digits === '1' }, 'warm transfer: the owner answered the prompt');
+  const twiml = await telephony.acceptLoopIn(callId, digits);
+  return c.body(twiml, 200, { 'Content-Type': 'text/xml' });
+});
+
+/** The owner's leg of a warm transfer ended (#149): busy, unanswered, or hung up without a key press. */
+app.post('/telephony/twilio/loop-in-status', async (c) => {
+  const body = await c.req.parseBody();
+  if (!isValidTwilioSignature(c, body as Record<string, string>)) {
+    logger.warn({ path: c.req.path }, 'rejected Twilio webhook with invalid or missing signature');
+    return c.body(null, 403);
+  }
+  const callId = c.req.query('callId') ?? '';
+  const callStatus = typeof body.CallStatus === 'string' ? body.CallStatus : '';
+  telephony.handleLoopInStatus(callId, callStatus);
+  return c.body(null, 204);
 });
 
 /**

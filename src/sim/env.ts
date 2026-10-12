@@ -28,7 +28,7 @@ export function simDatabaseUrl(databaseUrl: string | undefined): string {
   return url.toString();
 }
 
-export function simEnv(base: Record<string, string | undefined>, opts: { transfer: boolean; verbose: boolean }): Record<string, string> {
+export function simEnv(base: Record<string, string | undefined>, opts: { transfer: boolean; warm?: boolean; verbose: boolean }): Record<string, string> {
   const placeholders: Record<string, string> = {
     TWILIO_ACCOUNT_SID: 'ACsimulator',
     TWILIO_AUTH_TOKEN: 'simulator',
@@ -52,6 +52,7 @@ export function simEnv(base: Record<string, string | undefined>, opts: { transfe
     PERSIST_TRANSCRIPTS: 'true',
     INBOUND_BOOKING_ENABLED: 'false',
     TRANSFER_ENABLED: String(opts.transfer),
+    TRANSFER_MODE: opts.warm ? 'warm' : 'cold',
     // Where a transfer would go. Fictional, and the sim's phone line only reports it.
     ...(opts.transfer ? { TRANSFER_TO_PHONE_NUMBER: SIM_OWNER_NUMBER } : {}),
     LOG_LEVEL: opts.verbose ? 'info' : 'warn',

@@ -81,8 +81,9 @@ AI rather than waiting to be asked ([#8](https://github.com/shatch/banjo/issues/
 - **Calls later.** `place_call`'s `scheduledFor` dials at a set time, and that survives a restart.
 - **Handles voicemail and phone menus.** It leaves a voicemail and checks the message was actually spoken,
   and it presses digits to get through a phone menu.
-- **Hands a call to you.** Optional cold transfer when the other party asks for a person, with your leg
-  screened so only pressing 1 connects (`TRANSFER_ENABLED`).
+- **Hands a call to you.** Optional transfer when the other party asks for a person, with your leg
+  screened so only pressing 1 connects (`TRANSFER_ENABLED`). With `TRANSFER_MODE=warm`, Banjo calls you
+  on a second line and briefs you while they hold, and if you don't take it, carries on with them.
 - **Answers your number.** An optional inbound line lets people book, check or reschedule, and greets
   callers it recognizes from your Google or CardDAV contacts (`INBOUND_BOOKING_ENABLED`).
 
@@ -204,7 +205,8 @@ You: Claudia's Dog Grooming, how can I help?
 Banjo: Hi, I'm an AI assistant calling on behalf of Alex. We'd like to book a full grooming for Banjo, a golden retriever...
 ```
 
-Options: `--business`, `--goal`, `--mode conversation`, `--duration`, `--transfer`, and
+Options: `--business`, `--goal`, `--mode conversation`, `--duration`, `--transfer` (or `--warm` with
+`--owner accept|decline|no-answer`), and
 `--script <file>` to play your side from a file. Run `npm run sim -- --help` or see the top of
 `scripts/sim.ts`. The sim keeps its records in a separate `banjo_sim` database, which it empties at
 the start of each run, and never touches your real one.

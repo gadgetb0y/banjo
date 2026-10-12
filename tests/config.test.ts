@@ -31,7 +31,7 @@ const ALL_CONFIG_KEYS = [
   'MCP_API_KEY', 'TOOL_TIMEOUT_MS', 'LOG_TRANSCRIPTS',
   'INBOUND_BOOKING_ENABLED', 'BUSINESS_HOURS_DAYS', 'BUSINESS_HOURS_START', 'BUSINESS_HOURS_END',
   'INBOUND_DEFAULT_DURATION_MINUTES', 'INBOUND_MAX_LOOKAHEAD_DAYS', 'ASSISTANT_PRINCIPAL_NAME', 'DISCLOSURE_LINE', 'RECORD_CALLS', 'RECORDING_RETENTION_DAYS',
-  'TRANSFER_ENABLED', 'TRANSFER_TO_PHONE_NUMBER', 'TRANSFER_FALLBACK_MESSAGE',
+  'TRANSFER_ENABLED', 'TRANSFER_TO_PHONE_NUMBER', 'TRANSFER_FALLBACK_MESSAGE', 'TRANSFER_MODE',
 ];
 
 function setEnv(overrides: Record<string, string | undefined>) {
@@ -364,6 +364,15 @@ describe('config: env schema', () => {
       const { config } = await import('../src/config/index.js');
       expect(config.TRANSFER_ENABLED).toBe(false);
       expect(config.TRANSFER_FALLBACK_MESSAGE).toMatch(/couldn't be reached/);
+      expect(config.TRANSFER_MODE).toBe('cold');
+    });
+
+    it('takes TRANSFER_MODE warm, and refuses anything but cold or warm (#149)', async () => {
+      setEnv({ TRANSFER_MODE: 'warm' });
+      expect((await import('../src/config/index.js')).config.TRANSFER_MODE).toBe('warm');
+      vi.resetModules();
+      setEnv({ TRANSFER_MODE: 'lukewarm' });
+      await expect(import('../src/config/index.js')).rejects.toThrow(/TRANSFER_MODE/);
     });
 
     it('requires TRANSFER_TO_PHONE_NUMBER when enabled', async () => {

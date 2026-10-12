@@ -38,12 +38,16 @@ Options:
   --duration <minutes>   Appointment length to negotiate. Default: 60.
   --window-days <n>      How many days out Banjo may book. Default: 3.
   --transfer             Offer transfer_to_owner, as with TRANSFER_ENABLED=true.
+  --warm                 Make it a warm transfer (TRANSFER_MODE=warm). Implies --transfer.
+  --owner <answer>       With --warm: what the owner does. accept|decline|no-answer. Default: accept.
   --script <file>        Read your lines from a file, one per line (# for comments).
   --verbose              Show the app's info-level logs.
   -h, --help             Show this.
 
 While the call runs: type a line and press Enter to say it. /hangup hangs up
 on Banjo; Ctrl+C does the same.`;
+
+const OWNER_ANSWERS = { accept: 'accepted', decline: 'declined', 'no-answer': 'no_answer' } as const;
 
 const CATEGORIES = ['salon', 'medical', 'restaurant', 'home_services', 'other'] as const;
 type Category = (typeof CATEGORIES)[number];
@@ -63,6 +67,8 @@ async function main(): Promise<void> {
       duration: { type: 'string', default: '60' },
       'window-days': { type: 'string', default: '3' },
       transfer: { type: 'boolean', default: false },
+      warm: { type: 'boolean', default: false },
+      owner: { type: 'string', default: 'accept' },
       script: { type: 'string' },
       verbose: { type: 'boolean', default: false },
       help: { type: 'boolean', short: 'h', default: false },
@@ -83,7 +89,10 @@ async function main(): Promise<void> {
   // .env first, then the sim's own values over it: config reads process.env at
   // import, and dotenv never overwrites what is already set.
   dotenv.config({ path: process.env.DOTENV_CONFIG_PATH, quiet: true });
-  Object.assign(process.env, simEnv(process.env, { transfer: values.transfer, verbose: values.verbose }));
+  const owner = OWNER_ANSWERS[values.owner as keyof typeof OWNER_ANSWERS];
+  if (!owner) fail(`--owner must be accept, decline or no-answer (got "${values.owner}").`);
+  const transfer = values.transfer || values.warm;
+  Object.assign(process.env, simEnv(process.env, { transfer, warm: values.warm, verbose: values.verbose }));
   if (!process.env.OPENAI_API_KEY) fail('OPENAI_API_KEY is not set. Add it to .env or the environment: the sim talks to OpenAI Realtime.');
 
   await ensureSimDatabase(process.env.DATABASE_URL!);
@@ -117,6 +126,7 @@ async function main(): Promise<void> {
     durationMinutes,
     windowDays,
     createVoiceAI: () => new OpenAIRealtimeProvider({ textOnly: true }),
+    owner,
     print,
   });
   process.on('SIGINT', () => call.telephony.calleeHangsUp());
