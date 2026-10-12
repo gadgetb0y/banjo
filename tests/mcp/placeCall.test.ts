@@ -28,6 +28,14 @@ describe('mcp: place_call schema', () => {
     expect(placeCallInputSchema.safeParse({ ...base, mode: 'conversation' }).success).toBe(true);
   });
 
+  it("accepts mode 'ask' with up to 5 questions, and rejects more, or an empty one (#148)", () => {
+    const base = { contactId: CONTACT_ID, taskDescription: 'Find out their Saturday hours', mode: 'ask' };
+    expect(placeCallInputSchema.safeParse({ ...base, questions: ['When do you close Saturday?'] }).success).toBe(true);
+    expect(placeCallInputSchema.safeParse({ ...base, questions: ['a', 'b', 'c', 'd', 'e', 'f'] }).success).toBe(false);
+    expect(placeCallInputSchema.safeParse({ ...base, questions: ['  '] }).success).toBe(false);
+    expect(placeCallInputSchema.safeParse({ ...base, questions: [] }).success).toBe(false);
+  });
+
   it('rejects an invalid mode value', () => {
     const result = placeCallInputSchema.safeParse({
       contactId: CONTACT_ID,
@@ -189,6 +197,38 @@ describe('mcp: place_call date windows', () => {
         constraints: { dateWindows: [{ start: 'next tuesday', end: '2026-10-01T18:00:00' }] },
       }),
     ).rejects.toThrow(/dateWindows/);
+    expect(createTask).not.toHaveBeenCalled();
+  });
+});
+
+describe("mcp: place_call with mode 'ask' (#148)", () => {
+  beforeEach(() => {
+    createTask.mockClear();
+    triggerOrchestration.mockClear();
+  });
+
+  it('stores the questions on the task and starts the call', async () => {
+    await placeCallHandler({
+      contactId: CONTACT_ID,
+      taskDescription: 'Find out their Saturday hours',
+      mode: 'ask',
+      questions: ['When do you close Saturday?'],
+    });
+    expect(createTask).toHaveBeenCalledWith(expect.objectContaining({ mode: 'ask', questions: ['When do you close Saturday?'] }));
+    expect(triggerOrchestration).toHaveBeenCalledWith('task-1');
+  });
+
+  it('refuses an ask call with no questions, before creating anything', async () => {
+    await expect(placeCallHandler({ contactId: CONTACT_ID, taskDescription: 'Find out their hours', mode: 'ask' })).rejects.toThrow(
+      "mode 'ask' needs at least one question",
+    );
+    expect(createTask).not.toHaveBeenCalled();
+  });
+
+  it('refuses questions on a booking call', async () => {
+    await expect(
+      placeCallHandler({ contactId: CONTACT_ID, taskDescription: 'Book a haircut', questions: ['Any openings?'] }),
+    ).rejects.toThrow("`questions` is only for mode 'ask'");
     expect(createTask).not.toHaveBeenCalled();
   });
 });

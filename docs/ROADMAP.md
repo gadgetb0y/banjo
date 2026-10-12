@@ -316,8 +316,9 @@ refusal path, and fails closed: if the check errors, no call is placed.
 ### 4.7 Errands beyond booking
 
 - **Call and ask** ([#148]): hours, stock, a quote, availability, with a structured answer back
-  to the agent. Mostly prompt and outcome-shape work; `end_conversation_call` already covers the
-  ending.
+  to the agent. **Shipped** as `place_call`'s `mode: 'ask'` with `questions`: the task ends
+  `answered`, with `outcome.answers` holding one entry per question. Ask calls get no calendar
+  tools, and they book and agree to nothing.
 - **Cancel or reschedule** an appointment Banjo booked, keyed off the stored outcome so Postgres
   stays the source of truth.
 - **Warm loop-in** ([#149]): today's `transfer_to_owner` is a cold transfer, so a principal who

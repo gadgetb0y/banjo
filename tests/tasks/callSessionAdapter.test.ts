@@ -159,6 +159,23 @@ describe('buildOutboundCallSessionOptions', () => {
     expect(options.tools.some((t) => t.name === 'end_conversation_call')).toBe(false);
   });
 
+  it("gives an ask task report_answers_and_end_call and none of the booking tools (#148)", () => {
+    const options = buildOutboundCallSessionOptions({
+      task: { ...fakeTask, mode: 'ask' } as Task,
+      callAttempt: fakeCallAttempt,
+      contact: fakeContact,
+      telephony: fakeTelephony,
+      calendar: fakeCalendar,
+      systemPrompt: 'irrelevant for this test',
+    });
+    const names = options.tools.map((t) => t.name);
+    expect(names).toContain('report_answers_and_end_call');
+    for (const kept of ['press_digits', 'leave_voicemail_and_end_call', 'escalate_and_end_call', 'end_call']) expect(names).toContain(kept);
+    for (const dropped of ['check_my_availability', 'confirm_appointment', 'undo_confirmed_appointment', 'report_negotiation_failed', 'end_conversation_call']) {
+      expect(names).not.toContain(dropped);
+    }
+  });
+
   it('adds end_conversation_call to the tool set for a conversation-mode task, without removing anything', () => {
     const bookingOptions = buildOutboundCallSessionOptions({
       task: { ...fakeTask, mode: 'booking' } as Task,

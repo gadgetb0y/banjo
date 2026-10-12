@@ -84,6 +84,7 @@ const TITLES: Record<TaskOutcome['kind'], string> = {
   failed: 'Banjo: call failed',
   conversation_completed: 'Banjo: call finished',
   transferred: 'Banjo: transferred a call to you',
+  answered: 'Banjo: got your answers',
 };
 
 export class PushoverNotificationChannel implements NotificationChannel {

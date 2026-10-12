@@ -6,6 +6,7 @@ import { formatInZone, formatSpokenInZone, zonedTimeToUtcIso } from '../../lib/t
 import { TimeoutError, withTimeout } from '../../lib/withTimeout.js';
 import { sendOwnerMessage } from '../../notifications/owner.js';
 import type { CallContext } from '../../session/types.js';
+import type { TaskAnswer } from '../../tasks/schema.js';
 import { isTerminalStatus, transitionTask } from '../../tasks/service.js';
 import type { TelephonyProvider } from '../../telephony/providers/types.js';
 import type { ToolDefinition } from '../types.js';
@@ -579,6 +580,67 @@ export const endConversationCallTool: VoiceTool<{ summary: string }> = defineVoi
     return runToolSafely('end_conversation_call', async () => {
       await transitionTask(ctx.task.id, 'conversation_completed', {
         outcome: { kind: 'conversation_completed', summary: input.summary },
+      });
+      await hangUpAfterSpeaking(ctx);
+      return { ok: true };
+    });
+  },
+});
+
+/**
+ * Pairs the model's answers with the task's own questions (#148), by number:
+ * the stored question text goes into the outcome, never the model's
+ * paraphrase of it. A question the model skipped, numbered twice, or marked
+ * answered with no answer text is recorded as not answered, so the outcome
+ * always has exactly one entry per question.
+ */
+export function answersFor(
+  questions: string[],
+  reported: { question: number; answered: boolean; answer?: string }[],
+): TaskAnswer[] {
+  return questions.map((question, i) => {
+    const report = reported.find((r) => r.question === i + 1);
+    const answer = report?.answer?.trim();
+    return report?.answered && answer ? { question, answered: true, answer } : { question, answered: false };
+  });
+}
+
+export const reportAnswersAndEndCallTool: VoiceTool<{
+  answers: { question: number; answered: boolean; answer?: string }[];
+  summary?: string;
+}> = defineVoiceTool({
+  name: 'report_answers_and_end_call',
+  description:
+    'Use this to end the call once you have asked every question on your list and they have answered what they ' +
+    "can. Record one entry per question, by its number: what they said, in a short plain sentence, or answered: " +
+    "false if they didn't know, wouldn't say, or you never got to it. Record only what they actually told you on " +
+    'this call. Never fill a gap with a guess. This is the normal, successful end of this call, even if some ' +
+    'questions went unanswered.' +
+    BEFORE_ENDING,
+  schema: z.object({
+    answers: z
+      .array(
+        z.object({
+          question: z.number().int().positive().describe('The question\'s number in your list, starting at 1.'),
+          answered: z.boolean().describe('Whether they gave you an answer to this question.'),
+          answer: z.string().optional().describe('Their answer, in a short plain sentence. Leave out if not answered.'),
+        }),
+      )
+      .describe('One entry per question on your list.'),
+    summary: z.string().optional().describe('Anything else worth passing on that they told you, briefly. Leave out if nothing.'),
+  }),
+  endsCall: true,
+  yieldsToCallee: true,
+  requiresGoodbye: true,
+  handler: async (input, ctx) => {
+    return runToolSafely('report_answers_and_end_call', async () => {
+      const summary = input.summary?.trim();
+      await transitionTask(ctx.task.id, 'answered', {
+        outcome: {
+          kind: 'answered',
+          answers: answersFor(ctx.task.questions ?? [], input.answers),
+          ...(summary ? { summary } : {}),
+        },
       });
       await hangUpAfterSpeaking(ctx);
       return { ok: true };

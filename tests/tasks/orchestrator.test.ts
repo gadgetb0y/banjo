@@ -237,3 +237,21 @@ describe('resuming a checking_availability task (#64)', () => {
     expect(notifyTaskOutcome).not.toHaveBeenCalled();
   });
 });
+
+describe("an 'ask' task (#148)", () => {
+  it('dials without looking up free time: it books nothing', async () => {
+    getTask.mockResolvedValue({ id: 'task-ask', channel: 'phone', status: 'pending', mode: 'ask', contactId: 'contact-3', constraints: {} });
+    getContact.mockResolvedValue({ id: 'contact-3' });
+    transitionTask.mockImplementation(async (id: string, status: string) => ({ id, status }));
+    createCallAttempt.mockResolvedValueOnce({ id: 'attempt-ask' });
+    CallSession.mockImplementation(function () {
+      return { start: async () => { throw new Error('stop here'); } };
+    });
+
+    triggerOrchestration('task-ask');
+    await vi.waitFor(() => expect(CallSession).toHaveBeenCalled());
+
+    expect(computeCandidateWindows).not.toHaveBeenCalled();
+    expect(transitionTask).toHaveBeenCalledWith('task-ask', 'calling', { candidateWindows: [] }, expect.objectContaining({ from: ['checking_availability'] }));
+  });
+});

@@ -14,6 +14,18 @@ describe('buildOutcomeSummary', () => {
     expect(summary).toContain('Thanked them for hosting; said the visit was great.');
   });
 
+  it('lists an ask call\'s questions with their answers (#148)', () => {
+    const summary = buildOutcomeSummary(contact, {
+      kind: 'answered',
+      answers: [
+        { question: 'Open Sunday?', answered: true, answer: 'No, closed Sundays.' },
+        { question: 'Walk-ins?', answered: false },
+      ],
+      summary: 'Busy on Saturdays.',
+    });
+    expect(summary).toBe('Asked Alex:\n1. Open Sunday? No, closed Sundays.\n2. Walk-ins? (no answer)\nBusy on Saturdays.');
+  });
+
   it('still summarizes a confirmed outcome (existing behavior unchanged)', () => {
     const summary = buildOutcomeSummary(contact, {
       kind: 'confirmed',

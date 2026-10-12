@@ -71,6 +71,13 @@ export function buildWebhookText(contact: Pick<Contact, 'displayName'>, outcome:
         return `Banjo finished a call with ${name}.`;
       case 'transferred':
         return `Banjo transferred a call from ${name} to the owner.`;
+      case 'answered': {
+        // Counts only: the questions came from the requesting agent and the
+        // answers from the call, so both stay in outcome.
+        const total = outcome.answers.length;
+        const answered = outcome.answers.filter((a) => a.answered).length;
+        return `Banjo asked ${name} ${total} question${total === 1 ? '' : 's'}: ${answered} answered.`;
+      }
     }
   })();
   const disclosed = disclosure === 'missed' ? " Banjo didn't say it was an AI at the start of this call." : '';

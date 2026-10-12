@@ -12,7 +12,7 @@ import { buildWebhookText, sendTaskWebhook } from '../notifications/webhook.js';
 import { pressDigitsTool } from '../telephony/dtmf.js';
 import type { TelephonyProvider } from '../telephony/providers/types.js';
 import { defineTransferTool } from '../telephony/transfer.js';
-import { callTools, endConversationCallTool } from '../voice/tools/callTools.js';
+import { callTools, endConversationCallTool, reportAnswersAndEndCallTool } from '../voice/tools/callTools.js';
 import type { VoiceTool } from '../voice/tools/defineVoiceTool.js';
 import { unregisterLiveCall } from './liveCalls.js';
 import { getTask, isTerminalStatus, transitionTask, updateCallAttempt } from './service.js';
@@ -93,15 +93,28 @@ export const transferToOwnerTool = defineTransferTool<CallContext>({
 
 /** All live-call tools for an outbound call, keyed by name — check_my_availability/confirm_appointment/etc.
  *  (backend-service tools) plus press_digits (telephony-layer, routed differently — see telephony/dtmf.ts).
+ *  'ask' tasks (#148) drop the booking tools and get report_answers_and_end_call.
  *  Conversation-mode tasks additionally get end_conversation_call — see docs/superpowers/specs/
  *  2026-08-12-outbound-conversational-call-design.md for why this is additive, not a separate restricted set.
  *  transfer_to_owner is added only when TRANSFER_ENABLED is on (#7). */
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 function outboundToolsFor(task: Task): VoiceTool<any, CallContext>[] {
-  const base: VoiceTool<any, CallContext>[] = [...callTools, pressDigitsTool];
+  // An 'ask' call books nothing and agrees to nothing (#148): no calendar
+  // tools and no negotiation outcome, just its own way to report back.
+  const shared = task.mode === 'ask' ? callTools.filter((tool) => !BOOKING_ONLY_TOOLS.has(tool.name)) : callTools;
+  const base: VoiceTool<any, CallContext>[] = [...shared, pressDigitsTool];
   if (config.TRANSFER_ENABLED) base.push(transferToOwnerTool);
-  return task.mode === 'conversation' ? [...base, endConversationCallTool] : base;
+  if (task.mode === 'conversation') return [...base, endConversationCallTool];
+  if (task.mode === 'ask') return [...base, reportAnswersAndEndCallTool];
+  return base;
 }
+
+const BOOKING_ONLY_TOOLS: ReadonlySet<string> = new Set([
+  'check_my_availability',
+  'confirm_appointment',
+  'undo_confirmed_appointment',
+  'report_negotiation_failed',
+]);
 
 /**
  * Reproduces exactly what CallSession used to do by importing

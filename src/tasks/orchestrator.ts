@@ -121,10 +121,14 @@ async function runTask(taskId: string): Promise<void> {
     await failOverCallCap(task.id, describeCallCapRefusal(earlyCap), stillOurs);
     return;
   }
-  const candidateWindows = await getCalendar().computeCandidateWindows({
-    dateWindows,
-    durationMinutes: task.constraints.durationMinutes ?? 30,
-  });
+  // An 'ask' call books nothing (#148), so there's no free time to look up.
+  const candidateWindows =
+    task.mode === 'ask'
+      ? []
+      : await getCalendar().computeCandidateWindows({
+          dateWindows,
+          durationMinutes: task.constraints.durationMinutes ?? 30,
+        });
   // The per-number call cap, checked again right before dialing: place_call
   // checked it when the call was requested, but a scheduled call can come due
   // after other calls to the same number. Held under a per-contact lock until

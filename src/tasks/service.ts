@@ -30,7 +30,9 @@ export async function createTask(input: {
   channel: 'phone' | 'online';
   goalDescription: string;
   constraints: TaskConstraints;
-  mode?: 'booking' | 'conversation';
+  mode?: Task['mode'];
+  /** 'ask' tasks only (#148): the questions to put to the other party, in order. */
+  questions?: string[];
   /** Phone path: place the call no earlier than this instant. Omit to call as soon as possible. */
   scheduledFor?: Date;
 }): Promise<Task> {
@@ -42,6 +44,7 @@ export async function createTask(input: {
       goalDescription: input.goalDescription,
       constraints: input.constraints,
       ...(input.mode ? { mode: input.mode } : {}),
+      ...(input.questions ? { questions: input.questions } : {}),
       ...(input.scheduledFor ? { scheduledFor: input.scheduledFor } : {}),
     })
     .returning();

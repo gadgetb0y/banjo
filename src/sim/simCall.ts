@@ -23,7 +23,9 @@ export interface SimCallOptions {
   business: string;
   category: NonNullable<NewContact['category']>;
   goal: string;
-  mode: 'booking' | 'conversation';
+  mode: 'booking' | 'conversation' | 'ask';
+  /** mode 'ask' only (#148): what Banjo should find out. */
+  questions?: string[];
   durationMinutes: number;
   windowDays: number;
   createVoiceAI: () => TextVoiceAIProvider;
@@ -74,6 +76,7 @@ export async function startSimCall(opts: SimCallOptions): Promise<SimCall> {
     contactId: contact.id,
     taskDescription: opts.goal,
     mode: opts.mode,
+    questions: opts.questions,
     constraints: {
       durationMinutes: opts.durationMinutes,
       dateWindows: [{ start: windowStart.toISOString(), end: windowEnd.toISOString() }],

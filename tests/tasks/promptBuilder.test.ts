@@ -216,3 +216,46 @@ describe('voicemail (#71)', () => {
     expect(prompt).not.toContain('the system speaks that message for you, verbatim,\nbefore hanging up');
   });
 });
+
+describe("buildCallSystemPrompt: mode 'ask' (#148)", () => {
+  const askTask = {
+    goalDescription: 'Find out their Saturday hours',
+    mode: 'ask',
+    questions: ['When do you close on Saturday?', 'Do you take walk-ins?'],
+  } as Task;
+
+  it('lists the questions by number and says how to report them', () => {
+    const prompt = buildCallSystemPrompt(askTask, contact, []);
+    expect(prompt).toContain('1. When do you close on Saturday?\n2. Do you take walk-ins?');
+    expect(prompt).toContain('report_answers_and_end_call');
+    expect(prompt).toContain('never fill in a guess');
+    expect(prompt).toContain('to ask some questions and report the answers back');
+  });
+
+  it('carries no booking instructions, free time, or negotiation outcome', () => {
+    const prompt = buildCallSystemPrompt(askTask, contact, [{ start: '2026-10-13T14:00:00Z', end: '2026-10-13T16:00:00Z' }]);
+    for (const bookingOnly of ['confirm_appointment', 'check_my_availability', 'report_negotiation_failed', 'is free during these ranges', 'to negotiate or book an appointment']) {
+      expect(prompt).not.toContain(bookingOnly);
+    }
+    // The shared endings are still there.
+    expect(prompt).toContain('leave_voicemail_and_end_call');
+    expect(prompt).toContain('escalate_and_end_call');
+  });
+
+  it('booking prompt is unchanged by the ask branch', () => {
+    const prompt = buildCallSystemPrompt(bookingTask, contact, []);
+    expect(prompt).toContain('to negotiate or book an appointment.');
+    expect(prompt).toContain(
+      'Once a specific time is agreed, call confirm_appointment with the confirmed start time and duration.\nIf you reach voicemail',
+    );
+    expect(prompt).toContain('report_negotiation_failed with a short reason.\nIf you get stuck');
+    expect(prompt).not.toContain('report_answers_and_end_call');
+  });
+
+  it('gives the voice layer the questions too, without the tool names', () => {
+    const prompt = buildCallFrontendPrompt(askTask, contact);
+    expect(prompt).toContain('1. When do you close on Saturday?');
+    expect(prompt).toContain('to ask some questions and report the answers back');
+    expect(prompt).not.toContain('report_answers_and_end_call');
+  });
+});

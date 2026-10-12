@@ -50,7 +50,8 @@ Steve, in conversation with Claude: "Schedule a haircut with Claudia"
               ├─ tool: confirm_appointment    → writes event to Steve's calendar, idempotent → status: confirmed
               ├─ tool: leave_voicemail_and_end_call → status: voicemail_left
               ├─ tool: report_negotiation_failed    → status: negotiation_failed (reached a human, nothing fit)
-              └─ tool: escalate_and_end_call        → status: escalated (genuinely stuck)
+              ├─ tool: escalate_and_end_call        → status: escalated (genuinely stuck)
+              └─ tool: report_answers_and_end_call  → status: answered (mode 'ask' only — see "Ask calls")
         → NotificationChannel.notify(taskId, outcome, summary) → Steve gets a text (or a Pushover push) either way
         → Steve later asks Claude "how'd that go?" → get_task_status / list_recent_tasks
 ```
@@ -367,6 +368,30 @@ Exposed over **HTTP/SSE (remote MCP)**, since Banjo runs as a persistent AWS ser
 - **Autonomous booking authority:** the AI can finalize/confirm on the call as long as the offered time fits the constraints Steve gave upfront — no mid-call check-back. This is a deliberate choice (see Skill vs. service split) distinct from channel selection, which *does* get a one-time check-in with Steve when unknown.
 
 ---
+
+## Ask calls (`mode: 'ask'`, #148)
+
+`place_call` with `mode: 'ask'` and 1–5 `questions` finds something out and books nothing. The
+questions are stored in `tasks.questions`. The differences from a booking call:
+
+- **No calendar.** The orchestrator skips the free-time lookup (`candidateWindows` is `[]`), and
+  `outboundToolsFor()` (`src/tasks/callSessionAdapter.ts`) leaves out `check_my_availability`,
+  `confirm_appointment`, `undo_confirmed_appointment` and `report_negotiation_failed`. The prompt
+  (`askModeGuidance()` in `src/tasks/promptBuilder.ts`) replaces the booking instructions with the
+  numbered questions, and says to decline any offer to book, hold, order or pay out loud.
+- **Read-backs.** Banjo says each answer back as it goes, so a misheard answer gets corrected while
+  the person is still on the line. It must not end the call in the same turn as the last read-back.
+- **Its own ending.** `report_answers_and_end_call` (`requiresGoodbye`, like the other normal
+  endings) moves the task to `answered`, with the outcome `{ kind: 'answered', answers, summary? }`.
+  The model reports answers by question number, and `answersFor()` pairs them with the stored
+  question text. The outcome therefore always has one entry per question, in order. An entry
+  with `answered: true` but no answer text is recorded as unanswered.
+
+`answers[].answer` and `summary` are written by the voice model from what was said on the call, so
+they are untrusted data like every other free-text outcome field. The webhook `text` gives counts
+only ("Banjo asked X 2 questions: 1 answered."). The owner's summary lists each question and answer.
+Voicemail, escalation, transfer and `end_call` (whose safety net still records `escalated`) work as
+on any call.
 
 ## Text-mode simulator (`src/sim/`, `scripts/sim.ts`)
 

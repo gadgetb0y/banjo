@@ -35,6 +35,10 @@ export function buildOutcomeSummary(contact: Contact, outcome: TaskOutcome): str
       return `Called ${contact.displayName}: ${outcome.summary}`;
     case 'transferred':
       return `Transferred ${contact.displayName} to you — ${outcome.reason}.`;
+    case 'answered': {
+      const answers = outcome.answers.map((a, i) => `${i + 1}. ${a.question} ${a.answered ? a.answer : '(no answer)'}`);
+      return [`Asked ${contact.displayName}:`, ...answers, ...(outcome.summary ? [outcome.summary] : [])].join('\n');
+    }
   }
 }
 

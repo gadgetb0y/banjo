@@ -103,6 +103,54 @@ escalate_and_end_call is still the right call if something genuinely goes wrong 
 understand each other, you're truly stuck) — just not as a way to wrap up a conversation that went normally.`;
 }
 
+/** The task's questions as a numbered list, the numbers report_answers_and_end_call records them by. */
+function numberedQuestions(task: Task): string {
+  return (task.questions ?? []).map((q, i) => `${i + 1}. ${q}`).join('\n');
+}
+
+/**
+ * An 'ask' call (#148) in place of the booking instructions: no free time, no
+ * calendar tools, nothing agreed. The read-back is the errand's equivalent of
+ * a booking's (#44): the one sentence that catches a misheard answer while
+ * the person who gave it is still on the line.
+ */
+function askModeGuidance(task: Task): string {
+  const principal = config.ASSISTANT_PRINCIPAL_NAME;
+  return `Your questions, in order:
+${numberedQuestions(task)}
+
+This call is only to find things out for ${principal}. It books nothing and agrees to nothing. If they offer to book,
+hold, order or reserve something, or ask for a deposit, payment or personal details, answer them out loud: thank
+them, say you're only calling to ask today, and do not agree to it.
+Ask one question at a time, and let them answer before the next. When they answer, say it back in a few words as
+you go, so they can correct you ("Six on Saturdays, got it. And how much is…"). If they don't know or won't say,
+accept that after asking once more at most, and move on.
+After the last answer, say it back and let them reply before you end the call: never end it in the same turn as a
+read-back or a question. Then say goodbye and call report_answers_and_end_call in that same turn, with one entry
+per question by its number. Record only what they actually told you on this call; never fill in a guess. This is
+the normal, successful end of the call, even if some questions went unanswered.
+`;
+}
+
+function bookingGuidance(candidateWindows: TimeWindow[]): string {
+  return `${config.ASSISTANT_PRINCIPAL_NAME} is free during these ranges (${config.CALENDAR_TIMEZONE} local time): ${formatWindows(candidateWindows)}.
+You may offer or accept any appointment that fits entirely inside one of these ranges, start to finish, without
+checking back with anyone. When you suggest a time yourself, only suggest start times that leave the whole
+appointment inside one of these ranges — never a time you have not seen here or checked.
+These ranges are for you to check against: never read these ranges out, or list ${config.ASSISTANT_PRINCIPAL_NAME}'s
+free time, to the other party. Let them say what they have first; if you need to suggest something,
+offer one or two specific times, not a schedule.
+If the other party offers a time outside these ranges, call check_my_availability(date, time, durationMinutes)
+to check live before agreeing — do not assume it's free or unavailable.
+
+Once a specific time is agreed, call confirm_appointment with the confirmed start time and duration.
+`;
+}
+
+const NEGOTIATION_FAILED_GUIDANCE = `If you reach a human who engages properly but no offered time fits the constraints (e.g. fully booked), call
+report_negotiation_failed with a short reason.
+`;
+
 /**
  * Builds the call-specific system prompt injected into the VoiceAIProvider
  * session. The precomputed candidateWindows are an optimization/starting
@@ -117,31 +165,19 @@ export function buildCallSystemPrompt(
   candidateWindows: TimeWindow[],
   ownerProfile?: string,
 ): string {
+  const ask = task.mode === 'ask';
   return `
-${buildBaseSystemPromptGuidance()}
+${buildBaseSystemPromptGuidance('outbound', { purpose: ask ? 'ask' : 'book' })}
 
 You are calling ${contact.displayName} on behalf of ${config.ASSISTANT_PRINCIPAL_NAME} to: ${task.goalDescription}.
 
 Contact context: ${contact.notes ?? '(no notes on file)'}${taskDetails(task)}
 
-${config.ASSISTANT_PRINCIPAL_NAME} is free during these ranges (${config.CALENDAR_TIMEZONE} local time): ${formatWindows(candidateWindows)}.
-You may offer or accept any appointment that fits entirely inside one of these ranges, start to finish, without
-checking back with anyone. When you suggest a time yourself, only suggest start times that leave the whole
-appointment inside one of these ranges — never a time you have not seen here or checked.
-These ranges are for you to check against: never read these ranges out, or list ${config.ASSISTANT_PRINCIPAL_NAME}'s
-free time, to the other party. Let them say what they have first; if you need to suggest something,
-offer one or two specific times, not a schedule.
-If the other party offers a time outside these ranges, call check_my_availability(date, time, durationMinutes)
-to check live before agreeing — do not assume it's free or unavailable.
-
-Once a specific time is agreed, call confirm_appointment with the confirmed start time and duration.
-If you reach voicemail, call leave_voicemail_and_end_call right away, without saying anything first, with a concise,
+${ask ? askModeGuidance(task) : bookingGuidance(candidateWindows)}If you reach voicemail, call leave_voicemail_and_end_call right away, without saying anything first, with a concise,
 natural message (including a callback number if one was given to you) as the message argument. The system opens the
 voicemail with the AI disclosure, then says your message verbatim, then hangs up. Leave the AI disclosure out of the message,
 and do not say the message yourself; the callee would hear it twice.
-If you reach a human who engages properly but no offered time fits the constraints (e.g. fully booked), call
-report_negotiation_failed with a short reason.
-If you get stuck — a confusing phone menu, a hostile or nonsensical response, or you genuinely cannot proceed —
+${ask ? '' : NEGOTIATION_FAILED_GUIDANCE}If you get stuck — a confusing phone menu, a hostile or nonsensical response, or you genuinely cannot proceed —
 call escalate_and_end_call with a short reason rather than guessing or looping indefinitely.
 If you're navigating a phone menu, use press_digits to select the relevant option; if you've tried a couple of
 options and still can't find a relevant one, escalate rather than keep guessing.${conversationModeGuidance(task)}${ownerProfileSection(ownerProfile)}
@@ -159,6 +195,18 @@ called to say and there's nothing more to add — then say goodbye and immediate
 call does not end when you say goodbye; it ends only when your backend ends it.`;
 }
 
+function askModeFrontendGuidance(task: Task): string {
+  if (task.mode !== 'ask') return '';
+  return `
+
+This call is only to find things out. Your questions, in order:
+${numberedQuestions(task)}
+Ask one at a time, and say each answer back in a few words as you go, so they can correct you. Agree to nothing:
+if they offer a booking, order, hold or payment, say out loud that you're only calling to ask today. After the last
+answer, say it back and let them reply; then say goodbye and immediately delegate ending the call, with the answers
+they gave.`;
+}
+
 /**
  * Voice-layer counterpart of buildCallSystemPrompt, for a VoiceAIProvider that
  * splits its voice front-end from a reasoning backend (openai-live — passed
@@ -170,10 +218,10 @@ call does not end when you say goodbye; it ends only when your backend ends it.`
  */
 export function buildCallFrontendPrompt(task: Task, contact: Contact, ownerProfile?: string): string {
   return `
-${buildFrontendSystemPromptGuidance()}
+${buildFrontendSystemPromptGuidance('outbound', { purpose: task.mode === 'ask' ? 'ask' : 'book' })}
 
 You are calling ${contact.displayName} on behalf of ${config.ASSISTANT_PRINCIPAL_NAME} to: ${task.goalDescription}.
 
-Contact context: ${contact.notes ?? '(no notes on file)'}${taskDetails(task)}${conversationModeFrontendGuidance(task)}${ownerProfileSection(ownerProfile)}
+Contact context: ${contact.notes ?? '(no notes on file)'}${taskDetails(task)}${conversationModeFrontendGuidance(task)}${askModeFrontendGuidance(task)}${ownerProfileSection(ownerProfile)}
 `.trim();
 }

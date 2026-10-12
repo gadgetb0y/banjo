@@ -3,7 +3,7 @@ import { contacts } from '../contacts/schema.js';
 
 export const taskChannelEnum = pgEnum('task_channel', ['phone', 'online']);
 
-export const taskModeEnum = pgEnum('task_mode', ['booking', 'conversation']);
+export const taskModeEnum = pgEnum('task_mode', ['booking', 'conversation', 'ask']);
 
 export const taskStatusEnum = pgEnum('task_status', [
   'pending', // created, not yet started
@@ -16,6 +16,7 @@ export const taskStatusEnum = pgEnum('task_status', [
   'escalated', // AI (or the skill, on the online path) got stuck
   'conversation_completed', // NEW — open-ended conversational call reached a natural close
   'transferred', // (phone path) handed to the principal via transfer_to_owner (#7)
+  'answered', // (phone path) an 'ask' call recorded its answers (#148), each one answered or not
   'failed', // technical failure (no answer, bad number, telephony/API error)
   'cancelled', // Steve cancelled before completion
 ]);
@@ -47,7 +48,20 @@ export type TaskOutcome =
   | { kind: 'escalated'; reason: string }
   | { kind: 'failed'; reason: string }
   | { kind: 'conversation_completed'; summary: string }
-  | { kind: 'transferred'; reason: string };
+  | { kind: 'transferred'; reason: string }
+  | { kind: 'answered'; answers: TaskAnswer[]; summary?: string };
+
+/**
+ * One of an 'ask' task's questions (#148), in the order place_call gave them.
+ * `question` is the task's own text, never the model's restatement of it;
+ * `answer` is written by the voice model from what the other party said, so
+ * like every other free-text outcome field it's data, not instructions.
+ */
+export interface TaskAnswer {
+  question: string;
+  answered: boolean;
+  answer?: string;
+}
 
 export const tasks = pgTable('tasks', {
   id: uuid('id').primaryKey().defaultRandom(),
@@ -58,6 +72,8 @@ export const tasks = pgTable('tasks', {
   mode: taskModeEnum('mode').notNull().default('booking'),
   goalDescription: text('goal_description').notNull(),
   constraints: jsonb('constraints').$type<TaskConstraints>().notNull(),
+  // 'ask' tasks only (#148): what to find out, in order. Null for every other mode.
+  questions: jsonb('questions').$type<string[]>(),
   status: taskStatusEnum('status').notNull().default('pending'),
   candidateWindows: jsonb('candidate_windows').$type<TimeWindow[]>(), // phone path only
   outcome: jsonb('outcome').$type<TaskOutcome | null>(),

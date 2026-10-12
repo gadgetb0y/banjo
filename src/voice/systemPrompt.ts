@@ -34,15 +34,20 @@ interface GuidanceSection {
  */
 interface GuidanceOptions {
   transfer?: boolean;
+  /** Outbound only: what the call is for. 'ask' (#148) finds things out and books nothing. Defaults to booking. */
+  purpose?: 'book' | 'ask';
 }
 
-function guidanceSections(direction: CallDirection, { transfer = config.TRANSFER_ENABLED }: GuidanceOptions = {}): GuidanceSection[] {
+function guidanceSections(
+  direction: CallDirection,
+  { transfer = config.TRANSFER_ENABLED, purpose = 'book' }: GuidanceOptions = {},
+): GuidanceSection[] {
   const sections: GuidanceSection[] = [
     {
       voiceLayer: true,
       lines: [
         direction === 'outbound'
-          ? `You are an AI assistant placing an outbound phone call on behalf of ${config.ASSISTANT_PRINCIPAL_NAME}, a human, to negotiate or book an appointment.`
+          ? `You are an AI assistant placing an outbound phone call on behalf of ${config.ASSISTANT_PRINCIPAL_NAME}, a human, ${purpose === 'ask' ? 'to ask some questions and report the answers back to them' : 'to negotiate or book an appointment'}.`
           : `You are an AI assistant answering an inbound phone call on ${config.ASSISTANT_PRINCIPAL_NAME}'s behalf, to help the caller book, look up, or reschedule an appointment on their calendar.`,
       ],
     },
@@ -256,6 +261,6 @@ export function buildBaseSystemPromptGuidance(direction: CallDirection = 'outbou
  */
 export function buildFrontendSystemPromptGuidance(direction: CallDirection = 'outbound', options: GuidanceOptions = {}): string {
   const { transfer = config.TRANSFER_ENABLED } = options;
-  const voiceSections = guidanceSections(direction, { transfer }).filter((section) => section.voiceLayer);
+  const voiceSections = guidanceSections(direction, { ...options, transfer }).filter((section) => section.voiceLayer);
   return renderSections([...voiceSections, { voiceLayer: true, lines: delegationGuidance(transfer) }]);
 }
