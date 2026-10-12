@@ -211,17 +211,28 @@ case as a supported path.
 ## Next
 
 **Why:** the gap now is reach, not capability. Banjo works, but almost nobody who would want it can
-find it, and almost nobody who finds it can try it. Meanwhile hosted calling services (ClawCall,
-Ring-a-Ding) have started filling the "give my agent a phone" slot in the OpenClaw and MCP
+find it, and almost nobody who finds it can try it. Meanwhile hosted calling services (Ring-a-Ding
+and others) have started filling the "give my agent a phone" slot in the OpenClaw and MCP
 ecosystems. They can't offer what Banjo can: self-hosted, your own number, your calendar and
 contacts, Postgres-checked bookings, and guardrails (call cap, AI disclosure) that make it safe to
 hand to an autonomous agent. Everything below either gets that in front of people or makes it
 easier to try. None of it changes what Banjo is (see `CONTRIBUTING.md`): no UI, no tenants,
 outbound first.
 
-Roughly in order. 4.1–4.4 are cheap and unblock each other; 4.5 should land before any launch.
+4.1–4.4 shipped in v0.1.4. The order for the rest, and why:
+
+1. **4.5 text simulator.** Needed before any launch, and wait-on-hold can't be built without one:
+   the per-number call cap rules out redialling one phone tree over and over, by design.
+2. **4.7 call and ask** ([#148]). Cheap, and every other errand is built on it.
+3. **4.7 warm loop-in** ([#149]). Wait-on-hold hands off through it.
+4. **4.7 wait on hold** ([#151]). The feature people would share, so it goes before launch.
+5. **Launch.**
+6. **4.6 owner approval and pre-dial screening** ([#150]), shipped and pitched together.
+7. **4.8 easier self-hosting and more vendors.**
 
 ### 4.1 Streamable HTTP transport for the MCP server
+
+> **Shipped** in v0.1.4.
 
 `src/mcp/server.ts` serves only the legacy HTTP+SSE transport (`/mcp/sse` + `/mcp/messages`),
 which the MCP spec has deprecated in favour of Streamable HTTP. Newer clients and the official MCP
@@ -232,6 +243,8 @@ stop every app restart from dropping the client's MCP session.
 
 ### 4.2 Agent-neutral skill, published to the skill registries
 
+> **Shipped** in v0.1.4.
+
 `skills/schedule-appointment/SKILL.md` is already in the open SKILL.md format that ClawHub
 (OpenClaw), agentskills.io (Hermes Agent) and skills.sh index. What ties it to Claude Code is
 its step 3, which names `mcp__plugin_playwright_playwright__*` and `claude-in-chrome` for the
@@ -240,6 +253,8 @@ connected") so one file works in any agent, then publish it. Consider a second, 
 (`phone-errand`) for non-booking calls, once 4.7 makes them first-class.
 
 ### 4.3 Directory listings and per-agent setup guides
+
+> **Shipped** in v0.1.4.
 
 - List the MCP server where people search for one: the official MCP Registry (needs a
   `server.json`), Glama, Smithery, and the Claude Code plugin marketplaces.
@@ -253,6 +268,8 @@ Each guide must say whether it was tested against a real install. Listing an unt
 supported is how a two-star repo gets a one-star review.
 
 ### 4.4 Push task results to the caller
+
+> **Shipped** in v0.1.4.
 
 Agents learn a call's outcome today by polling `get_task_status`. Claude Code with the skill can
 manage that, but an autonomous agent woken by a chat message has nothing to poll from. Add an
@@ -283,16 +300,28 @@ channel). Dialing starts only on accept, and the task expires to `cancelled` if 
 Together with the per-number call cap and AI disclosure, this is the "safe to give an agent a
 phone" story that hosted services don't tell.
 
+**Pre-dial screening** ([#150]) is the automatic layer for installs that don't want to approve
+every call. Opt-in `SCREEN_CALLS` checks a request before it's dialled. Refusing a number whose
+last call ended with "don't call me again" needs no model. A model check covers the instructions
+(e.g. a task asking Banjo to collect someone's card number or one-time code). The principal is
+trusted, but the agent calling `place_call` may be wrong or prompt-injected. It shares 4.6's
+refusal path, and fails closed: if the check errors, no call is placed.
+
 ### 4.7 Errands beyond booking
 
-- **Call and ask:** hours, stock, a quote, availability, with a structured answer back to the
-  agent. Mostly prompt and outcome-shape work; `end_conversation_call` already covers the ending.
+- **Call and ask** ([#148]): hours, stock, a quote, availability, with a structured answer back
+  to the agent. Mostly prompt and outcome-shape work; `end_conversation_call` already covers the
+  ending.
 - **Cancel or reschedule** an appointment Banjo booked, keyed off the stored outcome so Postgres
   stays the source of truth.
-- **Wait on hold:** get through the phone tree with `press_digits`, detect hold music or silence
-  without hanging up, and `transfer_to_owner` when a human answers. Needs a hold-aware silence
-  watchdog (today's would end the call) and an upper time limit. This is the feature people
-  would share.
+- **Warm loop-in** ([#149]): today's `transfer_to_owner` is a cold transfer, so a principal who
+  doesn't pick up sends the other party to voicemail. Instead, call the principal on a second
+  line, brief them, and bridge only on a yes; on a no, no answer or their voicemail, Banjo goes
+  back to the call and carries on.
+- **Wait on hold** ([#151]): get through the phone tree with `press_digits`, detect hold music
+  or silence without hanging up, and loop in the principal when a human answers. Needs a
+  hold-aware silence watchdog (today's would end the call), hold music kept from triggering server
+  VAD, and an upper time limit. This is the feature people would share.
 
 ### 4.8 Easier self-hosting and more vendors
 
@@ -306,5 +335,11 @@ phone" story that hosted services don't tell.
 
 ### Then launch
 
-Once 4.1–4.5 are in: Show HN, r/selfhosted and r/LocalLLaMA, pitched as the self-hosted alternative
-to hosted calling APIs, led by the "Hear it" audio and the simulator.
+Once 4.5 and the 4.7 errands above (#148, #149, #151) are in: Show HN, r/selfhosted and
+r/LocalLLaMA, pitched as the self-hosted alternative to hosted calling APIs, led by the "Hear it"
+audio and the simulator.
+
+[#148]: https://github.com/shatch/banjo/issues/148
+[#149]: https://github.com/shatch/banjo/issues/149
+[#150]: https://github.com/shatch/banjo/issues/150
+[#151]: https://github.com/shatch/banjo/issues/151
