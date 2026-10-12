@@ -2,6 +2,12 @@ import { TwilioProvider } from './providers/twilio.js';
 import type { TelephonyProvider } from './providers/types.js';
 
 let instance: TelephonyProvider | null = null;
+let override: TelephonyProvider | null = null;
+
+/** For the text simulator (scripts/sim.ts) only: every createTelephonyProvider() call returns `provider` until cleared with null. Nothing in src/ sets it. */
+export function overrideTelephonyProvider(provider: TelephonyProvider | null): void {
+  override = provider;
+}
 
 /**
  * Singleton by design — a single running ea process holds one active
@@ -17,6 +23,7 @@ let instance: TelephonyProvider | null = null;
  * second provider can still be added here without changing call sites.
  */
 export function createTelephonyProvider(): TelephonyProvider {
+  if (override) return override;
   if (!instance) instance = new TwilioProvider();
   return instance;
 }

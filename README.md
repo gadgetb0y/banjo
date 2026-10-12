@@ -183,6 +183,35 @@ quality cost. And don't run Banjo to save money against a SaaS subscription — 
 need a lot of calls, and the saving won't pay for an hour of your attention. Run it because it's
 yours.
 
+## Try it without a phone
+
+`npm run sim` runs a call in your terminal: Banjo calls a business, and you type as whoever answers.
+It's the real thing apart from the phone line: the same system prompt, tools and call handling, and the
+same task records in Postgres. No call is placed, no calendar is written (bookings go to a pretend
+calendar that's free 9 to 6), and nobody is notified. It needs only an OpenAI API key and Postgres.
+
+```bash
+docker compose up -d postgres
+echo "OPENAI_API_KEY=sk-..." >> .env    # skip if your .env already has it
+npm install
+npm run sim
+```
+
+```
+Banjo is calling Claudia's Dog Grooming for Alex.
+[The phone rings. You pick up.]
+You: Claudia's Dog Grooming, how can I help?
+Banjo: Hi, I'm an AI assistant calling on behalf of Alex. We'd like to book a full grooming for Banjo, a golden retriever...
+```
+
+Options: `--business`, `--goal`, `--mode conversation`, `--duration`, `--transfer`, and
+`--script <file>` to play your side from a file. Run `npm run sim -- --help` or see the top of
+`scripts/sim.ts`. The sim keeps its records in a separate `banjo_sim` database, which it empties at
+the start of each run, and never touches your real one.
+
+Text isn't audio. The sim tests what Banjo says and does, not how a call sounds: talking over each
+other, background noise and timing only show up on a real call.
+
 ## Quickstart
 
 Banjo needs four things before it can place a real call — get these first:
@@ -362,6 +391,7 @@ Vitest, Docker.
 | Command | What it does |
 | --- | --- |
 | `npm run setup` | Interactive setup: asks for the required settings, checks them, and writes `.env` |
+| `npm run sim` | Text-mode simulator: type as the business while Banjo calls it. No phone, no real calendar |
 | `npm run dev` | Run the server with hot reload (`tsx watch`) |
 | `npm run build` | Type-check and compile to `dist/` |
 | `npm test` | Run the Vitest suite |
@@ -392,6 +422,7 @@ src/
   mcp/           remote MCP server for tool-calling clients (e.g. Claude Code)
   session/       per-call state machine wiring telephony <-> voice AI <-> tools
   notifications/ outcome notifications (SMS by default, or Pushover)
+  sim/           text-mode simulator (npm run sim): fake phone line and calendar for the real call path
 skills/
   schedule-appointment/  companion Agent Skill — decides online vs. phone, drives online
                           booking via browser automation, calls into src/mcp/ for the phone path

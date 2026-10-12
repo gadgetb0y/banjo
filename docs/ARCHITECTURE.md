@@ -368,6 +368,34 @@ Exposed over **HTTP/SSE (remote MCP)**, since Banjo runs as a persistent AWS ser
 
 ---
 
+## Text-mode simulator (`src/sim/`, `scripts/sim.ts`)
+
+`npm run sim` places a call that's real everywhere except the phone line: the `place_call` handler,
+the orchestrator, the outbound `CallSession` adapter, the system prompt, every tool, and the rows in
+Postgres. Three things are swapped, each through an `override…Provider()` seam in its factory
+(`telephony/factory.ts`, `voice/factory.ts`, `calendar/factory.ts`), which nothing in `src/` sets:
+
+- **Phone line:** `SimTelephonyProvider`. It "answers" on the next tick, and reports digits, hang-ups
+  and transfers instead of carrying them out.
+- **Calendar:** `SimCalendarProvider`, in memory. It's free 9 to 6 in `CALENDAR_TIMEZONE`, with two
+  meetings tomorrow, and follows the real providers' idempotency and double-booking rules.
+- **Voice transport:** `OpenAIRealtimeProvider` in text-only mode. That's the same adapter and model,
+  but with `output_modalities: ['text']` and no audio config. Typed lines go in through
+  `sendUserText()`, which reports them as final user transcripts, so `CallSession` treats them
+  exactly like transcribed speech.
+
+`src/sim/env.ts` runs before config is imported. It forces everything that could reach the outside
+world off: no notifications, webhook or recording. It points `DATABASE_URL` at `banjo_sim` on the
+same server, and the sim refuses to empty any database with another name.
+
+**What it can't show:** anything that lives in audio. That includes server VAD and barge-in, pickup
+noise and echo (#143), the playback timing behind `hangUpAfterSpeaking`, and whether
+`sayVerbatim`'s words were actually spoken. With no audio, `estimatedAudioDoneAt` is always "now".
+Text replies can also differ a little from spoken ones. Use the sim for what Banjo says and which
+tools it calls, and a real call for how it sounds.
+
+---
+
 ## Configuration
 
 Zod-validated env schema (`src/config/index.ts`), parsed and validated at process start (imported first in `src/index.ts`) — the process fails fast on a missing/invalid value rather than discovering it mid-call. See `.env.example` for the full list of variables; cross-field `.refine()` checks enforce that only the credentials matching the *selected* `VOICE_AI_PROVIDER`/`TELEPHONY_PROVIDER`/`NOTIFICATION_CHANNEL` are required.

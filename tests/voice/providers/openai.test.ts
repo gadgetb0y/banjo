@@ -1,5 +1,6 @@
 import { EventEmitter } from 'node:events';
 import { describe, expect, it, vi } from 'vitest';
+import type { VoiceAIEvent } from '../../../src/voice/types.js';
 
 class FakeWs extends EventEmitter {
   static OPEN = 1;
@@ -233,5 +234,63 @@ describe('OpenAIRealtimeProvider.sendToolResult', () => {
     const { provider, ws } = await openProvider();
     provider.sendToolResult('call-1', { ok: false }, true, { respond: false });
     expect(sentTypes(ws)).toEqual(['conversation.item.create']);
+  });
+});
+
+// The simulator (scripts/sim.ts, ROADMAP 4.5): same adapter, text in and out.
+describe('OpenAIRealtimeProvider: text-only mode', () => {
+  async function open(options?: { textOnly?: boolean }) {
+    const provider = new OpenAIRealtimeProvider(options);
+    const connectPromise = provider.connect(sessionConfig);
+    const ws = wsInstances[wsInstances.length - 1]!;
+    ws.readyState = FakeWs.OPEN;
+    ws.emit('open');
+    await connectPromise;
+    const session = ws.sent.map((s) => JSON.parse(s)).find((m) => m.type === 'session.update').session;
+    ws.sent = [];
+    const events: VoiceAIEvent[] = [];
+    provider.on('event', (event) => events.push(event));
+    return { provider, ws, session, events };
+  }
+
+  it('asks for text output and sends no audio config', async () => {
+    const { session } = await open({ textOnly: true });
+    expect(session.output_modalities).toEqual(['text']);
+    expect(session).not.toHaveProperty('audio');
+    expect(session.instructions).toBe(sessionConfig.instructions);
+  });
+
+  it('leaves a real call’s session.update as it was: audio, no output_modalities', async () => {
+    const { session } = await open();
+    expect(session).not.toHaveProperty('output_modalities');
+    expect(session.audio.output.format).toEqual({ type: 'audio/pcmu' });
+  });
+
+  it('reports streamed text replies as assistant transcripts', async () => {
+    const { ws, events } = await open({ textOnly: true });
+    ws.emit('message', JSON.stringify({ type: 'response.output_text.delta', delta: 'Hi, ' }));
+    ws.emit('message', JSON.stringify({ type: 'response.output_text.done', text: "Hi, I'm an AI assistant." }));
+    expect(events).toEqual([
+      { type: 'transcript', role: 'assistant', text: 'Hi, ', isFinal: false },
+      { type: 'transcript', role: 'assistant', text: "Hi, I'm an AI assistant.", isFinal: true },
+    ]);
+  });
+
+  it('sends a typed line as a user message, prompts a reply, and reports it as a final user transcript', async () => {
+    const { provider, ws, events } = await open({ textOnly: true });
+    provider.sendUserText('Claudia’s, how can I help?');
+    expect(ws.sent.map((s) => JSON.parse(s))).toEqual([
+      {
+        type: 'conversation.item.create',
+        item: { type: 'message', role: 'user', content: [{ type: 'input_text', text: 'Claudia’s, how can I help?' }] },
+      },
+      { type: 'response.create' },
+    ]);
+    expect(events).toEqual([{ type: 'transcript', role: 'user', text: 'Claudia’s, how can I help?', isFinal: true }]);
+  });
+
+  it('refuses sendUserText on a real call', async () => {
+    const { provider } = await open();
+    expect(() => provider.sendUserText('hello')).toThrow(/text-only/);
   });
 });
