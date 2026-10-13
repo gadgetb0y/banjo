@@ -279,10 +279,12 @@ export async function sweepStaleCalls(): Promise<void> {
 
     // A Calendar outage must not stall the sweep — an honest "we don't know"
     // still beats leaving the task in limbo, which is the bug being fixed.
+    // Only a call that can book can have left a booking behind (#148 review r2).
+    const books = modeRules(task).books;
     let booked: Awaited<ReturnType<CalendarProvider['findEventByIdempotencyKey']>>;
     let calendarChecked = true;
     try {
-      booked = await getCalendar().findEventByIdempotencyKey(`confirm:${attempt.id}`);
+      if (books) booked = await getCalendar().findEventByIdempotencyKey(`confirm:${attempt.id}`);
     } catch (err) {
       calendarChecked = false;
       logger.error({ err, taskId: task.id }, 'stale-call sweep could not reach the calendar — reporting outcome as unknown');
@@ -325,7 +327,9 @@ export async function sweepStaleCalls(): Promise<void> {
             kind: 'failed',
             // Only claim the calendar was empty when it was actually read — a
             // failed lookup says nothing about whether a booking exists.
-            reason: calendarChecked
+            reason: !books
+              ? 'The call was interrupted before it finished, and no answers were saved. Its outcome is unknown.'
+              : calendarChecked
               ? 'The call was interrupted before it finished, and no booking was found on the calendar. Its outcome is unknown.'
               : 'The call was interrupted before it finished, and the calendar could not be checked for a booking — check it by hand. Its outcome is unknown.',
           },
