@@ -165,8 +165,24 @@ function guidanceSections(direction: CallDirection, { transfer = config.TRANSFER
   ];
 
   if (transfer) sections.push(transferSection(direction));
+  if (direction === 'outbound' && config.VOICE_AI_PROVIDER === 'openai') sections.push(HOLD_SECTION);
   return sections;
 }
+
+/**
+ * Phone menus and hold queues (#151). Outbound only, and only where the voice
+ * provider can wait on hold (OpenAI Realtime; see canWaitOnHold in
+ * tasks/callSessionAdapter.ts), since it names wait_on_hold.
+ */
+const HOLD_SECTION: GuidanceSection = {
+  voiceLayer: true,
+  lines: [
+    'Phone menus and holding:',
+    '- A recording never hears you. Never speak to an automated menu, a hold message or hold music: press digits, wait, or use wait_on_hold, silently.',
+    '- In a phone menu, listen to all the options before choosing. Pick the one closest to why you are calling; if none fits, the option for an operator, a representative or "all other questions" (often 0). If you have tried a couple of options and still are not getting anywhere, use escalate_and_end_call with stuckAt "phone_menu".',
+    '- As soon as you are in a queue (hold music, "please hold", "the next available representative", an estimated wait time), use wait_on_hold, saying nothing. You will be told when a live person picks up, and what they said; then open to them as the call\'s first words, with the AI disclosure.',
+  ],
+};
 
 /**
  * When to hand the call to the principal (#7). Only present when

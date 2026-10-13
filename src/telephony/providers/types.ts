@@ -65,6 +65,14 @@ export interface TelephonyProvider {
   /** Start recording a live call (#8). Optional: a provider without it can't record, and CallSession won't try. */
   startRecording?(callId: string): Promise<{ recordingId: string }>;
 
+  /**
+   * Stop every recording on the call for good (#151: nothing is recorded
+   * after a hold), including one started without its ID ever reaching Banjo.
+   * A call with none running counts as stopped. Throws if that can't be
+   * confirmed. Optional: without it, a recorded call can't wait on hold.
+   */
+  stopRecording?(callId: string): Promise<void>;
+
   /** Delete a stored recording; one that is already gone counts as deleted. Used by retention (recordings/retention.ts). */
   deleteRecording?(recordingId: string): Promise<void>;
 

@@ -56,6 +56,9 @@ interface TwilioCallState {
   providerCallId: string | null;
   toNumber: string;
   recordingSid?: string; // set by startRecording, so transferCall can stop it (#7)
+  // A start that failed after it was sent (#151): Twilio may still have begun
+  // recording, and not list it yet. stopRecording then can't confirm a stop.
+  recordingUncertain?: boolean;
 }
 
 function sleep(ms: number): Promise<void> {
@@ -884,11 +887,44 @@ export class TwilioProvider implements TelephonyProvider {
   async startRecording(callId: string): Promise<{ recordingId: string }> {
     const providerCallId = this.calls.get(callId)?.providerCallId;
     if (!providerCallId) throw new Error(`startRecording: no live Twilio call for ${callId}`);
-    const recording = await this.client.calls(providerCallId).recordings.create({ recordingChannels: 'dual', recordingTrack: 'both' });
+    let recording: { sid: string };
+    try {
+      recording = await this.client.calls(providerCallId).recordings.create({ recordingChannels: 'dual', recordingTrack: 'both' });
+    } catch (err) {
+      const failed = this.calls.get(callId);
+      if (failed) failed.recordingUncertain = true;
+      throw err;
+    }
     const state = this.calls.get(callId);
     if (state) state.recordingSid = recording.sid;
     logger.info({ callId, recordingId: recording.sid }, 'call recording started');
     return { recordingId: recording.sid };
+  }
+
+  /**
+   * Stops every recording on the call for good (#151). It stops what Twilio
+   * lists as running or paused, plus the recording this process started even
+   * if the list doesn't show it (Twilio's lists can lag). Fails closed: throws
+   * for a call it can't find, if Twilio can't be asked, or whenever a start
+   * failed after it was sent: Twilio may have begun that recording without
+   * listing it yet, so no list can confirm the stop. It still stops what it
+   * finds first.
+   */
+  async stopRecording(callId: string): Promise<void> {
+    const state = this.calls.get(callId);
+    if (!state?.providerCallId) throw new Error(`stopRecording: no live Twilio call for ${callId}`);
+    const call = this.client.calls(state.providerCallId);
+    const listed = await call.recordings.list();
+    const toStop = new Set(listed.filter((r) => r.status === 'in-progress' || r.status === 'paused').map((r) => r.sid));
+    const known = state.recordingSid;
+    if (known && !listed.some((r) => r.sid === known)) toStop.add(known);
+    for (const sid of toStop) {
+      await call.recordings(sid).update({ status: 'stopped' });
+      logger.info({ callId, recordingId: sid }, 'call recording stopped');
+    }
+    if (state.recordingUncertain) {
+      throw new Error(`stopRecording: a recording start on ${callId} failed after it was sent, so no stop can be confirmed`);
+    }
   }
 
   /** Deletes a recording from Twilio. Already gone (404) counts as deleted, so retention can't get stuck on one. */

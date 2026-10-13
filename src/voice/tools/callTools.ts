@@ -471,18 +471,22 @@ export const reportNegotiationFailedTool: VoiceTool<{ reason: string }> = define
   },
 });
 
-export const escalateAndEndCallTool: VoiceTool<{ reason: string }> = defineVoiceTool({
+export const escalateAndEndCallTool: VoiceTool<{ reason: string; stuckAt?: 'phone_menu' }> = defineVoiceTool({
   name: 'escalate_and_end_call',
   description:
     `Use this when you are genuinely stuck and cannot proceed — e.g. a confusing automated phone menu you cannot navigate, a hostile or uncooperative response, or any situation you cannot resolve on your own. This ends the call and flags the task for human (${config.ASSISTANT_PRINCIPAL_NAME}) follow-up.`,
   schema: z.object({
     reason: z.string().describe('A short explanation of why the call needed to be escalated.'),
+    stuckAt: z
+      .enum(['phone_menu'])
+      .optional()
+      .describe("'phone_menu' if you couldn't get through an automated phone menu to the right place. Leave out otherwise."),
   }),
   endsCall: true,
   handler: async (input, ctx) => {
     return runToolSafely('escalate_and_end_call', async () => {
       await transitionTask(ctx.task.id, 'escalated', {
-        outcome: { kind: 'escalated', reason: input.reason },
+        outcome: { kind: 'escalated', reason: input.reason, ...(input.stuckAt ? { stuckAt: input.stuckAt } : {}) },
       });
       await hangUpAfterSpeaking(ctx);
       return { ok: true };
@@ -584,6 +588,23 @@ export const endConversationCallTool: VoiceTool<{ summary: string }> = defineVoi
       return { ok: true };
     });
   },
+});
+
+/**
+ * wait_on_hold (#151). The handler has nothing to do: CallSession, seeing
+ * startsHold, puts the call on hold once it returns, and takes it off when a
+ * person picks up or the limit runs out. Not in callTools: it's offered only
+ * where the voice provider can hold (tasks/callSessionAdapter.ts).
+ */
+export const waitOnHoldTool: VoiceTool<Record<string, never>> = defineVoiceTool({
+  name: 'wait_on_hold',
+  description:
+    'Use this, without saying anything first, as soon as you are in a hold queue: hold music, "please hold", "your call ' +
+    'will be answered by the next available…", or an estimated wait time. You stay on the line silently, and you are ' +
+    'told the moment a live person picks up. Never use it with a person on the line, and never talk to a recording.',
+  schema: z.object({}),
+  startsHold: true,
+  handler: async () => ({ ok: true }),
 });
 
 // Cast is required here: each tool above is a VoiceTool<SpecificInput>, and

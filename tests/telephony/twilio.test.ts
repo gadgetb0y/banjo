@@ -853,3 +853,78 @@ describe('TwilioProvider warm transfer (#149)', () => {
     expect(logged).not.toContain('vaccination');
   });
 });
+
+describe('TwilioProvider.stopRecording (#151)', () => {
+  /** A live call whose Twilio recordings are `listed`; each recording's update is the shared `update` spy, called with its sid. */
+  function withRecordings(callId: string, listed: { sid: string; status: string }[] | Error) {
+    const provider = new TwilioProvider();
+    provider.registerInboundCall(callId, '+15555550100');
+    const update = vi.fn(async (_sid: string, _params: unknown) => ({}));
+    const list = vi.fn(async () => {
+      if (listed instanceof Error) throw listed;
+      return listed;
+    });
+    const recordings = Object.assign(
+      vi.fn((sid: string) => ({ update: (params: unknown) => update(sid, params) })),
+      { list, create: vi.fn(async () => ({ sid: 'RE-live' })) },
+    );
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    Object.defineProperty((provider as any).client, 'calls', { value: vi.fn(() => ({ recordings })), configurable: true });
+    return { provider, update, list };
+  }
+
+  it("stops every running or paused recording Twilio reports, including one Banjo never got the SID of", async () => {
+    const { provider, update } = withRecordings('CA-r1', [
+      { sid: 'RE-known', status: 'in-progress' },
+      { sid: 'RE-lost-response', status: 'in-progress' },
+      { sid: 'RE-paused', status: 'paused' },
+      { sid: 'RE-old', status: 'completed' },
+    ]);
+    await provider.stopRecording('CA-r1');
+    expect(update.mock.calls).toEqual([
+      ['RE-known', { status: 'stopped' }],
+      ['RE-lost-response', { status: 'stopped' }],
+      ['RE-paused', { status: 'stopped' }],
+    ]);
+  });
+
+  it('has nothing to stop when nothing is running', async () => {
+    const { provider, update } = withRecordings('CA-r2', []);
+    await expect(provider.stopRecording('CA-r2')).resolves.toBeUndefined();
+    expect(update).not.toHaveBeenCalled();
+  });
+
+  it("fails closed: throws when Twilio can't be asked, or refuses the stop, or the call is unknown", async () => {
+    await expect(withRecordings('CA-r3', new Error('twilio 500')).provider.stopRecording('CA-r3')).rejects.toThrow('twilio 500');
+    const { provider, update } = withRecordings('CA-r4', [{ sid: 'RE-1', status: 'in-progress' }]);
+    update.mockRejectedValueOnce(new Error('cannot stop'));
+    await expect(provider.stopRecording('CA-r4')).rejects.toThrow('cannot stop');
+    await expect(new TwilioProvider().stopRecording('nope')).rejects.toThrow();
+  });
+
+  it("stops the recording this process started even when Twilio's list doesn't show it yet", async () => {
+    const { provider, update } = withRecordings('CA-r5', []);
+    await provider.startRecording('CA-r5'); // RE-live
+    await provider.stopRecording('CA-r5');
+    expect(update.mock.calls).toEqual([['RE-live', { status: 'stopped' }]]);
+  });
+
+  it('fails closed after a start that failed once sent: an empty list is not proof nothing is recording', async () => {
+    const { provider } = withRecordings('CA-r6', []);
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const recordings = (provider as any).client.calls('CA-r6').recordings;
+    recordings.create.mockRejectedValueOnce(new Error('socket hang up'));
+    await expect(provider.startRecording('CA-r6')).rejects.toThrow('socket hang up');
+    await expect(provider.stopRecording('CA-r6')).rejects.toThrow(/no stop can be confirmed/);
+  });
+
+  it('after an uncertain start, stops what Twilio does list and still refuses to confirm', async () => {
+    const { provider, update } = withRecordings('CA-r7', [{ sid: 'RE-other', status: 'in-progress' }]);
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (provider as any).client.calls('CA-r7').recordings.create.mockRejectedValueOnce(new Error('timeout'));
+    await expect(provider.startRecording('CA-r7')).rejects.toThrow();
+    // The listed one may not be the one that start made, which may not be listed yet.
+    await expect(provider.stopRecording('CA-r7')).rejects.toThrow(/no stop can be confirmed/);
+    expect(update.mock.calls).toEqual([['RE-other', { status: 'stopped' }]]);
+  });
+});

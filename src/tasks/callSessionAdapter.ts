@@ -3,16 +3,16 @@ import type { Contact } from '../contacts/schema.js';
 import { getContact } from '../contacts/service.js';
 import type { CallSessionOptions } from '../session/callSession.js';
 import type { CallContext } from '../session/types.js';
-import { config, disclosureLine } from '../config/index.js';
+import { config, disclosureLine, disclosureLineWithoutNotice } from '../config/index.js';
 import { logger } from '../lib/logger.js';
 import { buildOutcomeSummary, withDisclosureNote } from '../notifications/channel.js';
 import type { DisclosureResult } from '../session/disclosure.js';
-import { createNotificationChannel } from '../notifications/owner.js';
+import { createNotificationChannel, sendOwnerMessage } from '../notifications/owner.js';
 import { buildWebhookText, sendTaskWebhook } from '../notifications/webhook.js';
 import { pressDigitsTool } from '../telephony/dtmf.js';
 import type { TelephonyProvider } from '../telephony/providers/types.js';
 import { defineTransferTool } from '../telephony/transfer.js';
-import { callTools, endConversationCallTool } from '../voice/tools/callTools.js';
+import { callTools, endConversationCallTool, waitOnHoldTool } from '../voice/tools/callTools.js';
 import type { VoiceTool } from '../voice/tools/defineVoiceTool.js';
 import { unregisterLiveCall } from './liveCalls.js';
 import { getTask, isTerminalStatus, transitionTask, updateCallAttempt } from './service.js';
@@ -100,7 +100,19 @@ export const transferToOwnerTool = defineTransferTool<CallContext>({
 function outboundToolsFor(task: Task): VoiceTool<any, CallContext>[] {
   const base: VoiceTool<any, CallContext>[] = [...callTools, pressDigitsTool];
   if (config.TRANSFER_ENABLED) base.push(transferToOwnerTool);
+  if (canWaitOnHold()) base.push(waitOnHoldTool);
   return task.mode === 'conversation' ? [...base, endConversationCallTool] : base;
+}
+
+/** Only OpenAI Realtime implements VoiceAIProvider.setHold/judgeHoldLine so far (#151). */
+export function canWaitOnHold(): boolean {
+  return config.VOICE_AI_PROVIDER === 'openai';
+}
+
+/** "12 minutes", "1 minute": for the owner's hold messages. */
+function minutes(ms: number): string {
+  const n = Math.max(1, Math.round(ms / 60_000));
+  return `${n} minute${n === 1 ? '' : 's'}`;
 }
 
 /**
@@ -167,6 +179,29 @@ export function buildOutboundCallSessionOptions(params: {
     // What a silence nudge says if Banjo hasn't spoken yet, so the call still
     // opens with the disclosure (#118).
     openingLine: disclosureLine(),
+    // Nothing is recorded after a hold (#151), so no notice in the reopening.
+    pickupLine: disclosureLineWithoutNotice(),
+    ...(task.constraints?.maxHoldMinutes ? { maxHoldMs: task.constraints.maxHoldMinutes * 60_000 } : {}),
+
+    // #151: the owner hears when a hold starts and when someone picks up. A
+    // hold that runs out ends the call, and its outcome says so.
+    async onHoldChange(change) {
+      const message =
+        change.kind === 'started'
+          ? `Banjo is on hold with ${contact.displayName} and will wait up to ${minutes(change.maxMs)}.`
+          : `Someone picked up at ${contact.displayName} after ${minutes(change.waitedMs)} on hold. Banjo is talking to them now.`;
+      await sendOwnerMessage(message);
+    },
+
+    async onHoldLimit(waitedMs) {
+      await transitionTask(task.id, 'escalated', {
+        outcome: {
+          kind: 'escalated',
+          reason: `Waited on hold for ${minutes(waitedMs)} and nobody picked up, so Banjo hung up.`,
+          stuckAt: 'hold_limit',
+        },
+      });
+    },
 
     async beginCall() {
       // No answering-machine detection (#32). Twilio's verdict misread a

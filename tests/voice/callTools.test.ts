@@ -611,3 +611,30 @@ describe('which call-ending tools yield to a callee who cuts in (#133)', () => {
     expect(flagForOwnerAndEndCallTool.yieldsToCallee).not.toBe(true);
   });
 });
+
+describe('escalate_and_end_call stuckAt (#151)', () => {
+  it("records where the call got stuck when it's a phone menu, and nothing extra otherwise", async () => {
+    const ctx = {
+      task: { id: 'task-1', status: 'negotiating' } as Task,
+      callAttempt: { id: 'call-attempt-1' } as CallAttempt,
+      callId: 'call-attempt-1',
+      telephony: { hangUp: vi.fn(async () => {}) } as unknown as TelephonyProvider,
+      calendar: {} as CallContext['calendar'],
+      estimatedAudioDoneAt: Date.now(),
+    };
+    await escalateAndEndCallTool.handler({ reason: 'Menu loops back.', stuckAt: 'phone_menu' }, ctx);
+    await escalateAndEndCallTool.handler({ reason: 'Hostile.' }, ctx);
+    expect(transitionTask.mock.calls.map((c) => (c as unknown[])[2])).toEqual([
+      { outcome: { kind: 'escalated', reason: 'Menu loops back.', stuckAt: 'phone_menu' } },
+      { outcome: { kind: 'escalated', reason: 'Hostile.' } },
+    ]);
+    expect(escalateAndEndCallTool.schema.safeParse({ reason: 'x', stuckAt: 'hold_limit' }).success).toBe(false);
+  });
+
+  it('wait_on_hold starts a hold and is not in the shared tool set', async () => {
+    const { waitOnHoldTool } = await import('../../src/voice/tools/callTools.js');
+    expect(waitOnHoldTool.startsHold).toBe(true);
+    expect(waitOnHoldTool.endsCall).toBeUndefined();
+    expect(callTools.some((t) => t.name === 'wait_on_hold')).toBe(false);
+  });
+});

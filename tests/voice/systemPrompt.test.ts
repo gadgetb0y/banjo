@@ -356,3 +356,21 @@ describe('warm transfer guidance (#149)', () => {
     }
   });
 });
+
+describe('phone menu and hold guidance (#151)', () => {
+  it('is in outbound prompts on OpenAI Realtime, and never in inbound ones', () => {
+    expect(buildBaseSystemPromptGuidance('outbound')).toContain('Phone menus and holding:');
+    expect(buildBaseSystemPromptGuidance('outbound')).toContain('use wait_on_hold, saying nothing');
+    expect(buildBaseSystemPromptGuidance('inbound')).not.toContain('wait_on_hold');
+  });
+
+  it('is left out where the voice provider cannot hold', async () => {
+    const { config } = await import('../../src/config/index.js');
+    try {
+      config.VOICE_AI_PROVIDER = 'openai-live';
+      expect(buildBaseSystemPromptGuidance('outbound')).not.toContain('wait_on_hold');
+    } finally {
+      config.VOICE_AI_PROVIDER = 'openai';
+    }
+  });
+});

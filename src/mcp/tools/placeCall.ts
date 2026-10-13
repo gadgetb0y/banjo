@@ -49,6 +49,16 @@ export const placeCallInputSchema = z.object({
         .describe('Acceptable date/time windows to offer/accept during negotiation.'),
       durationMinutes: z.number().int().positive().optional().describe('Expected appointment duration, in minutes.'),
       notes: z.string().optional().describe('Any other free-text guidance for the call (preferences, context, etc).'),
+      maxHoldMinutes: z
+        .number()
+        .int()
+        .min(1)
+        .max(45)
+        .optional()
+        .describe(
+          "The longest to wait on hold on this call, if it reaches a hold queue (e.g. a pharmacy or an airline). Omit for the server's default " +
+            `(${config.HOLD_MAX_MINUTES} minutes). Banjo waits silently and the owner is told when the hold starts and when someone picks up.`,
+        ),
     })
     .optional()
     .describe('Constraints guiding what times/details are acceptable. Omit if unconstrained.'),
