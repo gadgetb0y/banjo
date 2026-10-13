@@ -374,3 +374,77 @@ describe('phone menu and hold guidance (#151)', () => {
     }
   });
 });
+
+describe("purpose 'ask' (#148 review, finding 3)", () => {
+  // The shared sections used to give ask calls booking instructions that
+  // contradict the ask guidance: "So shall I book Friday at 10?", "Wait for a
+  // clear yes to a specific time", "say ... what is booked", and a filler
+  // before every action, record_answer included, which is meant to be silent.
+  const BOOKING_ONLY = [
+    'Wait for a clear yes to a specific time',
+    'Your own summary of a time is not agreement',
+    'So shall I book Friday at 10?',
+    'lock it in',
+    'If the other party offers a time, restate it back clearly before confirming.',
+    'Once a booking has gone through',
+    'what is booked',
+    'Yes, Friday at 10 works.',
+    'an unavailable time',
+    'offer alternatives',
+  ];
+  const ask = { purpose: 'ask' } as const;
+
+  for (const build of [buildBaseSystemPromptGuidance, buildFrontendSystemPromptGuidance]) {
+    it(`${build.name}: leaves out every booking-only line, with transfer off and on`, () => {
+      for (const transfer of [false, true]) {
+        const prompt = build('outbound', { ...ask, transfer });
+        for (const line of BOOKING_ONLY) expect(prompt).not.toContain(line);
+      }
+    });
+
+    it(`${build.name}: still has the shared rules that fit an ask call`, () => {
+      const prompt = build('outbound', ask);
+      for (const kept of [
+        `"${disclosureLine()}"`,
+        'Never describe your own mechanics',
+        'say exactly one of these and nothing more: "One moment." / "Sure — just a second." / "Bear with me a second."',
+        'Never promise a callback, follow-up',
+        'When you do not know something, say so plainly and move on.',
+        'If you reach voicemail',
+        'ALWAYS say goodbye out loud',
+      ]) {
+        expect(prompt).toContain(kept);
+      }
+    });
+
+    it(`${build.name}: says saving an answer is silent, with no filler before it`, () => {
+      const prompt = build('outbound', ask);
+      expect(prompt).toMatch(/Saving an answer[^\n]* is silent: never announce it/);
+      expect(prompt).toMatch(/no filler/i);
+    });
+
+    it(`${build.name}: a hedged answer is said back as hedged, not firmed up`, () => {
+      expect(build('outbound', ask)).toMatch(/hedged answer[^\n]*say it back as they said it/i);
+    });
+
+    it(`${build.name}: booking prompts get none of the ask-only lines`, () => {
+      for (const prompt of [build('outbound'), build('outbound', { purpose: 'book' }), build('inbound')]) {
+        expect(prompt).not.toMatch(/Saving an answer/);
+        expect(prompt).not.toMatch(/say it back as they said it/);
+      }
+    });
+  }
+
+  it('names record_answer in the backend prompt only: the voice layer gets no tool names for it', () => {
+    expect(buildBaseSystemPromptGuidance('outbound', ask)).toContain('record_answer');
+    expect(buildFrontendSystemPromptGuidance('outbound', ask)).not.toContain('record_answer');
+  });
+
+  it('booking guidance is the default, and keeps every booking line', () => {
+    for (const build of [buildBaseSystemPromptGuidance, buildFrontendSystemPromptGuidance]) {
+      expect(build('outbound', { purpose: 'book' })).toBe(build('outbound'));
+      const prompt = build('outbound');
+      for (const line of BOOKING_ONLY) expect(prompt).toContain(line);
+    }
+  });
+});

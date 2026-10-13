@@ -38,10 +38,19 @@ interface GuidanceOptions {
   purpose?: 'book' | 'ask';
 }
 
+/**
+ * `layer`: which prompt this is for. Only changes lines that would name a
+ * tool the voice layer doesn't have (its prompt carries no ask-call tool
+ * names); every other line is the same in both.
+ */
 function guidanceSections(
   direction: CallDirection,
   { transfer = config.TRANSFER_ENABLED, purpose = 'book' }: GuidanceOptions = {},
+  layer: 'backend' | 'voice' = 'backend',
 ): GuidanceSection[] {
+  // #148 review: an ask call books nothing, so the booking lines in the shared
+  // sections below are swapped out for it, and booking calls keep theirs as-is.
+  const ask = direction === 'outbound' && purpose === 'ask';
   const sections: GuidanceSection[] = [
     {
       voiceLayer: true,
@@ -133,7 +142,17 @@ function guidanceSections(
         // leaves no slot for a second clause to go in.
         '- Before an action that may take a moment, say exactly one of these and nothing more: "One moment." / "Sure — just a second." / "Bear with me a second." No second sentence, and no clause after it: never say what you are doing or why, or what happens next — no calendars, checking, timing, details, confirming, booking, finalizing, or locking anything in.',
         '- Never leave the other party in silence while an action runs — but fill it with that short phrase, not an explanation.',
-        '- Once the result comes back, just carry on the conversation with the answer ("Yes, Friday at 10 works."). Do not describe what you did or are about to do.',
+        ...(ask
+          ? [
+              // #148 review: record_answer runs mid-conversation, right after
+              // the other party confirms a read-back. A filler there ("One
+              // moment.") stalls a call that has nothing to wait for.
+              `- Saving an answer${layer === 'backend' ? ' with record_answer' : ''} is silent: never announce it, and say no filler before it. Just carry on with the call.`,
+              '- Once the result comes back, just carry on the conversation. Do not describe what you did or are about to do.',
+            ]
+          : [
+              '- Once the result comes back, just carry on the conversation with the answer ("Yes, Friday at 10 works."). Do not describe what you did or are about to do.',
+            ]),
       ],
     },
     {
@@ -143,19 +162,31 @@ function guidanceSections(
         // A live call confirmed a time off the back of the model's own
         // read-back, while the other party was still pushing for a different
         // one — and then had to tell them to ring the business themselves.
-        '- Do not confirm anything the other party has not explicitly agreed to. Your own summary of a time is not agreement, and neither is silence, "that might work", or an offer they are still thinking about. Wait for a clear yes to a specific time.',
+        ...(ask
+          ? []
+          : [
+              '- Do not confirm anything the other party has not explicitly agreed to. Your own summary of a time is not agreement, and neither is silence, "that might work", or an offer they are still thinking about. Wait for a clear yes to a specific time.',
+            ]),
         // Demo call (2026-09-23): to "Yeah, that could probably work" the model
         // said "Okay, thanks for confirming—let me lock that in", then asked in
         // the next breath whether that was a definite yes. It didn't book early,
         // but the callee heard a confirmation she hadn't given acknowledged.
-        '- A hedged answer ("that could probably work", "I think so", "should be fine") is not a yes, and your reply must not treat it as one: do not thank them for confirming or say you will lock it in. Just ask one short question for a firm answer, e.g. "So shall I book Friday at 10?"',
-        `- Never promise a callback, follow-up, or that you will "check with ${config.ASSISTANT_PRINCIPAL_NAME} and call you back" — you cannot place outbound calls, and this call ends with nothing carried forward to any future call. If something cannot be resolved right now (an unavailable time, a request outside what your tools support), resolve it live on this call — offer alternatives, or use your escalation tool — never leave it as something you will get back to the caller about.`,
+        ask
+          ? '- A hedged answer ("probably around six", "I think so") is still their answer: say it back as they said it, hedged, and do not firm it up into something they did not say.'
+          : '- A hedged answer ("that could probably work", "I think so", "should be fine") is not a yes, and your reply must not treat it as one: do not thank them for confirming or say you will lock it in. Just ask one short question for a firm answer, e.g. "So shall I book Friday at 10?"',
+        ask
+          ? `- Never promise a callback, follow-up, or that you will "check with ${config.ASSISTANT_PRINCIPAL_NAME} and call you back" — you cannot place outbound calls, and this call ends with nothing carried forward to any future call. If something cannot be resolved right now, resolve it live on this call or use your escalation tool; a question they cannot answer simply goes unanswered. Never leave it as something you will get back to them about.`
+          : `- Never promise a callback, follow-up, or that you will "check with ${config.ASSISTANT_PRINCIPAL_NAME} and call you back" — you cannot place outbound calls, and this call ends with nothing carried forward to any future call. If something cannot be resolved right now (an unavailable time, a request outside what your tools support), resolve it live on this call — offer alternatives, or use your escalation tool — never leave it as something you will get back to the caller about.`,
         '- Stay focused on the goal of the call. Do not volunteer unrelated information.',
-        '- If the other party offers a time, restate it back clearly before confirming.',
+        ...(ask ? [] : ['- If the other party offers a time, restate it back clearly before confirming.']),
         // #44: a real booking went through and the model went straight to
         // "that's all set, have a great day" — the one sentence that would
         // catch a wrong booking on the spot, for both sides, never got said.
-        '- Once a booking has gone through, before your goodbye, say in one short sentence the day, time, and what is booked (e.g. "You\'re all set for Friday, September 25 at 10 AM for a full groom."). Use the day and time the booking result gives you, not your memory of the conversation.',
+        ...(ask
+          ? []
+          : [
+              '- Once a booking has gone through, before your goodbye, say in one short sentence the day, time, and what is booked (e.g. "You\'re all set for Friday, September 25 at 10 AM for a full groom."). Use the day and time the booking result gives you, not your memory of the conversation.',
+            ]),
         // #44: asked about matting, it told a groomer "you can note whatever
         // you'd like on his profile" — a profile nobody had mentioned.
         '- When you do not know something, say so plainly and move on. Do not invent a system, profile, or form on their side for them to record it in, and do not promise that someone will follow up with the answer.',
@@ -298,6 +329,6 @@ export function buildBaseSystemPromptGuidance(direction: CallDirection = 'outbou
  */
 export function buildFrontendSystemPromptGuidance(direction: CallDirection = 'outbound', options: GuidanceOptions = {}): string {
   const { transfer = config.TRANSFER_ENABLED } = options;
-  const voiceSections = guidanceSections(direction, { ...options, transfer }).filter((section) => section.voiceLayer);
+  const voiceSections = guidanceSections(direction, { ...options, transfer }, 'voice').filter((section) => section.voiceLayer);
   return renderSections([...voiceSections, { voiceLayer: true, lines: delegationGuidance(transfer) }]);
 }

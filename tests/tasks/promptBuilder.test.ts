@@ -362,4 +362,65 @@ describe("buildCallSystemPrompt: mode 'ask' (#148)", () => {
       expect(prompt).toContain('1. Hours? 2. Walk-ins?\n2. Parking?');
     }
   });
+
+  // #148 review, round 2, finding 3: the shared sections still told ask calls
+  // to book, confirm a time, and say what was booked.
+  describe('the full ask prompt has no booking instructions', () => {
+    const BOOKING_ONLY = [
+      'Wait for a clear yes to a specific time',
+      'Your own summary of a time is not agreement',
+      'So shall I book Friday at 10?',
+      'lock it in',
+      'If the other party offers a time, restate it back clearly before confirming.',
+      'Once a booking has gone through',
+      'what is booked',
+      'Yes, Friday at 10 works.',
+      'an unavailable time',
+      'offer alternatives',
+      'to negotiate or book an appointment',
+    ];
+
+    it('backend and voice layer, on either provider, with transfer off and on', async () => {
+      const { config } = await import('../../src/config/index.js');
+      try {
+        for (const provider of ['openai', 'openai-live'] as const) {
+          for (const transfer of [false, true]) {
+            config.VOICE_AI_PROVIDER = provider;
+            config.TRANSFER_ENABLED = transfer;
+            for (const prompt of [buildCallSystemPrompt(askTask, contact, [], 'Likes mornings.'), buildCallFrontendPrompt(askTask, contact, 'Likes mornings.')]) {
+              for (const line of BOOKING_ONLY) expect(prompt).not.toContain(line);
+              expect(prompt).toMatch(/Saving an answer[^\n]* is silent: never announce it/);
+            }
+          }
+        }
+      } finally {
+        config.VOICE_AI_PROVIDER = 'openai';
+        config.TRANSFER_ENABLED = false;
+      }
+    });
+
+    it('booking and conversation prompts keep every booking line', () => {
+      for (const task of [bookingTask, conversationTask]) {
+        for (const prompt of [buildCallSystemPrompt(task, contact, []), buildCallFrontendPrompt(task, contact)]) {
+          for (const line of BOOKING_ONLY) expect(prompt).toContain(line);
+          expect(prompt).not.toMatch(/Saving an answer/);
+        }
+      }
+    });
+  });
+
+  // #148 review, round 2, finding 6: on openai-live the backend acts only when
+  // the voice layer delegates, and nothing told it to delegate saving answers,
+  // so record_answer never ran mid-call and a hang-up lost every answer.
+  it('tells the voice layer to delegate saving each confirmed answer, silently, without naming the tool', () => {
+    const prompt = buildCallFrontendPrompt(askTask, contact).replace(/\s+/g, ' ');
+    expect(prompt).toContain(
+      "Once they confirm your read-back of an answer, or that they don't know, delegate saving that answer to your backend right away, without saying anything about it, and carry on.",
+    );
+    expect(prompt).not.toContain('record_answer');
+    // Booking and conversation voice layers are not told to save answers.
+    for (const task of [bookingTask, conversationTask]) {
+      expect(buildCallFrontendPrompt(task, contact)).not.toMatch(/delegate saving/);
+    }
+  });
 });
