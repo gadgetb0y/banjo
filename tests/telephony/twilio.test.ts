@@ -679,3 +679,177 @@ describe('TwilioProvider status callback (#79)', () => {
     expect(events).toEqual([]);
   });
 });
+
+describe('TwilioProvider warm transfer (#149)', () => {
+  const OWNER = '+15557654321';
+  const BRIEF = "Pam at Claudia's needs you about the vaccination records.";
+
+  /** A provider with one live call, and fakes for creating the owner's call and updating either leg. */
+  function setup(callId: string, opts: { create?: ReturnType<typeof vi.fn> } = {}) {
+    const provider = new TwilioProvider();
+    provider.registerInboundCall(callId, '+15555550100');
+    const create = opts.create ?? vi.fn(async () => ({ sid: 'CA-owner' }));
+    const updates = new Map<string, ReturnType<typeof vi.fn>>();
+    const recordingUpdate = vi.fn(async () => ({}));
+    const recordings = Object.assign(vi.fn(() => ({ update: recordingUpdate })), { create: vi.fn(async () => ({ sid: 'RE-live' })) });
+    const calls = Object.assign(
+      vi.fn((sid: string) => {
+        if (!updates.has(sid)) updates.set(sid, vi.fn(async () => ({})));
+        return { update: updates.get(sid)!, recordings };
+      }),
+      { create },
+    );
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    Object.defineProperty((provider as any).client, 'calls', { value: calls, configurable: true });
+    const update = (sid: string) => updates.get(sid) ?? vi.fn();
+    return { provider, create, update, recordingUpdate };
+  }
+
+  const loopIn = (provider: TwilioProvider, callId: string, timeoutMs = 60_000) =>
+    provider.loopInOwner(callId, { to: OWNER, brief: BRIEF, timeoutMs });
+
+  it('calls the owner on a second line with the brief and a press-1 prompt, without touching the live call', async () => {
+    const { provider, create, update } = setup('CA-w1');
+    void loopIn(provider, 'CA-w1');
+    await vi.waitFor(() => expect(create).toHaveBeenCalled());
+
+    const args = (create.mock.calls[0] as unknown as [Record<string, unknown>])[0];
+    expect(args.to).toBe(OWNER);
+    expect(args.statusCallback).toMatch(/\/telephony\/twilio\/loop-in-status\?callId=CA-w1$/);
+    expect(args.statusCallbackEvent).toEqual(['completed']);
+    const twiml = args.twiml as string;
+    expect(twiml).toMatch(/<Gather[^>]*action="https:\/\/[^"]+\/telephony\/twilio\/loop-in-result\?callId=CA-w1"/);
+    expect(twiml).toContain(`<Say>${BRIEF}</Say>`);
+    expect(twiml).toContain('Press 1 to talk to them now');
+    expect(twiml).toMatch(/<Hangup\/><\/Response>$/);
+    expect(update('CA-w1')).not.toHaveBeenCalled();
+    expect(provider.isAnyCallActive()).toBe(true);
+  });
+
+  it('accept: stops the recording, moves the call into a conference the owner joins, and lets the call go', async () => {
+    const { provider, update, recordingUpdate } = setup('CA-w2');
+    await provider.startRecording('CA-w2');
+    const result = loopIn(provider, 'CA-w2');
+    await vi.waitFor(() => expect(provider['loopIns'].get('CA-w2')?.ownerCallSid).toBe('CA-owner'));
+
+    const ownerTwiml = await provider.acceptLoopIn('CA-w2', '1');
+
+    await expect(result).resolves.toBe('accepted');
+    expect(recordingUpdate).toHaveBeenCalledWith({ status: 'stopped' });
+    const theirs = (update('CA-w2').mock.calls[0] as unknown as [{ twiml: string }])[0].twiml;
+    expect(theirs).toMatch(/<Conference[^>]*endConferenceOnExit="true"[^>]*>banjo-CA-w2<\/Conference>/);
+    expect(ownerTwiml).toMatch(/<Conference[^>]*endConferenceOnExit="true"[^>]*>banjo-CA-w2<\/Conference>/);
+    expect(recordingUpdate.mock.invocationCallOrder[0]).toBeLessThan(update('CA-w2').mock.invocationCallOrder[0]!);
+    // Forgotten, so CallSession's teardown hang-up can't end the bridged call.
+    expect(provider.isAnyCallActive()).toBe(false);
+    await provider.hangUp('CA-w2');
+    expect(update('CA-w2')).toHaveBeenCalledTimes(1);
+    expect(update('CA-owner')).not.toHaveBeenCalled();
+  });
+
+  it('decline: any other key hangs up the owner and leaves the call with Banjo', async () => {
+    const { provider, update } = setup('CA-w3');
+    const result = loopIn(provider, 'CA-w3');
+    await vi.waitFor(() => expect(provider['loopIns'].get('CA-w3')?.ownerCallSid).toBe('CA-owner'));
+
+    const ownerTwiml = await provider.acceptLoopIn('CA-w3', '2');
+
+    await expect(result).resolves.toBe('declined');
+    expect(ownerTwiml).toMatch(/<Hangup\/><\/Response>$/);
+    expect(ownerTwiml).not.toContain('Conference');
+    expect(update('CA-w3')).not.toHaveBeenCalled();
+    expect(provider.isAnyCallActive()).toBe(true);
+  });
+
+  it("no answer: the owner's leg ending without a key press (busy, unanswered, their voicemail) leaves the call with Banjo", async () => {
+    const { provider } = setup('CA-w4');
+    const result = loopIn(provider, 'CA-w4');
+    await vi.waitFor(() => expect(provider['loopIns'].get('CA-w4')?.ownerCallSid).toBe('CA-owner'));
+
+    provider.handleLoopInStatus('CA-w4', 'completed');
+
+    await expect(result).resolves.toBe('no_answer');
+    expect(provider.isAnyCallActive()).toBe(true);
+  });
+
+  it("gives up after timeoutMs and hangs up the owner's line", async () => {
+    vi.useFakeTimers();
+    try {
+      const { provider, update } = setup('CA-w5');
+      const result = loopIn(provider, 'CA-w5', 1_000);
+      await vi.advanceTimersByTimeAsync(0);
+      await vi.advanceTimersByTimeAsync(1_000);
+
+      await expect(result).resolves.toBe('no_answer');
+      expect(update('CA-owner')).toHaveBeenCalledWith({ status: 'completed' });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("stops ringing the owner when the other party hangs up first", async () => {
+    const { provider, update } = setup('CA-w6');
+    const result = loopIn(provider, 'CA-w6');
+    await vi.waitFor(() => expect(provider['loopIns'].get('CA-w6')?.ownerCallSid).toBe('CA-owner'));
+
+    await provider.hangUp('CA-w6');
+
+    await expect(result).resolves.toBe('no_answer');
+    expect(update('CA-owner')).toHaveBeenCalledWith({ status: 'completed' });
+  });
+
+  it('a 1 that comes after the wait is over gets an apology, not a bridge', async () => {
+    const { provider, update } = setup('CA-w7');
+    const result = loopIn(provider, 'CA-w7');
+    await vi.waitFor(() => expect(provider['loopIns'].get('CA-w7')?.ownerCallSid).toBe('CA-owner'));
+    provider.handleLoopInStatus('CA-w7', 'no-answer');
+    await result;
+
+    const ownerTwiml = await provider.acceptLoopIn('CA-w7', '1');
+    expect(ownerTwiml).toContain('already ended');
+    expect(update('CA-w7')).not.toHaveBeenCalled();
+  });
+
+  it('keeps the call with Banjo when the bridge redirect fails', async () => {
+    const { provider, update } = setup('CA-w8');
+    const result = loopIn(provider, 'CA-w8');
+    await vi.waitFor(() => expect(provider['loopIns'].get('CA-w8')?.ownerCallSid).toBe('CA-owner'));
+    // Calling update() for an unseen sid creates its fake; make the live call's reject.
+    provider['client'].calls('CA-w8');
+    update('CA-w8').mockRejectedValueOnce(new Error('twilio 500'));
+
+    const ownerTwiml = await provider.acceptLoopIn('CA-w8', '1');
+
+    await expect(result).resolves.toBe('no_answer');
+    expect(ownerTwiml).toContain("couldn't connect you");
+    expect(provider.isAnyCallActive()).toBe(true);
+  });
+
+  it("throws, and leaves nothing pending, when the owner's call can't be placed", async () => {
+    const { provider } = setup('CA-w9', { create: vi.fn(async () => { throw new Error('twilio 400'); }) });
+    await expect(loopIn(provider, 'CA-w9')).rejects.toThrow('twilio 400');
+    expect(provider['loopIns'].has('CA-w9')).toBe(false);
+  });
+
+  it('refuses a call it has no Twilio id for', async () => {
+    await expect(loopIn(new TwilioProvider(), 'nope')).rejects.toThrow();
+  });
+
+  it('escapes the brief, so words from the call can never become TwiML', () => {
+    const twiml = new TwilioProvider().buildLoopInTwiml('CA-x', 'Hi</Say><Dial>+15550000000</Dial><Say>');
+    expect(twiml).not.toContain('<Dial>');
+    expect(twiml).toContain('&lt;Dial&gt;');
+  });
+
+  it("never logs the owner's number or the brief", async () => {
+    const { provider } = setup('CA-w10');
+    fakeLog.info.mockClear();
+    const result = loopIn(provider, 'CA-w10');
+    await vi.waitFor(() => expect(provider['loopIns'].get('CA-w10')?.ownerCallSid).toBe('CA-owner'));
+    await provider.acceptLoopIn('CA-w10', '2');
+    await result;
+    const logged = JSON.stringify(fakeLog.info.mock.calls);
+    expect(logged).not.toContain(OWNER);
+    expect(logged).not.toContain('vaccination');
+  });
+});

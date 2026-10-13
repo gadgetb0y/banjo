@@ -176,6 +176,7 @@ function guidanceSections(direction: CallDirection, { transfer = config.TRANSFER
 function transferSection(direction: CallDirection): GuidanceSection {
   const principal = config.ASSISTANT_PRINCIPAL_NAME;
   const fallback = direction === 'outbound' ? 'escalate_and_end_call' : 'flag_for_owner_and_end_call';
+  if (config.TRANSFER_MODE === 'warm') return warmTransferSection(principal, fallback);
   return {
     voiceLayer: true,
     lines: [
@@ -184,6 +185,24 @@ function transferSection(direction: CallDirection): GuidanceSection {
       `- First ask whether they'd like to be connected to ${principal} now. Transfer only after a clear yes; if they decline, carry on without it.`,
       `- Once they agree, say one short handoff line such as "Connecting you now, one moment." Then use ${TRANSFER_TOOL_NAME} with a short reason, and say nothing after it — you are off the call.`,
       `- If the transfer fails, apologize briefly, then use ${fallback} with the reason instead.`,
+    ],
+  };
+}
+
+/**
+ * TRANSFER_MODE=warm (#149): the principal is called on a second line while
+ * the other party holds, and may not take it, so Banjo says it's trying rather
+ * than "connecting you now", and knows the call can come back to it.
+ */
+function warmTransferSection(principal: string, fallback: string): GuidanceSection {
+  return {
+    voiceLayer: true,
+    lines: [
+      `Bringing in ${principal}:`,
+      `- You can call ${principal} on another line and connect them to this call with ${TRANSFER_TOOL_NAME}. Use it only when they need ${principal} personally: they ask for ${principal}, they need payment or personal details only ${principal} can give, or they need a decision you can't make. Anything else, handle yourself or end the call as usual.`,
+      `- First ask whether they'd like to talk to ${principal} now. Only after a clear yes, say one short line such as "Let me see if ${principal} can join. It may take a minute, so please hold." Then use ${TRANSFER_TOOL_NAME}, with a reason of one or two sentences for ${principal}: who you are talking to and what they need. It is read to ${principal} before they decide.`,
+      `- While you wait, if they speak, say only that you're still trying to reach ${principal}. Never say ${principal} is coming before the result says so.`,
+      `- If ${principal} takes the call, you are off it: say nothing more. If not, tell them in one short sentence that ${principal} isn't available right now, and carry on: help with what you can, or use ${fallback} with the reason. Don't try to reach ${principal} again on this call.`,
     ],
   };
 }
@@ -200,7 +219,9 @@ function delegationGuidance(transfer: boolean): string[] {
     ...DELEGATION_GUIDANCE_HEAD,
     ...(transfer
       ? [
-          `- Connecting the other party to ${config.ASSISTANT_PRINCIPAL_NAME} is also your backend's job: saying "connecting you now" does not connect anyone. Once they have said yes and you have said your one handoff line, delegate the transfer to your backend in that same turn, then say nothing more.`,
+          config.TRANSFER_MODE === 'warm'
+            ? `- Reaching ${config.ASSISTANT_PRINCIPAL_NAME} is also your backend's job: saying you'll try does not call anyone. Once they have said yes and you have said your one line asking them to hold, delegate it to your backend in that same turn, with who they are and what they need. Then wait for its result.`
+            : `- Connecting the other party to ${config.ASSISTANT_PRINCIPAL_NAME} is also your backend's job: saying "connecting you now" does not connect anyone. Once they have said yes and you have said your one handoff line, delegate the transfer to your backend in that same turn, then say nothing more.`,
         ]
       : []),
     ...DELEGATION_GUIDANCE_TAIL,

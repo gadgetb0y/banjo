@@ -332,3 +332,27 @@ describe('voicemail (#71)', () => {
     }
   });
 });
+
+describe('warm transfer guidance (#149)', () => {
+  it('says Banjo is trying to reach the principal, may come back, and must not promise them', async () => {
+    const { config } = await import('../../src/config/index.js');
+    try {
+      config.TRANSFER_ENABLED = true;
+      config.TRANSFER_MODE = 'warm';
+      for (const direction of ['outbound', 'inbound'] as const) {
+        const prompt = buildBaseSystemPromptGuidance(direction);
+        expect(prompt).toContain('Bringing in Alex:');
+        expect(prompt).not.toContain('Transferring to Alex:');
+        expect(prompt).toContain('It may take a minute, so please hold.');
+        expect(prompt).toContain("Never say Alex is coming before the result says so.");
+        expect(prompt).toContain(direction === 'outbound' ? 'escalate_and_end_call' : 'flag_for_owner_and_end_call');
+        const frontend = buildFrontendSystemPromptGuidance(direction);
+        expect(frontend).toContain("Reaching Alex is also your backend's job");
+        expect(frontend).not.toMatch(/delegate the transfer/i);
+      }
+    } finally {
+      config.TRANSFER_ENABLED = false;
+      config.TRANSFER_MODE = 'cold';
+    }
+  });
+});
