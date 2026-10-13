@@ -10,7 +10,7 @@ import { createAudioPlaybackTracker, type AudioPlaybackTracker } from './audioPl
 import { negotiateAudioFormats, resolveAudioPipeline, type AudioPipeline } from './audioPipeline.js';
 import type { CallContext } from './types.js';
 import { checkDisclosure, type DisclosureResult } from './disclosure.js';
-import { isCuttingIn, saidGoodbye } from './goodbye.js';
+import { isCuttingIn, isSigningOff, saidGoodbye } from './goodbye.js';
 import { holdBudgetMs, isRepeatOnHold, personPickedUpNote } from './hold.js';
 import { classifyTranscript } from './transcriptQuality.js';
 
@@ -240,6 +240,8 @@ export class CallSession<TCtx = CallContext> {
   /** Who spoke the latest transcribed line, and Banjo's latest line — what the goodbye check (#102) judges. */
   private lastSpeaker: 'user' | 'assistant' | undefined;
   private lastAssistantLine = '';
+  /** Their latest line that isn't suspect (#25) — whether they signed off (#144). */
+  private lastUserLine = '';
   /**
    * A call-ending tool is refused (no goodbye #102, or the other party cutting
    * in #133) at most once until the other party speaks again: a refusal can
@@ -466,6 +468,7 @@ export class CallSession<TCtx = CallContext> {
           // ends; any other line of theirs means the call carried on, so the
           // ending checks apply afresh.
           if (event.role === 'user' && quality === 'ok') {
+            this.lastUserLine = event.text;
             if (this.callEndingToolCallId !== null) this.calleeSpokeDuringEnd = event.text;
             else this.endRefused = false;
           }
@@ -784,8 +787,16 @@ export class CallSession<TCtx = CallContext> {
       // Judged only when Banjo's line for this turn has been transcribed
       // (openai-live finalizes transcripts late), and refused once until the
       // other party speaks again, so a missed match can delay a hang-up but
-      // never block it.
-      if (tool.requiresGoodbye && this.canRefuseEnd() && this.lastSpeaker === 'assistant' && !saidGoodbye(this.lastAssistantLine)) {
+      // never block it. Not once they've signed off (#144): there the retry
+      // only narrated again on live calls, so the fixed goodbye below is said
+      // straight away.
+      if (
+        tool.requiresGoodbye &&
+        this.canRefuseEnd() &&
+        this.lastSpeaker === 'assistant' &&
+        !saidGoodbye(this.lastAssistantLine) &&
+        !isSigningOff(this.lastUserLine)
+      ) {
         this.endRefused = true;
         this.endRefusals++;
         logger.warn({ callId: this.opts.callId, toolCallId, name }, 'Refusing a call-ending tool once: no goodbye was said');
@@ -809,9 +820,10 @@ export class CallSession<TCtx = CallContext> {
         );
         return;
       }
-      // #139: past the refusal above (already spent, or capped), the model can
-      // still end on a line with no goodbye. Say one for it rather than refuse
-      // again, so the other party hears a goodbye and the call still ends.
+      // #139: past the refusal above (already spent, capped, or skipped
+      // because they signed off, #144), the model can still end on a line with
+      // no goodbye. Say one for it rather than refuse again, so the other
+      // party hears a goodbye and the call still ends.
       if (tool.requiresGoodbye && this.lastSpeaker === 'assistant' && !saidGoodbye(this.lastAssistantLine)) {
         logger.warn({ callId: this.opts.callId, toolCallId, name }, 'Saying a fixed goodbye before ending the call: none was said');
         this.armToolPendingWatchdog(toolCallId, name, VERBATIM_TOOL_PENDING_BUDGET_MS);

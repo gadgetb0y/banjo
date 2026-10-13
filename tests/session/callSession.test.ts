@@ -2269,6 +2269,55 @@ describe('CallSession: a call-ending tool needs a spoken goodbye first (#102)', 
     });
   });
 
+  describe('the other party has signed off (#144)', () => {
+    // Live calls (2026-10-13, v0.1.9): after "That's all." the model said
+    // "Let me close this out with a quick goodbye.", was refused, and said
+    // "Okay, quick goodbye and then we'll be done." before the fixed goodbye:
+    // the retry only narrated again, so they heard two lines instead of one.
+    it('says the fixed goodbye right away instead of refusing', async () => {
+      const { handler, callTool } = await startWithEndTool();
+      say('user', "Okay, thanks. Thanks. That's all.");
+      say('assistant', 'Okay, thanks for letting me know. Let me close this out with a quick goodbye.');
+      await endTurnThenFallbackGoodbye(callTool('call-1'));
+
+      expect(handler).toHaveBeenCalledTimes(1);
+      expect(fakeVoiceAI.sendToolResult).not.toHaveBeenCalledWith('call-1', expect.objectContaining({ error: 'no_goodbye' }), true);
+      expect(fakeVoiceAI.sendToolResult).toHaveBeenLastCalledWith('call-1', { ok: true }, false);
+    });
+
+    it('judges only their latest line', async () => {
+      const { handler, callTool } = await startWithEndTool();
+      say('user', 'No.');
+      say('user', 'But thank you.');
+      say('user', "I think we're good.");
+      say('assistant', "Thanks for letting me know you're finished—let me wrap this up for Steve.");
+      await endTurnThenFallbackGoodbye(callTool('call-1'));
+
+      expect(handler).toHaveBeenCalledTimes(1);
+    });
+
+    it('still refuses when their latest line asks for something more (#133)', async () => {
+      const { handler, callTool } = await startWithEndTool();
+      say('user', 'Thanks, but can you also ask about Saturday?');
+      say('assistant', "Okay, let's close this out.");
+      await endTurnAndSettle(callTool('call-1'));
+
+      expect(handler).not.toHaveBeenCalled();
+      expect(fakeVoiceAI.sendToolResult).toHaveBeenLastCalledWith('call-1', expect.objectContaining({ error: 'no_goodbye' }), true);
+    });
+
+    it('ignores a suspect line from them (#25)', async () => {
+      // The 2026-10-13 call transcribed line noise as "Ви..." mid-call.
+      const { handler, callTool } = await startWithEndTool();
+      say('user', "That's everything, thanks.");
+      say('user', 'Ви...');
+      say('assistant', 'Okay, got it—let me close things out properly with a quick goodbye.');
+      await endTurnThenFallbackGoodbye(callTool('call-1'));
+
+      expect(handler).toHaveBeenCalledTimes(1);
+    });
+  });
+
   it('lets the tool run when the last line is a goodbye', async () => {
     const { handler, callTool } = await startWithEndTool();
     say('user', 'Mhm.');
