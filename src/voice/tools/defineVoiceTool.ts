@@ -87,6 +87,13 @@ export interface VoiceTool<TInput = unknown, TCtx = CallContext> {
    * provider can hold.
    */
   startsHold?: boolean;
+  /**
+   * record_answer (#148 review r2): its result prompts a reply only if the
+   * model said nothing alongside the call (VoiceAIProvider.sendToolResult's
+   * respond: 'if-silent'). It usually asks its next question in that same
+   * turn, and prompting another reply collided with it or talked over them.
+   */
+  replyOnlyIfSilent?: boolean;
 }
 
 export function defineVoiceTool<TInput, TCtx = CallContext>(spec: VoiceTool<TInput, TCtx>): VoiceTool<TInput, TCtx> {

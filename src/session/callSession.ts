@@ -887,7 +887,8 @@ export class CallSession<TCtx = CallContext> {
         this.startHold();
         return;
       }
-      this.voiceAI.sendToolResult(toolCallId, result, false);
+      if (tool.replyOnlyIfSilent) this.voiceAI.sendToolResult(toolCallId, result, false, { respond: 'if-silent' });
+      else this.voiceAI.sendToolResult(toolCallId, result, false);
     } catch (err) {
       logger.error({ err, toolCallId, name }, 'Tool handler threw');
       this.voiceAI.sendToolResult(toolCallId, { ok: false, error: 'upstream_error' }, true);

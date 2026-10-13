@@ -603,6 +603,7 @@ export const recordAnswerTool: VoiceTool<ReportedAnswer> = defineVoiceTool({
     answered: z.boolean().describe('Whether they gave you an answer to this question.'),
     answer: z.string().optional().describe('Their answer, in a short plain sentence. Leave out if not answered.'),
   }),
+  replyOnlyIfSilent: true,
   handler: async (input, ctx) => {
     return runToolSafely('record_answer', async () => {
       const count = ctx.task.questions?.length ?? 0;
@@ -616,9 +617,8 @@ export const recordAnswerTool: VoiceTool<ReportedAnswer> = defineVoiceTool({
       if (!(await saveCollectedAnswer(ctx.task.id, collectedAnswer(input)))) {
         return { ok: false as const, error: 'not_saved' as const, message: 'The answers for this call are already reported.' };
       }
-      // The result gets a reply like any tool's. Said here, so the model
-      // neither repeats a line it spoke with this call nor stalls after a
-      // silent one (#148 review).
+      // replyOnlyIfSilent: the model replies to this only if it said nothing
+      // alongside the call; then it's told what to do next (#148 review r2).
       return { ok: true as const, next: RECORD_ANSWER_NEXT };
     });
   },

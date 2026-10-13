@@ -179,6 +179,15 @@ export class OpenAIRealtimeProvider implements VoiceAIProvider {
   private pendingCalls = new Map<string, PendingFunctionCall>();
   /** Tracks function_call ids we've already emitted a tool_call for, so response.done doesn't double-emit. */
   private emittedCallIds = new Set<string>();
+  /**
+   * For sendToolResult's respond: 'if-silent' (#148 review r2): which response
+   * each tool call came from, which responses are still open, which produced
+   * speech, and what to decide once an open one is done.
+   */
+  private callResponseIds = new Map<string, string>();
+  private openResponseIds = new Set<string>();
+  private spokenResponseIds = new Set<string>();
+  private afterResponseDone = new Map<string, (() => void)[]>();
   /** The rate we negotiated for output audio (session.audio.output.format.rate) — used to tag emitted audio_chunks correctly instead of assuming a fixed rate. */
   private outputSampleRate = 24000;
   /** A triggerResponse() that arrived before the socket opened: false for none, else its cue (undefined for none). */
@@ -335,7 +344,7 @@ export class OpenAIRealtimeProvider implements VoiceAIProvider {
     this.ws.send(JSON.stringify({ type: 'response.create' }));
   }
 
-  sendToolResult(toolCallId: string, result: unknown, isError?: boolean, options?: { respond?: boolean }): void {
+  sendToolResult(toolCallId: string, result: unknown, isError?: boolean, options?: { respond?: boolean | 'if-silent' }): void {
     if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return;
     const output = isError ? { error: true, ...safeResultObject(result) } : result;
     this.ws.send(
@@ -350,7 +359,28 @@ export class OpenAIRealtimeProvider implements VoiceAIProvider {
     );
     // Prompt the model to continue now that it has the tool result, unless the
     // caller wants it to wait for the other party (server VAD responds then).
+    if (options?.respond === 'if-silent') return this.respondIfSilent(toolCallId);
     if (options?.respond !== false) this.ws.send(JSON.stringify({ type: 'response.create' }));
+  }
+
+  /**
+   * Prompts a reply to a tool result only if the response that called the
+   * tool said nothing, deciding once that response is done. A response still
+   * open can't take another response.create, and one that spoke (usually the
+   * next question, alongside record_answer) needs no second turn (#148 review r2).
+   */
+  private respondIfSilent(toolCallId: string): void {
+    const responseId = this.callResponseIds.get(toolCallId);
+    this.callResponseIds.delete(toolCallId);
+    const decide = () => {
+      if (responseId !== undefined && this.spokenResponseIds.has(responseId)) return;
+      if (this.ws?.readyState === WebSocket.OPEN) this.ws.send(JSON.stringify({ type: 'response.create' }));
+    };
+    if (responseId !== undefined && this.openResponseIds.has(responseId)) {
+      this.afterResponseDone.set(responseId, [...(this.afterResponseDone.get(responseId) ?? []), decide]);
+    } else {
+      decide();
+    }
   }
 
   interrupt(): void {
@@ -518,6 +548,7 @@ export class OpenAIRealtimeProvider implements VoiceAIProvider {
       case 'response.audio.delta': {
         const base64Audio: string | undefined = msg.delta;
         if (!base64Audio) return;
+        if (typeof msg.response_id === 'string') this.spokenResponseIds.add(msg.response_id);
         this.emitEvent({
           type: 'audio_chunk',
           chunk: {
@@ -533,6 +564,7 @@ export class OpenAIRealtimeProvider implements VoiceAIProvider {
       case 'response.output_text.delta': {
         if (this.outOfBandResponseIds.has(msg.response_id)) return;
         if (typeof msg.delta === 'string') {
+          if (msg.delta.trim() && typeof msg.response_id === 'string') this.spokenResponseIds.add(msg.response_id);
           this.emitEvent({ type: 'transcript', role: 'assistant', text: msg.delta, isFinal: false });
         }
         return;
@@ -573,6 +605,8 @@ export class OpenAIRealtimeProvider implements VoiceAIProvider {
       case 'response.created': {
         if (typeof msg.response?.metadata?.banjo_hold_check === 'string' && typeof msg.response.id === 'string') {
           this.outOfBandResponseIds.add(msg.response.id);
+        } else if (typeof msg.response?.id === 'string') {
+          this.openResponseIds.add(msg.response.id);
         }
         return;
       }
@@ -601,6 +635,7 @@ export class OpenAIRealtimeProvider implements VoiceAIProvider {
         if (this.outOfBandResponseIds.has(msg.response_id)) return;
         const callId: string | undefined = msg.call_id;
         if (!callId) return;
+        if (typeof msg.response_id === 'string') this.callResponseIds.set(callId, msg.response_id);
         const pending = this.pendingCalls.get(callId);
         const argsStr = msg.arguments ?? pending?.argsBuffer ?? '{}';
         const name = msg.name ?? pending?.name ?? 'unknown_tool';
@@ -619,13 +654,26 @@ export class OpenAIRealtimeProvider implements VoiceAIProvider {
         // Fallback path: scan response.output for function_call items in
         // case response.function_call_arguments.done wasn't (or isn't)
         // emitted per-call. emittedCallIds guards against double-emitting.
+        const responseId: string | undefined = typeof msg?.response?.id === 'string' ? msg.response.id : undefined;
         const outputs: any[] = msg?.response?.output ?? [];
         for (const item of outputs) {
           if (item?.type === 'function_call' && item.call_id) {
+            if (responseId && !this.callResponseIds.has(item.call_id)) this.callResponseIds.set(item.call_id, responseId);
             this.emitToolCall(item.call_id, item.name ?? 'unknown_tool', item.arguments ?? '{}', item);
           }
         }
         this.emitEvent({ type: 'turn_end' });
+        if (responseId) {
+          this.openResponseIds.delete(responseId);
+          const waiting = this.afterResponseDone.get(responseId) ?? [];
+          this.afterResponseDone.delete(responseId);
+          for (const decide of waiting) decide();
+          // Only recent responses: a tool result asks about its own, moments later.
+          for (const old of this.spokenResponseIds) {
+            if (this.spokenResponseIds.size <= 50) break;
+            this.spokenResponseIds.delete(old);
+          }
+        }
         return;
       }
 

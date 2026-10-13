@@ -176,6 +176,10 @@ describe('record_answer (#148 review)', () => {
     expect(recordAnswerTool.verbatimMessage).toBeUndefined();
   });
 
+  it('gets a reply only if the model said nothing alongside it (#148 review r2)', () => {
+    expect(recordAnswerTool.replyOnlyIfSilent).toBe(true);
+  });
+
   it('saves one answer straight away, without touching the task status', async () => {
     const hangUp = vi.fn(async () => {});
     const result = await recordAnswerTool.handler({ question: 2, answered: true, answer: '  Yes, until noon.  ' }, ctx(hangUp));
