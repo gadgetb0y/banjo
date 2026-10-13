@@ -258,6 +258,19 @@ export class CallSession<TCtx = CallContext> {
   private recordingState: 'idle' | 'awaiting_turn_end' | 'scheduled' | 'cancelled' | 'paused' = 'idle';
   /** The next notice resumes a recording paused for a hold (#151), rather than starting one. */
   private recordingResumes = false;
+  /**
+   * A person just picked up after a hold and Banjo hasn't spoken to them yet
+   * (#151). Only that first line can carry the notice that lets a paused
+   * recording resume: RECORDING_NOTICE matches any later line that merely
+   * says "recorded", the reason 'cancelled' never re-arms either.
+   */
+  private awaitingPickupOpener = false;
+  /**
+   * Recording start, pause and resume, one at a time (#151): a pause sent while
+   * a resume is still in flight could land first and leave the recording
+   * running through the next hold.
+   */
+  private recordingOps: Promise<unknown> = Promise.resolve();
   private recordingTimer: ReturnType<typeof setTimeout> | null = null;
   /** When the recording notice itself is estimated to finish playing — a barge-in before then may have flushed it (#71). */
   private recordingNoticePlayedAt = 0;
@@ -459,11 +472,20 @@ export class CallSession<TCtx = CallContext> {
             if (this.callEndingToolCallId !== null) this.calleeSpokeDuringEnd = event.text;
             else this.endRefused = false;
           }
+          const pickupOpener = event.role === 'assistant' && this.awaitingPickupOpener;
+          if (pickupOpener) this.awaitingPickupOpener = false;
+          // A paused recording resumes only on a notice in the first thing
+          // the new person hears (#151); without one, it stays off for good.
+          if (pickupOpener && this.recordingState === 'paused' && !RECORDING_NOTICE.test(event.text)) {
+            logger.warn({ callId: this.opts.callId }, 'no recording notice after the hold — the rest of this call is not recorded');
+            this.recordingState = 'cancelled';
+          }
           if (
             event.role === 'assistant' &&
             RECORDING_NOTICE.test(event.text) &&
             this.opts.recordCalls &&
-            (this.recordingState === 'idle' || (this.recordingState === 'paused' && !this.hold))
+            (this.recordingState === 'idle' || (this.recordingState === 'paused' && pickupOpener)) &&
+            !this.hold
           ) {
             this.recordingResumes = this.recordingState === 'paused';
             this.recordingState = 'awaiting_turn_end';
@@ -495,7 +517,9 @@ export class CallSession<TCtx = CallContext> {
       case 'interrupted':
         // #8: cut off before its turn ended, the recording notice may never
         // have reached the other party. Wait for Banjo to say it again.
-        if (this.recordingState === 'awaiting_turn_end') this.recordingState = this.recordingResumes ? 'paused' : 'idle';
+        // A resume's notice cut off fails closed (#151): only the pickup opener
+        // may carry it, and that line is gone.
+        if (this.recordingState === 'awaiting_turn_end') this.recordingState = this.recordingResumes ? 'cancelled' : 'idle';
         // #71: the turn can end well before its audio has played (the model
         // writes faster than it speaks), so the flush may also take a notice
         // whose recording is already scheduled. Once it has played, keep it:
@@ -633,16 +657,22 @@ export class CallSession<TCtx = CallContext> {
     this.recordingTimer = setTimeout(() => {
       this.recordingTimer = null;
       if (resume) {
-        telephony
-          .resumeRecording?.(callId)
-          .catch((err) => logger.error({ err, callId }, 'failed to resume call recording — the rest of the call is unrecorded'));
+        void this.runRecordingOp(() => telephony.resumeRecording!(callId)).catch((err) =>
+          logger.error({ err, callId }, 'failed to resume call recording — the rest of the call is unrecorded'),
+        );
         return;
       }
-      telephony
-        .startRecording!(callId)
+      void this.runRecordingOp(() => telephony.startRecording!(callId))
         .then(({ recordingId }) => this.opts.onStatusChange({ kind: 'recording_started', recordingId }))
         .catch((err) => logger.error({ err, callId }, 'failed to start call recording — the call continues unrecorded'));
     }, delay);
+  }
+
+  /** Runs a recording start, pause or resume after any still in flight (see recordingOps). */
+  private runRecordingOp<T>(op: () => Promise<T>): Promise<T> {
+    const result = this.recordingOps.then(op);
+    this.recordingOps = result.catch(() => {});
+    return result;
   }
 
   private cancelPendingRecording(): void {
@@ -845,7 +875,10 @@ export class CallSession<TCtx = CallContext> {
       const ctx = await this.opts.buildToolContext(this.audioPlaybackTracker.estimatedDoneAt(), verbatimDelivery);
       const result = await tool.handler(parsed.data, ctx);
       if (tool.startsHold && (result as { ok?: unknown })?.ok === true) {
-        if (!(await this.pauseRecordingForHold())) {
+        const paused = await this.pauseRecordingForHold();
+        // The call ended while the recording was being paused: nothing to hold.
+        if (this.isEnding()) return;
+        if (!paused) {
           this.voiceAI.sendToolResult(
             toolCallId,
             {
@@ -939,7 +972,7 @@ export class CallSession<TCtx = CallContext> {
       return false;
     }
     try {
-      const result = await telephony.pauseRecording(callId);
+      const result = await this.runRecordingOp(() => telephony.pauseRecording!(callId));
       this.recordingState = result === 'stopped' ? 'cancelled' : 'paused';
       return true;
     } catch (err) {
@@ -993,6 +1026,7 @@ export class CallSession<TCtx = CallContext> {
     const hold = this.stopHold();
     if (!hold) return;
     const waitedMs = Date.now() - hold.startedAt;
+    this.awaitingPickupOpener = true;
     logger.info({ callId: this.opts.callId, waitedMs }, 'a person picked up after the hold');
     void this.opts.onHoldChange?.({ kind: 'person', waitedMs }).catch((err: unknown) => logger.warn({ err, callId: this.opts.callId }, 'onHoldChange failed'));
     // Their words as a user line and a fixed note, not a cue: a cue replaces

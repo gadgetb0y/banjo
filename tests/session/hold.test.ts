@@ -320,6 +320,90 @@ describe('recording consent on hold (#151, #8)', () => {
   });
 });
 
+describe('recording consent on hold: no way around the notice (#151, #8)', () => {
+  const NOTICE_LINE = "Hi, I'm an AI assistant calling on behalf of Alex. This call is recorded.";
+
+  async function pausedForHold(pauseRecording = vi.fn(async () => 'paused' as const), resumeRecording = vi.fn(async () => {})) {
+    vi.useFakeTimers();
+    const s = setup({ recordCalls: true });
+    Object.assign(s.telephony, { startRecording: vi.fn(async () => ({ recordingId: 'RE-1' })), pauseRecording, resumeRecording });
+    await new CallSession(s.options).start();
+    s.emitTelephony({ callId: 'call-1', type: 'connected', meta: { callId: 'call-1', providerCallId: 'CA-1', toNumber: '+15555550100' } });
+    voice({ type: 'transcript', role: 'assistant', text: NOTICE_LINE, isFinal: true });
+    voice({ type: 'turn_end' });
+    await vi.advanceTimersByTimeAsync(1_000);
+    voice({ type: 'tool_call', call: { id: 'hold-1', name: 'wait_on_hold', arguments: {} } });
+    await vi.advanceTimersByTimeAsync(0);
+    fakeVoiceAI.judgeHoldLine.mockImplementationOnce(async () => 'person');
+    heard('This is Dana.');
+    await vi.advanceTimersByTimeAsync(0);
+    return s;
+  }
+
+  it('a later line that merely says "recorded" never resumes it, when the pickup opener had no notice', async () => {
+    const s = await pausedForHold();
+    voice({ type: 'transcript', role: 'assistant', text: "Hi, I'm an AI assistant calling about a refill.", isFinal: true });
+    voice({ type: 'turn_end' });
+    voice({ type: 'transcript', role: 'assistant', text: "Thanks, I've recorded that.", isFinal: true });
+    voice({ type: 'turn_end' });
+    await vi.advanceTimersByTimeAsync(2_000);
+    expect(s.telephony.resumeRecording).not.toHaveBeenCalled();
+  });
+
+  it('a pickup notice that gets cut off fails closed: no resume, even on a later notice', async () => {
+    const s = await pausedForHold();
+    voice({ type: 'transcript', role: 'assistant', text: NOTICE_LINE, isFinal: true });
+    voice({ type: 'interrupted' });
+    voice({ type: 'turn_end' });
+    voice({ type: 'transcript', role: 'assistant', text: NOTICE_LINE, isFinal: true });
+    voice({ type: 'turn_end' });
+    await vi.advanceTimersByTimeAsync(2_000);
+    expect(s.telephony.resumeRecording).not.toHaveBeenCalled();
+  });
+
+  it('a pause waits for a resume still in flight, so the recording is paused on the second hold', async () => {
+    let finishResume!: () => void;
+    const order: string[] = [];
+    const resumeRecording = vi.fn(() => new Promise<void>((resolve) => (finishResume = () => (order.push('resume'), resolve()))));
+    const pauseRecording = vi.fn(async () => (order.push('pause'), 'paused' as const));
+    await pausedForHold(pauseRecording, resumeRecording);
+    voice({ type: 'transcript', role: 'assistant', text: NOTICE_LINE, isFinal: true });
+    voice({ type: 'turn_end' });
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(resumeRecording).toHaveBeenCalled(); // in flight
+
+    voice({ type: 'tool_call', call: { id: 'hold-2', name: 'wait_on_hold', arguments: {} } });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(pauseRecording).toHaveBeenCalledTimes(1); // only the first hold's
+    finishResume();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(order).toEqual(['pause', 'resume', 'pause']);
+  });
+
+  it('no hold starts if the call ended while the recording was being paused', async () => {
+    vi.useFakeTimers();
+    let finishPause!: () => void;
+    const s = setup({ recordCalls: true });
+    Object.assign(s.telephony, {
+      startRecording: vi.fn(async () => ({ recordingId: 'RE-1' })),
+      pauseRecording: vi.fn(() => new Promise<'paused'>((resolve) => (finishPause = () => resolve('paused')))),
+      resumeRecording: vi.fn(async () => {}),
+    });
+    await new CallSession(s.options).start();
+    s.emitTelephony({ callId: 'call-1', type: 'connected', meta: { callId: 'call-1', providerCallId: 'CA-1', toNumber: '+15555550100' } });
+    voice({ type: 'transcript', role: 'assistant', text: NOTICE_LINE, isFinal: true });
+    voice({ type: 'turn_end' });
+    await vi.advanceTimersByTimeAsync(1_000);
+    voice({ type: 'tool_call', call: { id: 'hold-1', name: 'wait_on_hold', arguments: {} } });
+    await vi.advanceTimersByTimeAsync(0);
+    s.emitTelephony({ callId: 'call-1', type: 'ended', reason: 'stop' });
+    finishPause();
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(fakeVoiceAI.setHold).not.toHaveBeenCalledWith(true);
+    expect(s.options.onHoldChange).not.toHaveBeenCalled();
+  });
+});
+
 describe('waiting on hold needs every hold method', () => {
   it('refuses on a provider that cannot add context', async () => {
     const addContext = fakeVoiceAI.addContext;
