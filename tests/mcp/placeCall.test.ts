@@ -28,6 +28,25 @@ describe('mcp: place_call schema', () => {
     expect(placeCallInputSchema.safeParse({ ...base, mode: 'conversation' }).success).toBe(true);
   });
 
+  it("accepts mode 'ask' with up to 5 questions, and rejects more, or an empty one (#148)", () => {
+    const base = { contactId: CONTACT_ID, taskDescription: 'Find out their Saturday hours', mode: 'ask' };
+    expect(placeCallInputSchema.safeParse({ ...base, questions: ['When do you close Saturday?'] }).success).toBe(true);
+    expect(placeCallInputSchema.safeParse({ ...base, questions: ['a', 'b', 'c', 'd', 'e', 'f'] }).success).toBe(false);
+    expect(placeCallInputSchema.safeParse({ ...base, questions: ['  '] }).success).toBe(false);
+    expect(placeCallInputSchema.safeParse({ ...base, questions: [] }).success).toBe(false);
+  });
+
+  it('rejects a question with a line break in it, which would break the numbering answers are matched by (#148 review)', () => {
+    const base = { contactId: CONTACT_ID, taskDescription: 'Find out their Saturday hours', mode: 'ask' };
+    for (const question of ['Hours?\n2. Walk-ins?', 'Hours?\r\nWalk-ins?', 'Hours?\rWalk-ins?']) {
+      const result = placeCallInputSchema.safeParse({ ...base, questions: [question] });
+      expect(result.success).toBe(false);
+      expect(result.error?.issues[0]?.message).toMatch(/one line/i);
+    }
+    // Only the ends are trimmed, so a trailing newline is fine.
+    expect(placeCallInputSchema.safeParse({ ...base, questions: ['Hours?\n'] }).success).toBe(true);
+  });
+
   it('accepts a per-call hold limit of 1 to 45 minutes (#151)', () => {
     const base = { contactId: CONTACT_ID, taskDescription: 'Ask about my refill' };
     expect(placeCallInputSchema.safeParse({ ...base, constraints: { maxHoldMinutes: 30 } }).success).toBe(true);
@@ -48,6 +67,20 @@ describe('mcp: place_call schema', () => {
     expect(
       placeCallInputSchema.safeParse({ contactId: CONTACT_ID, taskDescription: 'Call later', scheduledFor: '2026-09-13T09:00:00' }).success,
     ).toBe(true);
+  });
+});
+
+describe("mcp: place_call, mode 'ask'", () => {
+  it('refuses date windows, which an ask call never uses (#148 review)', async () => {
+    await expect(
+      placeCallHandler({
+        contactId: CONTACT_ID,
+        taskDescription: 'Find out their Saturday hours',
+        mode: 'ask',
+        questions: ['When do you close Saturday?'],
+        constraints: { dateWindows: [{ start: '2026-10-20T09:00:00', end: '2026-10-20T17:00:00' }] },
+      }),
+    ).rejects.toThrow(/dateWindows/);
   });
 });
 
@@ -196,6 +229,38 @@ describe('mcp: place_call date windows', () => {
         constraints: { dateWindows: [{ start: 'next tuesday', end: '2026-10-01T18:00:00' }] },
       }),
     ).rejects.toThrow(/dateWindows/);
+    expect(createTask).not.toHaveBeenCalled();
+  });
+});
+
+describe("mcp: place_call with mode 'ask' (#148)", () => {
+  beforeEach(() => {
+    createTask.mockClear();
+    triggerOrchestration.mockClear();
+  });
+
+  it('stores the questions on the task and starts the call', async () => {
+    await placeCallHandler({
+      contactId: CONTACT_ID,
+      taskDescription: 'Find out their Saturday hours',
+      mode: 'ask',
+      questions: ['When do you close Saturday?'],
+    });
+    expect(createTask).toHaveBeenCalledWith(expect.objectContaining({ mode: 'ask', questions: ['When do you close Saturday?'] }));
+    expect(triggerOrchestration).toHaveBeenCalledWith('task-1');
+  });
+
+  it('refuses an ask call with no questions, before creating anything', async () => {
+    await expect(placeCallHandler({ contactId: CONTACT_ID, taskDescription: 'Find out their hours', mode: 'ask' })).rejects.toThrow(
+      "mode 'ask' needs at least one question",
+    );
+    expect(createTask).not.toHaveBeenCalled();
+  });
+
+  it('refuses questions on a booking call', async () => {
+    await expect(
+      placeCallHandler({ contactId: CONTACT_ID, taskDescription: 'Book a haircut', questions: ['Any openings?'] }),
+    ).rejects.toThrow("`questions` is only for mode 'ask'");
     expect(createTask).not.toHaveBeenCalled();
   });
 });

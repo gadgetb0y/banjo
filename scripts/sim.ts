@@ -34,9 +34,12 @@ Options:
   --business <name>      Who Banjo is calling. Default: "Claudia's Dog Grooming".
   --category <string>    salon|medical|restaurant|home_services|other. Default: salon.
   --goal <string>        What the call is for. Default: book a grooming appointment.
-  --mode <mode>          booking|conversation. Default: booking.
-  --duration <minutes>   Appointment length to negotiate. Default: 60.
-  --window-days <n>      How many days out Banjo may book. Default: 3.
+  --mode <mode>          booking|conversation|ask. Default: booking.
+  --question <text>      With --mode ask: something Banjo should find out, on one line.
+                         Repeat for more than one (at most 5). Checked as place_call
+                         checks them. Default goal for ask: find out a few things.
+  --duration <minutes>   Appointment length to negotiate. Default: 60. Not used by --mode ask.
+  --window-days <n>      How many days out Banjo may book. Default: 3. Not used by --mode ask.
   --transfer             Offer transfer_to_owner, as with TRANSFER_ENABLED=true.
   --warm                 Make it a warm transfer (TRANSFER_MODE=warm). Implies --transfer.
   --owner <answer>       With --warm: what the owner does. accept|decline|no-answer. Default: accept.
@@ -49,6 +52,8 @@ Options:
 While the call runs: type a line and press Enter to say it. /hangup hangs up
 on Banjo; Ctrl+C does the same.`;
 
+const DEFAULT_BOOKING_GOAL = 'Book a full grooming appointment for my dog, Banjo, a golden retriever.';
+const DEFAULT_QUESTIONS = ['What time do you close on Saturdays?', 'How much is a full groom for a golden retriever?'];
 const OWNER_ANSWERS = { accept: 'accepted', decline: 'declined', 'no-answer': 'no_answer' } as const;
 
 const CATEGORIES = ['salon', 'medical', 'restaurant', 'home_services', 'other'] as const;
@@ -66,7 +71,8 @@ async function main(): Promise<void> {
     options: {
       business: { type: 'string', default: "Claudia's Dog Grooming" },
       category: { type: 'string', default: 'salon' },
-      goal: { type: 'string', default: 'Book a full grooming appointment for my dog, Banjo, a golden retriever.' },
+      goal: { type: 'string' },
+      question: { type: 'string', multiple: true },
       mode: { type: 'string', default: 'booking' },
       duration: { type: 'string', default: '60' },
       'window-days': { type: 'string', default: '3' },
@@ -83,7 +89,10 @@ async function main(): Promise<void> {
     process.exit(0);
   }
   const mode = values.mode;
-  if (mode !== 'booking' && mode !== 'conversation') fail(`--mode must be "booking" or "conversation" (got "${mode}").`);
+  if (mode !== 'booking' && mode !== 'conversation' && mode !== 'ask') fail(`--mode must be "booking", "conversation" or "ask" (got "${mode}").`);
+  if (mode !== 'ask' && values.question) fail('--question is only for --mode ask.');
+  const questions = mode === 'ask' ? (values.question ?? DEFAULT_QUESTIONS) : undefined;
+  const goal = values.goal ?? (mode === 'ask' ? 'Find out a few things before booking a grooming.' : DEFAULT_BOOKING_GOAL);
   const category = values.category as Category;
   if (!CATEGORIES.includes(category)) fail(`--category must be one of ${CATEGORIES.join(', ')} (got "${values.category}").`);
   const durationMinutes = positiveInt(values.duration, '--duration');
@@ -106,7 +115,7 @@ async function main(): Promise<void> {
 
   const { config } = await import('../src/config/index.js');
   const { OpenAIRealtimeProvider } = await import('../src/voice/providers/openai.js');
-  const { startSimCall } = await import('../src/sim/simCall.js');
+  const { startSimCall, SimInputError } = await import('../src/sim/simCall.js');
 
   const rl = createInterface({ input: process.stdin, output: process.stdout, prompt: 'You: ' });
   // Clears the half-typed "You: " line first, then redraws it, so Banjo's lines don't land mid-prompt.
@@ -118,20 +127,25 @@ async function main(): Promise<void> {
   };
 
   console.log(`\nBanjo is calling ${values.business} for ${config.ASSISTANT_PRINCIPAL_NAME}.`);
-  console.log(`Goal: ${values.goal}`);
+  console.log(`Goal: ${goal}`);
+  questions?.forEach((q, i) => console.log(`  ${i + 1}. ${q}`));
   console.log(`You're answering the phone at ${values.business}. Nothing real is called, booked or sent.`);
   console.log(scriptLines ? `Reading your lines from ${values.script}.\n` : 'Type what you say and press Enter. /hangup hangs up.\n');
 
   const call = await startSimCall({
     business: values.business,
     category,
-    goal: values.goal,
+    goal,
     mode,
+    questions,
     durationMinutes,
     windowDays,
     createVoiceAI: () => new OpenAIRealtimeProvider({ textOnly: true }),
     owner,
     print,
+  }).catch((err: unknown) => {
+    if (err instanceof SimInputError) fail(`place_call would refuse this call: ${err.message}`);
+    throw err;
   });
   process.on('SIGINT', () => call.telephony.calleeHangsUp());
 

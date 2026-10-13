@@ -115,4 +115,43 @@ describe('notifyTaskOutcome', () => {
     expect(notify).not.toHaveBeenCalled();
     expect(sendTaskWebhook).not.toHaveBeenCalled();
   });
+
+  describe('an ask call that ended some other way (#148 review)', () => {
+    // Escalated, transferred, voicemail or a hold limit keep their own outcome,
+    // but answers record_answer saved before that would otherwise only show in
+    // get_task_status.
+    const escalatedAsk = {
+      ...finished,
+      status: 'escalated',
+      mode: 'ask',
+      questions: ['Open Sunday?', 'Walk-ins?', 'Price for a full groom?'],
+      collectedAnswers: { '1': { question: 1, answered: true, answer: 'Yes, 10 to 4.' } },
+      outcome: { kind: 'escalated', reason: 'They put me through to a manager who wanted to talk to Steve.' },
+    } as unknown as Task;
+
+    it("adds the saved answers to the owner's summary", async () => {
+      getTask.mockResolvedValue(escalatedAsk);
+      await notifyTaskOutcome('task-1');
+      const [, , summary] = notify.mock.calls[0]! as unknown as [string, unknown, string];
+      expect(summary).toMatch(/^Got stuck calling Luigi's/);
+      expect(summary).toContain('1 of 3');
+      expect(summary).toContain('Open Sunday? Yes, 10 to 4.');
+      expect(summary).toContain('Walk-ins? (no answer)');
+    });
+
+    it('gives the webhook a count only, never the answer text', async () => {
+      getTask.mockResolvedValue(escalatedAsk);
+      await notifyTaskOutcome('task-1');
+      const [event] = sendTaskWebhook.mock.calls[0]! as unknown as [{ text: string }];
+      expect(event.text).toMatch(/^Banjo got stuck calling Luigi's\. Needs the owner's attention\. It saved 1 of 3 answers first\./);
+      expect(event.text).not.toContain('10 to 4');
+    });
+
+    it('adds nothing when no answer was saved', async () => {
+      getTask.mockResolvedValue({ ...escalatedAsk, collectedAnswers: null } as unknown as Task);
+      await notifyTaskOutcome('task-1');
+      const [, , summary] = notify.mock.calls[0]! as unknown as [string, unknown, string];
+      expect(summary).not.toContain('saved');
+    });
+  });
 });

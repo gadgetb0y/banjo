@@ -42,11 +42,12 @@ describe('voice tools: schema + JSON Schema conversion', () => {
   it('registers all 7 call tools with unique names', () => {
     const names = callTools.map((t) => t.name);
     expect(names).toEqual([
+      // bookingCallTools, then commonCallTools: the order every call gets them in.
       'check_my_availability',
       'confirm_appointment',
       'undo_confirmed_appointment',
-      'leave_voicemail_and_end_call',
       'report_negotiation_failed',
+      'leave_voicemail_and_end_call',
       'escalate_and_end_call',
       'end_call',
     ]);
@@ -420,6 +421,24 @@ describe('outcome-recording order relative to hangUpAfterSpeaking (regression fo
     const transitionOrder = transitionTask.mock.invocationCallOrder[0]!;
     const hangUpOrder = vi.mocked(hangUp).mock.invocationCallOrder[0]!;
     expect(transitionOrder).toBeLessThan(hangUpOrder);
+  });
+
+  it("end_call on an ask task with nothing saved escalates with its summary, rather than an urgent 'no answers' (#148 review r2)", async () => {
+    // Round 1 recorded it 'answered' with every question unanswered; the
+    // model can put the answers in the summary without saving them.
+    vi.useFakeTimers();
+    const hangUp = vi.fn(async () => {});
+    const promise = endCallTool.handler(
+      { summary: 'They said to call back tomorrow.' },
+      makeCtx(hangUp, Date.now(), { mode: 'ask', questions: ['Open Sunday?', 'Walk-ins?'], collectedAnswers: null }),
+    );
+    await vi.advanceTimersByTimeAsync(6000);
+    await promise;
+    vi.useRealTimers();
+
+    expect(transitionTask).toHaveBeenCalledWith('task-1', 'escalated', {
+      outcome: { kind: 'escalated', reason: 'Ended without saving answers. Banjo noted: They said to call back tomorrow.' },
+    });
   });
 
   it('end_call on a conversation-mode task completes the conversation instead of escalating — the model can reach the generic end_call tool on these tasks too (see outboundToolsFor), and treating that as an escalation mislabels a normal close as needing Steve follow-up', async () => {

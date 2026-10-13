@@ -50,6 +50,49 @@ describe('sweepStaleCalls', () => {
     expect(notifyIfTerminal).toHaveBeenCalledWith('task-1');
   });
 
+  it("records a swept ask call's saved answers as answered rather than failing it (#148 review)", async () => {
+    listNonTerminalTasks.mockResolvedValue([
+      {
+        id: 'task-1',
+        mode: 'ask',
+        status: 'negotiating',
+        questions: ['Q1?', 'Q2?'],
+        collectedAnswers: { '2': { question: 2, answered: true, answer: 'Yes.' } },
+      },
+    ]);
+    latestCallAttemptFor.mockResolvedValue({ id: 'attempt-1', startedAt: LONG_AGO, endedAt: null });
+
+    await sweepStaleCalls();
+
+    expect(transitionTask).toHaveBeenCalledWith(
+      'task-1',
+      'answered',
+      {
+        outcome: {
+          kind: 'answered',
+          answers: [
+            { question: 'Q1?', answered: false },
+            { question: 'Q2?', answered: true, answer: 'Yes.' },
+          ],
+          summary: expect.stringContaining('The call ended before Banjo could wrap it up'),
+        },
+      },
+      { from: ['calling', 'negotiating'] },
+    );
+    expect(notifyIfTerminal).toHaveBeenCalledWith('task-1');
+  });
+
+  it("doesn't look for a booking for an ask call, or mention one, when nothing was saved (#148 review r2)", async () => {
+    listNonTerminalTasks.mockResolvedValue([{ id: 'task-1', mode: 'ask', status: 'negotiating', questions: ['Q1?'], collectedAnswers: null }]);
+    latestCallAttemptFor.mockResolvedValue({ id: 'attempt-1', startedAt: LONG_AGO, endedAt: null });
+
+    await sweepStaleCalls();
+
+    expect(findEventByIdempotencyKey).not.toHaveBeenCalled();
+    const [, , patch] = transitionTask.mock.calls[0] as unknown as [string, string, { outcome: { reason: string } }];
+    expect(patch.outcome.reason).toBe('The call was interrupted before it finished, and no answers were saved. Its outcome is unknown.');
+  });
+
   it('leaves alone a call this process is still driving, however long it has run', async () => {
     listNonTerminalTasks.mockResolvedValue([{ id: 'task-1', status: 'negotiating' }]);
     latestCallAttemptFor.mockResolvedValue({ id: 'attempt-1', startedAt: LONG_AGO, endedAt: null });

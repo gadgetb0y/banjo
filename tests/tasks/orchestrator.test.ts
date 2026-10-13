@@ -123,6 +123,30 @@ describe('a task whose requested times have all passed (#3)', () => {
   });
 });
 
+describe("an ask task's date windows (#148)", () => {
+  // An ask call books nothing, so neither its date windows nor the calendar
+  // apply. It used to fail as "every time requested had passed".
+  it('dials without checking windows or the calendar, even when every window is over', async () => {
+    getTask.mockResolvedValue({
+      id: 'task-ask',
+      channel: 'phone',
+      status: 'pending',
+      mode: 'ask',
+      contactId: 'contact-1',
+      constraints: { dateWindows: [{ start: '2020-01-01T09:00:00-05:00', end: '2020-01-01T17:00:00-05:00' }] },
+    });
+    getContact.mockResolvedValue({ id: 'contact-1' });
+    transitionTask.mockImplementation(async (id: string, status: string) => ({ id, status }));
+
+    triggerOrchestration('task-ask');
+    await vi.waitFor(() => expect(createCallAttempt).toHaveBeenCalledWith('task-ask'));
+
+    expect(transitionTask).not.toHaveBeenCalledWith('task-ask', 'failed', expect.anything(), expect.anything());
+    expect(computeCandidateWindows).not.toHaveBeenCalled();
+    expect(transitionTask).toHaveBeenCalledWith('task-ask', 'calling', { candidateWindows: [] }, expect.anything());
+  });
+});
+
 describe('per-number call cap at dial time', () => {
   // place_call checks the cap when a call is requested; a call scheduled for
   // later is checked again here, right before it would dial.
@@ -235,5 +259,23 @@ describe('resuming a checking_availability task (#64)', () => {
     expect(createCallAttempt).not.toHaveBeenCalled();
     expect(CallSession).not.toHaveBeenCalled();
     expect(notifyTaskOutcome).not.toHaveBeenCalled();
+  });
+});
+
+describe("an 'ask' task (#148)", () => {
+  it('dials without looking up free time: it books nothing', async () => {
+    getTask.mockResolvedValue({ id: 'task-ask', channel: 'phone', status: 'pending', mode: 'ask', contactId: 'contact-3', constraints: {} });
+    getContact.mockResolvedValue({ id: 'contact-3' });
+    transitionTask.mockImplementation(async (id: string, status: string) => ({ id, status }));
+    createCallAttempt.mockResolvedValueOnce({ id: 'attempt-ask' });
+    CallSession.mockImplementation(function () {
+      return { start: async () => { throw new Error('stop here'); } };
+    });
+
+    triggerOrchestration('task-ask');
+    await vi.waitFor(() => expect(CallSession).toHaveBeenCalled());
+
+    expect(computeCandidateWindows).not.toHaveBeenCalled();
+    expect(transitionTask).toHaveBeenCalledWith('task-ask', 'calling', { candidateWindows: [] }, expect.objectContaining({ from: ['checking_availability'] }));
   });
 });

@@ -248,3 +248,179 @@ describe('voicemail (#71)', () => {
     expect(prompt).not.toContain('the system speaks that message for you, verbatim,\nbefore hanging up');
   });
 });
+
+describe("buildCallSystemPrompt: mode 'ask' (#148)", () => {
+  const askTask = {
+    goalDescription: 'Find out their Saturday hours',
+    mode: 'ask',
+    questions: ['When do you close on Saturday?', 'Do you take walk-ins?'],
+  } as Task;
+
+  it('lists the questions by number and says how to report them', () => {
+    const prompt = buildCallSystemPrompt(askTask, contact, []);
+    expect(prompt).toContain('1. When do you close on Saturday?\n2. Do you take walk-ins?');
+    expect(prompt).toContain('report_answers_and_end_call');
+    expect(prompt).toContain('never fill in a guess');
+    expect(prompt).toContain('to ask some questions and report the answers back');
+  });
+
+  it('carries no booking instructions, free time, or negotiation outcome', () => {
+    const prompt = buildCallSystemPrompt(askTask, contact, [{ start: '2026-10-13T14:00:00Z', end: '2026-10-13T16:00:00Z' }]);
+    for (const bookingOnly of ['confirm_appointment', 'check_my_availability', 'report_negotiation_failed', 'is free during these ranges', 'to negotiate or book an appointment']) {
+      expect(prompt).not.toContain(bookingOnly);
+    }
+    // The shared endings are still there.
+    expect(prompt).toContain('leave_voicemail_and_end_call');
+    expect(prompt).toContain('escalate_and_end_call');
+  });
+
+  it('leaves out the appointment length even when one is set, but keeps the notes (#148 review)', () => {
+    // The sim always passes durationMinutes, so every ask sim run got told to
+    // use it in confirm_appointment, a tool ask calls don't have.
+    const withConstraints = { ...askTask, constraints: { durationMinutes: 60, notes: 'Ask for Dana.' } } as Task;
+    for (const prompt of [buildCallSystemPrompt(withConstraints, contact, []), buildCallFrontendPrompt(withConstraints, contact)]) {
+      expect(prompt).not.toMatch(/Appointment length/);
+      expect(prompt).not.toContain('check_my_availability');
+      expect(prompt).toContain('Ask for Dana.');
+    }
+  });
+
+  it('booking prompt is unchanged by the ask branch', () => {
+    const prompt = buildCallSystemPrompt(bookingTask, contact, []);
+    expect(prompt).toContain('to negotiate or book an appointment.');
+    expect(prompt).toContain(
+      'Once a specific time is agreed, call confirm_appointment with the confirmed start time and duration.\nIf you reach voicemail',
+    );
+    expect(prompt).toContain('report_negotiation_failed with a short reason.\nIf you get stuck');
+    expect(prompt).not.toContain('report_answers_and_end_call');
+  });
+
+  it('gives the voice layer the questions too, without the tool names', () => {
+    const prompt = buildCallFrontendPrompt(askTask, contact);
+    expect(prompt).toContain('1. When do you close on Saturday?');
+    expect(prompt).toContain('to ask some questions and report the answers back');
+    expect(prompt).not.toContain('report_answers_and_end_call');
+    expect(prompt).not.toContain('record_answer');
+  });
+
+  // #148 review, finding 5.
+  describe('fits the shared rules', () => {
+    // Line breaks fall wherever the prose wraps, so these compare on single spaces.
+    const flat = (prompt: string) => prompt.replace(/\s+/g, ' ');
+    const both = (task: Task = askTask) => [buildCallSystemPrompt(task, contact, []), buildCallFrontendPrompt(task, contact)].map(flat);
+
+    it('declines reserving something on hold, without reading as refusing to hold the line', () => {
+      for (const prompt of both()) {
+        expect(prompt).not.toMatch(/book,\s+hold, order/);
+        expect(prompt).not.toMatch(/booking, order, hold/);
+        expect(prompt).toContain('or to put something on hold for Alex');
+        expect(prompt).toContain('asking you to hold ("Can you hold one moment?") is different: that\'s not an offer');
+      }
+    });
+
+    it('may give the principal\'s name and the call\'s own details when they are needed to answer, and nothing else', () => {
+      for (const prompt of both()) {
+        expect(prompt).toContain("Alex's name, or a detail from what you are calling about or from the notes for this call");
+        expect(prompt).toContain('You may give them those, and nothing else.');
+      }
+    });
+
+    it('without transfer: says it can\'t give payment or other personal details, and carries on asking', () => {
+      for (const prompt of both()) {
+        expect(prompt).toContain("If they ask for a deposit, payment or other personal details, say you can't give that, and carry on asking.");
+        expect(prompt).not.toContain('transfer_to_owner');
+        expect(prompt).not.toMatch(/connecting them to Alex/);
+      }
+    });
+
+    it('with transfer: the transfer rule applies to what only the principal can give', async () => {
+      const { config } = await import('../../src/config/index.js');
+      try {
+        config.TRANSFER_ENABLED = true;
+        for (const prompt of both()) {
+          expect(prompt).toContain('transfer_to_owner');
+          expect(prompt).toContain('only Alex can give those: follow the rules above for connecting them to Alex.');
+          expect(prompt).toContain("If they'd rather not, say you can't give that, and carry on asking.");
+          // No blanket refusal left to contradict the transfer rule.
+          expect(prompt).not.toMatch(/ask for a deposit, payment or personal details, answer them out loud/);
+        }
+      } finally {
+        config.TRANSFER_ENABLED = false;
+      }
+    });
+
+    it('records each answer as it goes, and ends with report_answers_and_end_call, not end_call', () => {
+      const prompt = flat(buildCallSystemPrompt(askTask, contact, []));
+      expect(prompt).toContain('call record_answer for that question right away, without saying anything about it');
+      expect(prompt).toContain('End this call that way, not with end_call.');
+    });
+  });
+
+  it('keeps each question on its own numbered line even if its text has line breaks (#148 review)', () => {
+    const broken = { ...askTask, questions: ['Hours?\n2. Walk-ins?', 'Parking?'] } as Task;
+    for (const prompt of [buildCallSystemPrompt(broken, contact, []), buildCallFrontendPrompt(broken, contact)]) {
+      expect(prompt).toContain('1. Hours? 2. Walk-ins?\n2. Parking?');
+    }
+  });
+
+  // #148 review, round 2, finding 3: the shared sections still told ask calls
+  // to book, confirm a time, and say what was booked.
+  describe('the full ask prompt has no booking instructions', () => {
+    const BOOKING_ONLY = [
+      'Wait for a clear yes to a specific time',
+      'Your own summary of a time is not agreement',
+      'So shall I book Friday at 10?',
+      'lock it in',
+      'If the other party offers a time, restate it back clearly before confirming.',
+      'Once a booking has gone through',
+      'what is booked',
+      'Yes, Friday at 10 works.',
+      'an unavailable time',
+      'offer alternatives',
+      'to negotiate or book an appointment',
+    ];
+
+    it('backend and voice layer, on either provider, with transfer off and on', async () => {
+      const { config } = await import('../../src/config/index.js');
+      try {
+        for (const provider of ['openai', 'openai-live'] as const) {
+          for (const transfer of [false, true]) {
+            config.VOICE_AI_PROVIDER = provider;
+            config.TRANSFER_ENABLED = transfer;
+            for (const prompt of [buildCallSystemPrompt(askTask, contact, [], 'Likes mornings.'), buildCallFrontendPrompt(askTask, contact, 'Likes mornings.')]) {
+              for (const line of BOOKING_ONLY) expect(prompt).not.toContain(line);
+              expect(prompt).toMatch(/Saving an answer[^\n]* is silent: never announce it/);
+            }
+          }
+        }
+      } finally {
+        config.VOICE_AI_PROVIDER = 'openai';
+        config.TRANSFER_ENABLED = false;
+      }
+    });
+
+    it('booking and conversation prompts keep every booking line', () => {
+      for (const task of [bookingTask, conversationTask]) {
+        for (const prompt of [buildCallSystemPrompt(task, contact, []), buildCallFrontendPrompt(task, contact)]) {
+          for (const line of BOOKING_ONLY) expect(prompt).toContain(line);
+          expect(prompt).not.toMatch(/Saving an answer/);
+        }
+      }
+    });
+  });
+
+  // #148 review, round 2, finding 6: on openai-live the backend acts only when
+  // the voice layer delegates, and nothing told it to delegate saving answers,
+  // so record_answer never ran mid-call and a hang-up lost every answer.
+  it('tells the voice layer to delegate saving each confirmed answer, silently, without naming the tool', () => {
+    const prompt = buildCallFrontendPrompt(askTask, contact).replace(/\s+/g, ' ');
+    expect(prompt).toContain(
+      "Once they confirm your read-back of an answer, or that they don't know, delegate saving that answer to your backend right away, without saying anything about it, and carry on.",
+    );
+    expect(prompt).not.toContain('record_answer');
+    // Booking and conversation voice layers are not told to save answers.
+    for (const task of [bookingTask, conversationTask]) {
+      expect(buildCallFrontendPrompt(task, contact)).not.toMatch(/delegate saving/);
+    }
+  });
+});

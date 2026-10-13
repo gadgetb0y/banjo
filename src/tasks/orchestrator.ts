@@ -20,6 +20,7 @@ import {
   type TransitionGuard,
 } from './service.js';
 import type { TimeWindow } from './schema.js';
+import { modeRules } from './modes.js';
 
 /** Asked for on each use rather than once at import, so the simulator's overrideCalendarProvider() (scripts/sim.ts) takes effect. */
 function getCalendar(): CalendarProvider {
@@ -98,12 +99,15 @@ async function runTask(taskId: string): Promise<void> {
   // Only this run's own claim may move the task on from here.
   const stillOurs = { from: ['checking_availability'], ifUpdatedAt: checking.updatedAt } satisfies TransitionGuard;
 
+  // Only a call that can book has windows to check (tasks/modes.ts): an
+  // 'ask' call (#148) once failed here over times it never used.
+  const books = modeRules(task).books;
   // Every requested window can be over by the time a scheduled call runs.
   // Calling anyway used to go ahead with no pre-checked windows at all, so
   // the model could book any free time (#3) — fail and tell the owner instead.
   const requestedWindows = task.constraints.dateWindows ?? [];
   const dateWindows = requestedWindows.length ? clipWindowsToFuture(requestedWindows) : defaultLookaheadWindow();
-  if (!dateWindows.length) {
+  if (books && !dateWindows.length) {
     const failed = await transitionTask(
       task.id,
       'failed',
@@ -121,10 +125,13 @@ async function runTask(taskId: string): Promise<void> {
     await failOverCallCap(task.id, describeCallCapRefusal(earlyCap), stillOurs);
     return;
   }
-  const candidateWindows = await getCalendar().computeCandidateWindows({
-    dateWindows,
-    durationMinutes: task.constraints.durationMinutes ?? 30,
-  });
+  // A call that can't book has no free time to look up.
+  const candidateWindows = !books
+    ? []
+    : await getCalendar().computeCandidateWindows({
+        dateWindows,
+        durationMinutes: task.constraints.durationMinutes ?? 30,
+      });
   // The per-number call cap, checked again right before dialing: place_call
   // checked it when the call was requested, but a scheduled call can come due
   // after other calls to the same number. Held under a per-contact lock until
@@ -272,14 +279,20 @@ export async function sweepStaleCalls(): Promise<void> {
 
     // A Calendar outage must not stall the sweep — an honest "we don't know"
     // still beats leaving the task in limbo, which is the bug being fixed.
+    // Only a call that can book can have left a booking behind (#148 review r2).
+    const books = modeRules(task).books;
     let booked: Awaited<ReturnType<CalendarProvider['findEventByIdempotencyKey']>>;
     let calendarChecked = true;
     try {
-      booked = await getCalendar().findEventByIdempotencyKey(`confirm:${attempt.id}`);
+      if (books) booked = await getCalendar().findEventByIdempotencyKey(`confirm:${attempt.id}`);
     } catch (err) {
       calendarChecked = false;
       logger.error({ err, taskId: task.id }, 'stale-call sweep could not reach the calendar — reporting outcome as unknown');
     }
+
+    // An ask call that saved answers before it died reports them, as one
+    // that ended early on a live process does (#148 review).
+    const unfinished = modeRules(task).unfinishedCallOutcome(task);
 
     if (booked) {
       logger.warn(
@@ -300,6 +313,10 @@ export async function sweepStaleCalls(): Promise<void> {
         },
         { from: ['calling', 'negotiating'] },
       );
+    } else if (unfinished) {
+      const { status, outcome } = unfinished;
+      logger.warn({ taskId: task.id, callAttemptId: attempt.id }, 'stale call swept — recording the answers it saved');
+      await transitionTask(task.id, status, { outcome }, { from: ['calling', 'negotiating'] });
     } else {
       logger.warn({ taskId: task.id, callAttemptId: attempt.id }, 'stale call swept — no calendar event found');
       await transitionTask(
@@ -310,7 +327,9 @@ export async function sweepStaleCalls(): Promise<void> {
             kind: 'failed',
             // Only claim the calendar was empty when it was actually read — a
             // failed lookup says nothing about whether a booking exists.
-            reason: calendarChecked
+            reason: !books
+              ? 'The call was interrupted before it finished, and no answers were saved. Its outcome is unknown.'
+              : calendarChecked
               ? 'The call was interrupted before it finished, and no booking was found on the calendar. Its outcome is unknown.'
               : 'The call was interrupted before it finished, and the calendar could not be checked for a booking — check it by hand. Its outcome is unknown.',
           },

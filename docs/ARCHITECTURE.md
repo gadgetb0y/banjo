@@ -50,7 +50,8 @@ Steve, in conversation with Claude: "Schedule a haircut with Claudia"
               ├─ tool: confirm_appointment    → writes event to Steve's calendar, idempotent → status: confirmed
               ├─ tool: leave_voicemail_and_end_call → status: voicemail_left
               ├─ tool: report_negotiation_failed    → status: negotiation_failed (reached a human, nothing fit)
-              └─ tool: escalate_and_end_call        → status: escalated (genuinely stuck)
+              ├─ tool: escalate_and_end_call        → status: escalated (genuinely stuck)
+              └─ tool: report_answers_and_end_call  → status: answered (mode 'ask' only — see "Ask calls")
         → NotificationChannel.notify(taskId, outcome, summary) → Steve gets a text (or a Pushover push) either way
         → Steve later asks Claude "how'd that go?" → get_task_status / list_recent_tasks
 ```
@@ -417,6 +418,101 @@ Exposed over **HTTP/SSE (remote MCP)**, since Banjo runs as a persistent AWS ser
 
 ---
 
+## Ask calls (`mode: 'ask'`, #148)
+
+`place_call` with `mode: 'ask'` and 1–5 `questions` finds something out and books nothing. The
+questions are stored in `tasks.questions`. The differences from a booking call:
+
+- **No calendar.** The orchestrator skips the date-window check and the free-time lookup
+  (`candidateWindows` is `[]`), and `outboundToolsFor()` (`src/tasks/callSessionAdapter.ts`) leaves
+  out `bookingCallTools` (`check_my_availability`, `confirm_appointment`,
+  `undo_confirmed_appointment`, `report_negotiation_failed`). An appointment length isn't put in
+  the prompt. The prompt
+  (`askModeGuidance()` in `src/tasks/promptBuilder.ts`) replaces the booking instructions with the
+  numbered questions, and says to decline out loud any offer to book, order or reserve something,
+  or to put something on hold for the principal. Being asked to hold the line is not such an offer:
+  Banjo waits, as on any call. Each question must be on one line (`place_call` refuses a line break,
+  and the prompt collapses whitespace too): answers are matched by the list's numbers.
+- **What Banjo gives out.** A status question ("is my prescription ready?") can't be answered
+  without a name. Banjo may give the principal's name and details from the task's goal or notes
+  when the other party needs them to answer, and nothing else; the owner-profile rule is unchanged.
+  Asked for a deposit, payment or other personal details, Banjo says it can't give that and carries
+  on asking. When transfer is on, those are what only the principal can give, so the transfer
+  rules apply instead (the #148 review found the two rules contradicting each other).
+- **Read-backs.** Banjo says each answer back as it goes, so a misheard answer gets corrected while
+  the person is still on the line. Once they confirm a read-back (or that they don't know), the
+  prompt has Banjo call `record_answer` silently, so answers are kept as they go. It must not end
+  the call in the same turn as the last read-back, and ends with `report_answers_and_end_call`,
+  not `end_call`. Tool names stay out of the voice-layer prompt, as for every mode. On
+  `openai-live` the backend acts only when the voice layer delegates, so the voice-layer prompt
+  (`askModeFrontendGuidance()`) tells it to delegate saving each confirmed answer, silently; without
+  that line `record_answer` never ran mid-call there.
+- **Shared rules without the booking lines.** `buildBaseSystemPromptGuidance` and
+  `buildFrontendSystemPromptGuidance` (`src/voice/systemPrompt.ts`) take `purpose: 'ask'`, and on
+  it the shared sections drop what only fits a booking: waiting for a clear yes to a specific time,
+  restating an offered time, saying what was booked, "So shall I book Friday at 10?", and the
+  "Yes, Friday at 10 works." example. Two lines are swapped for ask versions: a hedged answer is
+  said back as hedged (not pushed for a firm yes), and the no-callback rule loses "an unavailable
+  time" and "offer alternatives". "Handling tool calls" adds that saving an answer is silent, with
+  no filler before it, since the filler rule otherwise covers every action. Booking and
+  conversation prompts are byte-for-byte what they were (the #148 review, round 2).
+- **Saved as it goes.** `record_answer` (ask calls only, doesn't end the call) saves one answer as
+  soon as the other party confirms the read-back, into `tasks.collected_answers`: jsonb keyed by
+  question number, a later save for the same number replacing the earlier. It's written only by
+  `saveCollectedAnswer()` (`src/tasks/service.ts`), merged in the UPDATE itself, never through
+  `transitionTask` (whose compare-and-set would drop a save that lands as the call ends) and
+  without touching `updatedAt`. Before this (the #148 review), answers lived only in the ending
+  tool's arguments, so anything that ended the call first lost all of them: the business saying
+  "yep, bye" and hanging up, a refused goodbye followed by a hang-up, a hold limit, a transfer.
+- **Its own ending.** `report_answers_and_end_call` (`requiresGoodbye`, like the other normal
+  endings) moves the task to `answered`, with the outcome `{ kind: 'answered', answers, summary? }`.
+  The model reports answers by question number, and `answersFor()` (`src/tasks/answers.ts`) pairs
+  them with the stored question text. It starts from the saved answers and lets the final report
+  override them: the last report for a number wins, so a correction later in the list replaces
+  what came before. The outcome therefore always has one entry per question, in order. An entry
+  with `answered: true` but no answer text is recorded as unanswered, and `TaskAnswer` is a
+  union (`answered: true` always has `answer`), so the compiler holds every writer to that.
+- **Ending early.** A call that ends with the task still unfinished (the far end hangs up, the
+  session fails, or the stale-call sweep finds its process died) is recorded from the saved
+  answers: `answered`, every question present, and a Banjo-written summary saying the call ended
+  before Banjo could wrap it up (`unfinishedCallOutcome` in `src/tasks/modes.ts`). With nothing
+  saved it's `failed`, as before.
+
+`answers[].answer` and `summary` are written by the voice model from what was said on the call, so
+they are untrusted data like every other free-text outcome field. The webhook `text` gives counts
+only ("Banjo asked X 3 questions: 2 of 3 answered."). The owner's summary opens with the same count
+and lists each question and answer. The status is `answered` even when nothing was, so a call with
+no answers reads as one: the summary opens "No answers from X", the webhook text says "0 answered"
+and both say it needs the owner, and on Pushover it's titled "Banjo: no answers" and sent urgent
+(`needsAttention()` in `src/notifications/channel.ts`). Five questions with long answers can pass
+Pushover's 1024 characters or Twilio's 1600 (Twilio rejects the text, so nothing arrives), so
+`buildOutcomeSummary` fits the summary to `OWNER_SUMMARY_MAX_CHARS`: each question and answer is
+clipped to an equal share, the free-text summary is clipped and then dropped, every question keeps
+its number and "(no answer)", and a last line points to `get_task_status` for the full answers. The
+summary is built before the channel is known, so it fits the smaller of the two. `sendSms` also
+clips any body to 1600 as a backstop.
+Voicemail, escalation, transfer and a hold limit work as on any call and keep their own status and
+outcome; the answers saved before them show in `get_task_status`'s `collectedAnswers` (ask tasks
+only, each question paired with its saved answer). `list_recent_tasks` leaves them out rather than
+pass on the raw map, which is keyed by question number without the questions, and the skill checks
+`get_task_status` for them. The owner's summary lists them after that outcome's own
+line (`withSavedAnswers()`, fitted to the same limit), and the webhook text adds a count only ("It
+saved 1 of 3 answers first."). `end_call` with no outcome recorded first
+records the call `answered` from the saved answers, rather than `escalated`.
+
+**One definition per mode.** `src/tasks/modes.ts` holds what differs by mode: `books` (calendar
+lookup and date-window check, booking tools, booking prompt lines), what `end_call` records when
+nothing was recorded first, and what a call that ended unfinished records instead of `failed`.
+`outboundToolsFor()` adds each mode's own tools (its ending, and `record_answer` for ask) from a map
+keyed by mode. Both are `Record<Task['mode'], …>`, so a new mode can't leave one out. Ask mode first spread
+its differences across string checks and missed three (the #148 review). `place_call` refuses
+`dateWindows` on an ask call.
+
+**The simulator** (`npm run sim -- --mode ask --question …`) parses its input with
+`placeCallInputSchema` before anything is created, so it refuses what `place_call` would, with the
+schema's message. It passes no `durationMinutes` or `dateWindows` on an ask call. It used to pass
+both on every run, and once `place_call` refused date windows on ask calls, every ask run was refused.
+
 ## Waiting on hold (`wait_on_hold`, #151)
 
 Outbound calls on OpenAI Realtime can wait in a hold queue. Other providers aren't offered the tool or the prompt section; see `canWaitOnHold()`.
@@ -462,6 +558,7 @@ This replaced a pause-and-resume design that re-established consent with the new
 - **Real queues.** The judge's accuracy on them is unmeasured: the sim covers the flow (`~` lines in a `--script` play like a recording), not real hold audio.
 
 
+## Text-mode simulator (`src/sim/`, `scripts/sim.ts`)
 
 `npm run sim` places a call that's real everywhere except the phone line: the `place_call` handler,
 the orchestrator, the outbound `CallSession` adapter, the system prompt, every tool, and the rows in

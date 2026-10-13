@@ -1,0 +1,222 @@
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+import type { CallContext } from '../../src/session/types.js';
+import type { CallAttempt, Task } from '../../src/tasks/schema.js';
+import type { TelephonyProvider } from '../../src/telephony/providers/types.js';
+
+// Same persistence stub as tests/voice/callTools.test.ts.
+const { transitionTask, saveCollectedAnswer } = vi.hoisted(() => ({
+  transitionTask: vi.fn(async (id: string, status: string) => ({ id, status }) as unknown as Task),
+  saveCollectedAnswer: vi.fn(async () => true),
+}));
+vi.mock('../../src/tasks/service.js', () => ({
+  transitionTask,
+  saveCollectedAnswer,
+  isTerminalStatus: (status: string) => !['pending', 'checking_availability', 'calling', 'negotiating'].includes(status),
+}));
+
+const { callTools, recordAnswerTool, reportAnswersAndEndCallTool } = await import('../../src/voice/tools/callTools.js');
+const { answersFor } = await import('../../src/tasks/answers.js');
+
+const QUESTIONS = ['What time do you close on Saturday?', 'Do you take walk-ins?', 'How much is a full groom?'];
+
+beforeEach(() => {
+  vi.clearAllMocks();
+});
+
+function ctx(hangUp: TelephonyProvider['hangUp'], task: Partial<Task> = {}): CallContext {
+  return {
+    task: { id: 'task-1', status: 'negotiating', mode: 'ask', questions: QUESTIONS, collectedAnswers: null, ...task } as Task,
+    callAttempt: { id: 'call-attempt-1' } as CallAttempt,
+    callId: 'call-attempt-1',
+    telephony: { hangUp } as unknown as TelephonyProvider,
+    calendar: {} as CallContext['calendar'],
+    estimatedAudioDoneAt: Date.now(),
+  };
+}
+
+describe('answersFor (#148)', () => {
+  it("pairs answers with the task's own question text, by number, one entry per question", () => {
+    expect(
+      answersFor(QUESTIONS, [
+        { question: 2, answered: false },
+        { question: 1, answered: true, answer: '6pm on Saturdays.' },
+      ]),
+    ).toEqual([
+      { question: QUESTIONS[0], answered: true, answer: '6pm on Saturdays.' },
+      { question: QUESTIONS[1], answered: false },
+      { question: QUESTIONS[2], answered: false },
+    ]);
+  });
+
+  it('records an answered question with no answer text as not answered', () => {
+    expect(answersFor(['Q?'], [{ question: 1, answered: true, answer: '  ' }])).toEqual([{ question: 'Q?', answered: false }]);
+    expect(answersFor(['Q?'], [{ question: 1, answered: true }])).toEqual([{ question: 'Q?', answered: false }]);
+  });
+
+  it('lets the last report for a question win, so a correction later in the list replaces the first (#148 review)', () => {
+    expect(
+      answersFor(['Q?', 'R?'], [
+        { question: 1, answered: true, answer: '5pm.' },
+        { question: 2, answered: true, answer: 'Yes.' },
+        { question: 1, answered: true, answer: '6pm, sorry.' },
+        { question: 2, answered: false },
+      ]),
+    ).toEqual([
+      { question: 'Q?', answered: true, answer: '6pm, sorry.' },
+      { question: 'R?', answered: false },
+    ]);
+  });
+
+  it('drops answer text for a question marked not answered, and ignores numbers with no question', () => {
+    expect(
+      answersFor(['Q?'], [
+        { question: 1, answered: false, answer: 'a guess' },
+        { question: 7, answered: true, answer: 'stray' },
+      ]),
+    ).toEqual([{ question: 'Q?', answered: false }]);
+  });
+});
+
+describe('report_answers_and_end_call (#148)', () => {
+  it('is not in the shared tool set: only ask calls get it', () => {
+    expect(callTools.some((t) => t.name === 'report_answers_and_end_call')).toBe(false);
+  });
+
+  it('ends the call like the other normal endings: after a goodbye, yielding to the other party', () => {
+    expect(reportAnswersAndEndCallTool.endsCall).toBe(true);
+    expect(reportAnswersAndEndCallTool.requiresGoodbye).toBe(true);
+    expect(reportAnswersAndEndCallTool.yieldsToCallee).toBe(true);
+    expect(reportAnswersAndEndCallTool.verbatimMessage).toBeUndefined();
+  });
+
+  it('records the answered outcome before hanging up', async () => {
+    const hangUp = vi.fn(async () => {});
+    const result = await reportAnswersAndEndCallTool.handler(
+      { answers: [{ question: 1, answered: true, answer: '6pm.' }], summary: '  They also groom cats.  ' },
+      ctx(hangUp),
+    );
+
+    expect(result).toEqual({ ok: true });
+    expect(transitionTask).toHaveBeenCalledWith('task-1', 'answered', {
+      outcome: {
+        kind: 'answered',
+        answers: [
+          { question: QUESTIONS[0], answered: true, answer: '6pm.' },
+          { question: QUESTIONS[1], answered: false },
+          { question: QUESTIONS[2], answered: false },
+        ],
+        summary: 'They also groom cats.',
+      },
+    });
+    expect(hangUp).toHaveBeenCalledTimes(1);
+    expect(transitionTask.mock.invocationCallOrder[0]!).toBeLessThan(vi.mocked(hangUp).mock.invocationCallOrder[0]!);
+  });
+
+  it('leaves summary out of the outcome when there is none', async () => {
+    await reportAnswersAndEndCallTool.handler({ answers: [], summary: ' ' }, ctx(vi.fn(async () => {})));
+    expect((transitionTask.mock.calls[0] as unknown[])[2]).toEqual({
+      outcome: { kind: 'answered', answers: QUESTIONS.map((question) => ({ question, answered: false })) },
+    });
+  });
+
+  it('keeps the answers saved during the call by record_answer, overridden by what it reports at the end (#148 review)', async () => {
+    await reportAnswersAndEndCallTool.handler(
+      { answers: [{ question: 2, answered: true, answer: 'No, appointments only.' }] },
+      ctx(vi.fn(async () => {}), {
+        collectedAnswers: {
+          '1': { question: 1, answered: true, answer: '6pm.' },
+          '2': { question: 2, answered: true, answer: 'Yes.' },
+        },
+      }),
+    );
+    expect((transitionTask.mock.calls[0] as unknown[])[2]).toEqual({
+      outcome: {
+        kind: 'answered',
+        answers: [
+          { question: QUESTIONS[0], answered: true, answer: '6pm.' },
+          { question: QUESTIONS[1], answered: true, answer: 'No, appointments only.' },
+          { question: QUESTIONS[2], answered: false },
+        ],
+      },
+    });
+  });
+
+  it("doesn't let a final 'not answered' erase an answer saved during the call (#148 review)", async () => {
+    // A lazy closing report (answered: false for everything) would otherwise
+    // throw away answers record_answer already saved.
+    await reportAnswersAndEndCallTool.handler(
+      { answers: [1, 2, 3].map((question) => ({ question, answered: false })) },
+      ctx(vi.fn(async () => {}), { collectedAnswers: { '1': { question: 1, answered: true, answer: '6pm.' } } }),
+    );
+    expect((transitionTask.mock.calls[0] as unknown[])[2]).toMatchObject({
+      outcome: { answers: [{ question: QUESTIONS[0], answered: true, answer: '6pm.' }, { answered: false }, { answered: false }] },
+    });
+  });
+
+  it('saves the answers it reports before CallSession can refuse it, skipping unanswered ones (#148 review r2)', async () => {
+    await reportAnswersAndEndCallTool.beforeChecks!(
+      { answers: [{ question: 1, answered: true, answer: ' 6pm. ' }, { question: 2, answered: false }, { question: 9, answered: true, answer: 'x' }] },
+      ctx(vi.fn()),
+    );
+    expect(saveCollectedAnswer).toHaveBeenCalledTimes(1);
+    expect(saveCollectedAnswer).toHaveBeenCalledWith('task-1', { question: 1, answered: true, answer: '6pm.' });
+  });
+
+  it('tells the model to record only what was said', () => {
+    expect(reportAnswersAndEndCallTool.description).toContain('Record only what they actually told you on this call');
+  });
+});
+
+describe('record_answer (#148 review)', () => {
+  it('is not in the shared tool set, and does not end the call', () => {
+    expect(callTools.some((t) => t.name === 'record_answer')).toBe(false);
+    expect(recordAnswerTool.name).toBe('record_answer');
+    expect(recordAnswerTool.endsCall).toBeFalsy();
+    expect(recordAnswerTool.requiresGoodbye).toBeFalsy();
+    expect(recordAnswerTool.startsHold).toBeFalsy();
+    expect(recordAnswerTool.verbatimMessage).toBeUndefined();
+  });
+
+  it('gets a reply only if the model said nothing alongside it (#148 review r2)', () => {
+    expect(recordAnswerTool.replyOnlyIfSilent).toBe(true);
+  });
+
+  it('saves one answer straight away, without touching the task status', async () => {
+    const hangUp = vi.fn(async () => {});
+    const result = await recordAnswerTool.handler({ question: 2, answered: true, answer: '  Yes, until noon.  ' }, ctx(hangUp));
+
+    expect(result).toMatchObject({ ok: true });
+    expect(saveCollectedAnswer).toHaveBeenCalledWith('task-1', { question: 2, answered: true, answer: 'Yes, until noon.' });
+    expect(transitionTask).not.toHaveBeenCalled();
+    expect(hangUp).not.toHaveBeenCalled();
+  });
+
+  it('tells the model what to do next, so it neither repeats itself nor stalls (#148 review)', async () => {
+    const result = await recordAnswerTool.handler({ question: 1, answered: true, answer: '6pm.' }, ctx(vi.fn()));
+    expect(result).toMatchObject({ ok: true, next: expect.stringMatching(/already asked your next question, wait/) });
+  });
+
+  it('saves an unanswered question, and an answered one with no text, as not answered', async () => {
+    await recordAnswerTool.handler({ question: 1, answered: false, answer: 'a guess' }, ctx(vi.fn()));
+    await recordAnswerTool.handler({ question: 3, answered: true, answer: ' ' }, ctx(vi.fn()));
+    expect(saveCollectedAnswer).toHaveBeenNthCalledWith(1, 'task-1', { question: 1, answered: false });
+    expect(saveCollectedAnswer).toHaveBeenNthCalledWith(2, 'task-1', { question: 3, answered: false });
+  });
+
+  it('tells the model when the answers were already reported (#148 review r2)', async () => {
+    saveCollectedAnswer.mockResolvedValueOnce(false);
+    const result = await recordAnswerTool.handler({ question: 1, answered: true, answer: '6pm.' }, ctx(vi.fn()));
+    expect(result).toMatchObject({ ok: false, error: 'not_saved' });
+  });
+
+  it('refuses a number with no question, saving nothing', async () => {
+    const result = await recordAnswerTool.handler({ question: 4, answered: true, answer: 'stray' }, ctx(vi.fn()));
+    expect(result).toMatchObject({ ok: false, error: 'no_such_question' });
+    expect(saveCollectedAnswer).not.toHaveBeenCalled();
+  });
+
+  it('tells the model when to call it, and to say nothing about it', () => {
+    expect(recordAnswerTool.description).toContain('right after the other party confirms your read-back');
+    expect(recordAnswerTool.description).toContain('without saying anything about it');
+  });
+});

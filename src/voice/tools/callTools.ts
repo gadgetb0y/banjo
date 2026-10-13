@@ -6,7 +6,9 @@ import { formatInZone, formatSpokenInZone, zonedTimeToUtcIso } from '../../lib/t
 import { TimeoutError, withTimeout } from '../../lib/withTimeout.js';
 import { sendOwnerMessage } from '../../notifications/owner.js';
 import type { CallContext } from '../../session/types.js';
-import { isTerminalStatus, transitionTask } from '../../tasks/service.js';
+import { collectedAnswer, finalAnswers, reportedAnswerSchema, type ReportedAnswer } from '../../tasks/answers.js';
+import { modeRules } from '../../tasks/modes.js';
+import { isTerminalStatus, saveCollectedAnswer, transitionTask } from '../../tasks/service.js';
 import type { TelephonyProvider } from '../../telephony/providers/types.js';
 import type { ToolDefinition } from '../types.js';
 import { withoutRepeatedLead } from '../verbatimMatch.js';
@@ -529,35 +531,17 @@ export const endCallTool: VoiceTool<{ summary?: string }> = defineVoiceTool({
       // outcome-recording can never be lost to hangUpAfterSpeaking's wait
       // exceeding the enclosing tool call's timeout budget.
       //
-      // Conversation-mode tasks get end_conversation_call ADDITIVELY
-      // alongside this generic tool (see outboundToolsFor in
-      // tasks/callSessionAdapter.ts), so the model can and does sometimes
-      // reach for end_call to close out a conversation instead. Landing
-      // that in 'escalated' mislabels a normal, successful close as
-      // something needing Steve's follow-up — caught on a live call where
-      // the model's end_call summary was a plain conversation recap, not
-      // an escalation reason. Route conversation-mode tasks through the
-      // same outcome end_conversation_call would have recorded instead.
+      // What it records depends on the mode (tasks/modes.ts): conversation
+      // and ask calls get their own ending tool ADDITIVELY alongside this
+      // one, and the model can and does reach for end_call to close them
+      // out instead, so it records what their own ending would have.
       //
       // ctx.task is re-fetched for each tool call, so no second read here;
       // the status check only skips the usual case (end_call right after
       // confirm_appointment) — transitionTask's own guard covers any race.
       if (!isTerminalStatus(ctx.task.status)) {
-        if (ctx.task.mode === 'conversation') {
-          await transitionTask(ctx.task.id, 'conversation_completed', {
-            outcome: {
-              kind: 'conversation_completed',
-              summary: input.summary ?? 'Call ended without an explicit summary being recorded.',
-            },
-          });
-        } else {
-          await transitionTask(ctx.task.id, 'escalated', {
-            outcome: {
-              kind: 'escalated',
-              reason: input.summary ?? 'Call ended without an explicit outcome being recorded.',
-            },
-          });
-        }
+        const { status, outcome } = modeRules(ctx.task).endCallOutcome(ctx.task, input.summary);
+        await transitionTask(ctx.task.id, status, { outcome });
       }
       await hangUpAfterSpeaking(ctx);
       return { ok: true };
@@ -591,6 +575,101 @@ export const endConversationCallTool: VoiceTool<{ summary: string }> = defineVoi
 });
 
 /**
+ * Saves one answer of an ask call as soon as it's settled (#148 review), so a
+ * call that ends before report_answers_and_end_call (the far end says "yep,
+ * bye" and hangs up, a refused goodbye, a hold limit, a transfer) still has
+ * it. Writes tasks.collected_answers through saveCollectedAnswer, never the
+ * task's status or outcome; report_answers_and_end_call and end_call fold
+ * these in, and a call that ends early is recorded from them
+ * (tasks/modes.ts). Returns an ordinary result, so the call carries on
+ * through the normal tool-result flow.
+ */
+const RECORD_ANSWER_NEXT =
+  "Saved. Don't mention it, and don't repeat what you just said. If you already asked your next question, wait " +
+  'for their answer. Otherwise ask your next question, or, if none are left, wrap up the call.';
+
+export const recordAnswerTool: VoiceTool<ReportedAnswer> = defineVoiceTool({
+  name: 'record_answer',
+  description:
+    'Save one answer as soon as it is settled: call this right after the other party confirms your read-back of an ' +
+    'answer, without saying anything about it, then carry on with the call. Use the question\'s number in your ' +
+    "list. If they can't or won't answer one, save it with answered: false. Saving the same number again replaces " +
+    'what you saved before. This does not end the call; report_answers_and_end_call still does, at the end.',
+  schema: reportedAnswerSchema,
+  replyOnlyIfSilent: true,
+  handler: async (input, ctx) => {
+    return runToolSafely('record_answer', async () => {
+      const count = ctx.task.questions?.length ?? 0;
+      if (input.question > count) {
+        return {
+          ok: false as const,
+          error: 'no_such_question' as const,
+          message: `There is no question ${input.question}: your list has ${count}.`,
+        };
+      }
+      if (!(await saveCollectedAnswer(ctx.task.id, collectedAnswer(input)))) {
+        return { ok: false as const, error: 'not_saved' as const, message: 'The answers for this call are already reported.' };
+      }
+      // replyOnlyIfSilent: the model replies to this only if it said nothing
+      // alongside the call; then it's told what to do next (#148 review r2).
+      return { ok: true as const, next: RECORD_ANSWER_NEXT };
+    });
+  },
+});
+
+export const reportAnswersAndEndCallTool: VoiceTool<{
+  answers: ReportedAnswer[];
+  summary?: string;
+}> = defineVoiceTool({
+  name: 'report_answers_and_end_call',
+  description:
+    'Use this to end the call once you have asked every question on your list and they have answered what they ' +
+    "can. Record one entry per question, by its number: what they said, in a short plain sentence, or answered: " +
+    "false if they didn't know, wouldn't say, or you never got to it. Record only what they actually told you on " +
+    'this call. Never fill a gap with a guess. Answers you saved with record_answer are kept: an answer here for ' +
+    'the same question replaces it, and answered: false here never erases one. This is the normal, successful end of this call, even if some ' +
+    'questions went unanswered.' +
+    BEFORE_ENDING,
+  schema: z.object({
+    answers: z
+      .array(reportedAnswerSchema)
+      .describe('One entry per question on your list.'),
+    summary: z.string().optional().describe('Anything else worth passing on that they told you, briefly. Leave out if nothing.'),
+  }),
+  endsCall: true,
+  yieldsToCallee: true,
+  requiresGoodbye: true,
+  // Saved before CallSession can refuse this (no goodbye, or they're still
+  // talking): if the line then drops, the answers are kept (#148 review r2).
+  // Only answers: a closing "not answered" never erases a saved one.
+  beforeChecks: async (input, ctx) => {
+    const count = ctx.task.questions?.length ?? 0;
+    for (const report of input.answers) {
+      const checked = collectedAnswer(report);
+      if (checked.answered && checked.question <= count) await saveCollectedAnswer(ctx.task.id, checked);
+    }
+  },
+  handler: async (input, ctx) => {
+    return runToolSafely('report_answers_and_end_call', async () => {
+      const summary = input.summary?.trim();
+      // What record_answer saved during the call, with this report's answers
+      // on top (finalAnswers): an answer here replaces a saved one, and
+      // neither an omission nor answered: false erases it. ctx.task is
+      // re-fetched for each tool call, so it has every answer saved before this one.
+      await transitionTask(ctx.task.id, 'answered', {
+        outcome: {
+          kind: 'answered',
+          answers: finalAnswers(ctx.task, input.answers),
+          ...(summary ? { summary } : {}),
+        },
+      });
+      await hangUpAfterSpeaking(ctx);
+      return { ok: true };
+    });
+  },
+});
+
+/**
  * wait_on_hold (#151). The handler has nothing to do: CallSession, seeing
  * startsHold, puts the call on hold once it returns, and takes it off when a
  * person picks up or the limit runs out. Not in callTools: it's offered only
@@ -615,14 +694,18 @@ export const waitOnHoldTool: VoiceTool<Record<string, never>> = defineVoiceTool(
 // caller (session/callSession.ts) looks tools up by name and invokes
 // `handler(parsedArgs, ctx)` without static knowledge of each tool's exact
 // input type, validated instead at runtime via each tool's own Zod schema.
-export const callTools: VoiceTool[] = [
+/** The tools only a call that can book gets (tasks/modes.ts's `books`); an ask call never sees them (#148). */
+export const bookingCallTools: VoiceTool[] = [
   checkMyAvailabilityTool,
   confirmAppointmentTool,
   undoConfirmedAppointmentTool,
-  leaveVoicemailAndEndCallTool,
   reportNegotiationFailedTool,
-  escalateAndEndCallTool,
-  endCallTool,
 ] as VoiceTool[];
+
+/** The tools every outbound call gets. */
+export const commonCallTools: VoiceTool[] = [leaveVoicemailAndEndCallTool, escalateAndEndCallTool, endCallTool] as VoiceTool[];
+
+/** Every tool a call that can book gets: the shared list for tests and tool-definition checks. */
+export const callTools: VoiceTool[] = [...bookingCallTools, ...commonCallTools];
 
 export const callToolDefinitions: ToolDefinition[] = callTools.map(toToolDefinition);

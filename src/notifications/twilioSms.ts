@@ -3,6 +3,7 @@ import { config } from '../config/index.js';
 import { logger } from '../lib/logger.js';
 import type { TaskOutcome } from '../tasks/schema.js';
 import type { NotificationChannel } from './channel.js';
+import { clipText, SMS_MAX_CHARS } from './limits.js';
 
 let smsClient: ReturnType<typeof twilioLib> | null = null;
 function getSmsClient(): ReturnType<typeof twilioLib> {
@@ -46,6 +47,8 @@ function deliveryHint(errorCode: number | null): string {
  * notification for a week was accepted by Twilio and then blocked by the
  * carrier (error 30034) with nothing logged, because the send itself had
  * succeeded. Never throws: a notification problem must not reach the call.
+ * Clipped to SMS_MAX_CHARS first: Twilio rejects a longer body outright, and
+ * a cut-off message beats none.
  */
 async function sendSms(body: string, logContext: Record<string, unknown>): Promise<void> {
   let messageSid: string;
@@ -53,7 +56,7 @@ async function sendSms(body: string, logContext: Record<string, unknown>): Promi
     const message = await getSmsClient().messages.create({
       to: config.NOTIFY_TO_PHONE_NUMBER!,
       from: config.NOTIFY_FROM_PHONE_NUMBER!,
-      body,
+      body: clipText(body, SMS_MAX_CHARS),
     });
     messageSid = message.sid;
   } catch (err) {

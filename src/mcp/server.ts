@@ -104,7 +104,8 @@ export function createMcpServer(): McpServer {
 
   server.tool(
     'place_call',
-    'Place an outbound phone call to a contact to accomplish a task (e.g. book an appointment). ' +
+    'Place an outbound phone call to a contact to accomplish a task (e.g. book an appointment, or ask ' +
+      "a business a question with mode 'ask'). " +
       'Returns immediately with a taskId — the call itself runs asynchronously over the following ' +
       'minutes (or at scheduledFor, if given, to call later instead of now). Poll get_task_status with the ' +
       'returned taskId to learn the outcome.',
@@ -116,7 +117,8 @@ export function createMcpServer(): McpServer {
   server.tool(
     'get_task_status',
     'Check the current status and (if finished) outcome of a previously started task, whether it was ' +
-      'a phone call or a recorded online booking.',
+      "a phone call or a recorded online booking. For an 'ask' call, collectedAnswers holds the answers saved " +
+      'during the call, even when it ended as something other than answered (a transfer, an escalation).',
     getTaskStatusInputSchema.shape,
     { title: 'Get task status', ...READS },
     adapt(getTaskStatusHandler),
@@ -197,7 +199,7 @@ export function createMcpServer(): McpServer {
 
   server.tool(
     'list_recent_tasks',
-    'List the most recently updated tasks (phone calls and online bookings), most recent first.',
+    "List the most recently updated tasks (phone calls and online bookings), most recent first. An ask call's answers saved before it ended some other way aren't included: get_task_status has them (collectedAnswers).",
     listRecentTasksInputSchema.shape,
     { title: 'List recent tasks', ...READS },
     adapt(listRecentTasksHandler),

@@ -78,6 +78,9 @@ AI rather than waiting to be asked ([#8](https://github.com/shatch/banjo/issues/
   booking really happened, not what the model said out loud.
 - **Has conversations.** `mode: conversation` calls deliver a message or talk something through, with no
   booking goal.
+- **Finds things out.** `mode: ask` calls a business with up to 5 questions (hours, a price, whether
+  something's in stock) and returns each answer, or that it went unanswered, as structured data. It
+  books nothing and agrees to nothing.
 - **Calls later.** `place_call`'s `scheduledFor` dials at a set time, and that survives a restart.
 - **Handles voicemail and phone menus.** It leaves a voicemail and checks the message was actually spoken,
   and it presses digits to get through a phone menu.
@@ -208,8 +211,8 @@ You: Claudia's Dog Grooming, how can I help?
 Banjo: Hi, I'm an AI assistant calling on behalf of Alex. We'd like to book a full grooming for Banjo, a golden retriever...
 ```
 
-Options: `--business`, `--goal`, `--mode conversation`, `--duration`, `--transfer` (or `--warm` with
-`--owner accept|decline|no-answer`), and
+Options: `--business`, `--goal`, `--mode conversation`, `--mode ask` with one or more `--question`
+(checked as `place_call` checks them: 1 to 5, each on one line), `--duration` (booking only), `--transfer` (or `--warm` with `--owner accept|decline|no-answer`), and
 `--script <file>` to play your side from a file (a line starting with `~` plays like a recording, for menus and hold queues). Run `npm run sim -- --help` or see the top of
 `scripts/sim.ts`. The sim keeps its records in a separate `banjo_sim` database, which it empties at
 the start of each run, and never touches your real one.

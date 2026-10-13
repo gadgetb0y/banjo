@@ -250,3 +250,65 @@ describe('withContactAdvisoryLock (per-number call cap across processes)', () =>
     expect(order).toEqual(['first start', 'other contact', 'first end', 'second']);
   });
 });
+
+describe('saveCollectedAnswer (#148 review)', () => {
+  async function askTask(phoneNumber: string) {
+    const [contact] = await db.insert(contacts).values({ displayName: 'Groomer', phoneNumber }).returning();
+    const task = await service.createTask({
+      contactId: contact.id,
+      channel: 'phone',
+      goalDescription: 'Ask about Saturday',
+      constraints: {},
+      mode: 'ask',
+      questions: ['Q1?', 'Q2?', 'Q3?'],
+    });
+    return service.transitionTask(task.id, 'negotiating');
+  }
+
+  it('saves answers by question number, a later one for the same number replacing the first, without touching status or outcome', async () => {
+    const task = await askTask('+15551230101');
+
+    expect(await service.saveCollectedAnswer(task.id, { question: 1, answered: true, answer: '5pm.' })).toBe(true);
+    expect(await service.saveCollectedAnswer(task.id, { question: 2, answered: false })).toBe(true);
+    expect(await service.saveCollectedAnswer(task.id, { question: 1, answered: true, answer: '6pm, sorry.' })).toBe(true);
+
+    const row = await service.getTask(task.id);
+    expect(row?.collectedAnswers).toEqual({
+      '1': { question: 1, answered: true, answer: '6pm, sorry.' },
+      '2': { question: 2, answered: false },
+    });
+    expect(row?.status).toBe('negotiating');
+    expect(row?.outcome).toBeNull();
+    // Not a transition: a resume's ifUpdatedAt compare-and-set (#64) must not see it as one.
+    expect(row?.updatedAt.getTime()).toBe(task.updatedAt.getTime());
+  });
+
+  it('keeps every answer when several are saved at once', async () => {
+    const task = await askTask('+15551230102');
+
+    await Promise.all([
+      service.saveCollectedAnswer(task.id, { question: 1, answered: true, answer: 'A.' }),
+      service.saveCollectedAnswer(task.id, { question: 2, answered: true, answer: 'B.' }),
+      service.saveCollectedAnswer(task.id, { question: 3, answered: false }),
+    ]);
+
+    expect(Object.keys((await service.getTask(task.id))?.collectedAnswers ?? {}).sort()).toEqual(['1', '2', '3']);
+  });
+
+  it("refuses a save once the task is answered, so its outcome and saved answers can't disagree (#148 review r2)", async () => {
+    const task = await askTask('+15551230104');
+    await service.transitionTask(task.id, 'answered', { outcome: { kind: 'answered', answers: [] } });
+
+    expect(await service.saveCollectedAnswer(task.id, { question: 2, answered: true, answer: 'Late.' })).toBe(false);
+    expect((await service.getTask(task.id))?.collectedAnswers).toBeNull();
+  });
+
+  it('still saves once the task has a terminal status, and reports a missing task', async () => {
+    const task = await askTask('+15551230103');
+    await service.transitionTask(task.id, 'escalated', { outcome: { kind: 'escalated', reason: 'x' } });
+
+    expect(await service.saveCollectedAnswer(task.id, { question: 3, answered: true, answer: 'C.' })).toBe(true);
+    expect((await service.getTask(task.id))?.collectedAnswers).toEqual({ '3': { question: 3, answered: true, answer: 'C.' } });
+    expect(await service.saveCollectedAnswer('00000000-0000-0000-0000-000000000000', { question: 1, answered: false })).toBe(false);
+  });
+});

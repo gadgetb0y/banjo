@@ -5,6 +5,11 @@ import { checkCallCap, describeCallCapRefusal } from '../../tasks/callCap.js';
 import { createTask } from '../../tasks/service.js';
 import { triggerOrchestration } from '../../tasks/orchestrator.js';
 import type { TaskConstraints, TimeWindow } from '../../tasks/schema.js';
+import { modeRules } from '../../tasks/modes.js';
+
+/** Enough for an errand; a longer list is a survey, not a phone call. */
+const MAX_QUESTIONS = 5;
+const MAX_QUESTION_CHARS = 300;
 
 const timeWindowSchema = z.object({
   start: z
@@ -22,7 +27,7 @@ export const placeCallInputSchema = z.object({
     .min(1)
     .describe('What to accomplish on the call, e.g. "Book a haircut, any day next week after 3pm."'),
   mode: z
-    .enum(['booking', 'conversation'])
+    .enum(['booking', 'conversation', 'ask'])
     .optional()
     .describe(
       "'booking' (default) negotiates a specific outcome — a time, a voicemail, an escalation. " +
@@ -30,7 +35,28 @@ export const placeCallInputSchema = z.object({
         "react to what's said — ending naturally rather than at a specific negotiated outcome. " +
         "A 'booking' call that simply ends, with no booking, voicemail or failed negotiation recorded, is marked " +
         "'escalated' for follow-up. So use 'conversation' for a call with no booking goal, such as a check-in, a " +
-        'message or a test call.',
+        'message or a test call. ' +
+        "'ask' finds something out — opening hours, whether an item is in stock, a quote — and reports back: pass " +
+        "the questions in `questions`. The task ends 'answered', with each question's answer (or that it went " +
+        "unanswered) in outcome.answers. An 'ask' call books nothing and agrees to nothing on the principal's behalf.",
+    ),
+  questions: z
+    .array(
+      z
+        .string()
+        .trim()
+        .min(1)
+        .max(MAX_QUESTION_CHARS)
+        // Answers are matched to questions by their number in the prompt's list,
+        // and a line break inside one ("Hours?\n2. Walk-ins?") would add a number.
+        .regex(/^[^\r\n]*$/, 'Each question must be on one line: put each question in its own item, with no line breaks.'),
+    )
+    .min(1)
+    .max(MAX_QUESTIONS)
+    .optional()
+    .describe(
+      `Required with mode 'ask', and only allowed with it: what to find out, one question per item, in the order to ` +
+        `ask them (at most ${MAX_QUESTIONS}), e.g. ["What time do you close on Saturday?", "Do you take walk-ins?"].`,
     ),
   scheduledFor: z
     .string()
@@ -124,6 +150,17 @@ function formatInCalendarTimezone(date: Date): string {
  * call once it's due.
  */
 export async function placeCallHandler(input: z.infer<typeof placeCallInputSchema>): Promise<PlaceCallResult> {
+  // Checked here, not in the schema, so the MCP tool's JSON Schema stays a plain object.
+  const asks = modeRules({ mode: input.mode ?? 'booking' }).asks;
+  if (asks && !input.questions?.length) {
+    throw new Error("mode 'ask' needs at least one question in `questions`: what should Banjo find out?");
+  }
+  if (!modeRules({ mode: input.mode ?? 'booking' }).books && input.constraints?.dateWindows?.length) {
+    throw new Error("constraints.dateWindows don't apply to mode 'ask': it books nothing. To ask about a time, put it in a question.");
+  }
+  if (!asks && input.questions) {
+    throw new Error("`questions` is only for mode 'ask'. Put a booking or conversation goal in taskDescription.");
+  }
   const constraints: TaskConstraints = { ...input.constraints };
   if (constraints.dateWindows) constraints.dateWindows = normalizeDateWindows(constraints.dateWindows);
   const scheduledFor = input.scheduledFor ? parseScheduledFor(input.scheduledFor) : undefined;
@@ -153,6 +190,7 @@ export async function placeCallHandler(input: z.infer<typeof placeCallInputSchem
     goalDescription: input.taskDescription,
     constraints,
     mode: input.mode,
+    questions: input.questions,
     scheduledFor,
   });
 

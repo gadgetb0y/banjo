@@ -36,6 +36,20 @@
       "when": 1790295942972,
       "tag": "0004_nice_magdalene",
       "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1791842593170,
+      "tag": "0005_massive_thaddeus_ross",
+      "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1791931535754,
+      "tag": "0006_chief_thunderbolts",
+      "breakpoints": true
     }
   ]
 }

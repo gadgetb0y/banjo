@@ -5,17 +5,26 @@ import type { CallSessionOptions } from '../session/callSession.js';
 import type { CallContext } from '../session/types.js';
 import { config, disclosureLine, disclosureLineWithoutNotice } from '../config/index.js';
 import { logger } from '../lib/logger.js';
-import { buildOutcomeSummary, withDisclosureNote } from '../notifications/channel.js';
+import { buildOutcomeSummary, withDisclosureNote, withSavedAnswers } from '../notifications/channel.js';
 import type { DisclosureResult } from '../session/disclosure.js';
 import { createNotificationChannel, sendOwnerMessage } from '../notifications/owner.js';
 import { buildWebhookText, sendTaskWebhook } from '../notifications/webhook.js';
 import { pressDigitsTool } from '../telephony/dtmf.js';
 import type { TelephonyProvider } from '../telephony/providers/types.js';
 import { defineTransferTool } from '../telephony/transfer.js';
-import { callTools, endConversationCallTool, waitOnHoldTool } from '../voice/tools/callTools.js';
+import {
+  bookingCallTools,
+  commonCallTools,
+  endConversationCallTool,
+  recordAnswerTool,
+  reportAnswersAndEndCallTool,
+  waitOnHoldTool,
+} from '../voice/tools/callTools.js';
+import { modeRules } from './modes.js';
 import type { VoiceTool } from '../voice/tools/defineVoiceTool.js';
 import { unregisterLiveCall } from './liveCalls.js';
 import { getTask, isTerminalStatus, transitionTask, updateCallAttempt } from './service.js';
+import { collectedAnswersFor } from './answers.js';
 import type { CallAttempt, Task } from './schema.js';
 import { saveTranscriptTurn } from '../transcripts/service.js';
 
@@ -37,8 +46,11 @@ export async function notifyTaskOutcome(taskId: string, disclosure?: DisclosureR
   if (!current || !current.outcome || !isTerminalStatus(current.status)) return;
   const contact = await getContact(current.contactId);
   if (!contact) return;
-  const summary = withDisclosureNote(buildOutcomeSummary(contact, current.outcome), disclosure);
   const outcome = current.outcome;
+  // An ask call that ended some other way keeps its own outcome; the answers
+  // it saved before that go with it (#148 review).
+  const saved = modeRules(current).asks && outcome.kind !== 'answered' ? collectedAnswersFor(current) : [];
+  const summary = withDisclosureNote(withSavedAnswers(buildOutcomeSummary(contact, outcome), contact, saved), disclosure);
   // Built inside the async function, not as an argument: an exception while
   // building the event then rejects this promise, which allSettled holds,
   // instead of throwing before allSettled runs and skipping the owner's
@@ -51,7 +63,7 @@ export async function notifyTaskOutcome(taskId: string, disclosure?: DisclosureR
       status: current.status,
       outcome,
       contact: { id: contact.id, name: contact.displayName },
-      text: buildWebhookText(contact, outcome, disclosure),
+      text: buildWebhookText(contact, outcome, disclosure, saved),
       finishedAt: current.updatedAt.toISOString(),
     });
   };
@@ -93,16 +105,33 @@ export const transferToOwnerTool = defineTransferTool<CallContext>({
 
 /** All live-call tools for an outbound call, keyed by name — check_my_availability/confirm_appointment/etc.
  *  (backend-service tools) plus press_digits (telephony-layer, routed differently — see telephony/dtmf.ts).
+ *  'ask' tasks (#148) drop the booking tools and get record_answer and report_answers_and_end_call.
  *  Conversation-mode tasks additionally get end_conversation_call — see docs/superpowers/specs/
  *  2026-08-12-outbound-conversational-call-design.md for why this is additive, not a separate restricted set.
  *  transfer_to_owner is added only when TRANSFER_ENABLED is on (#7). */
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 function outboundToolsFor(task: Task): VoiceTool<any, CallContext>[] {
-  const base: VoiceTool<any, CallContext>[] = [...callTools, pressDigitsTool];
+  // A call that can't book (an 'ask' call, #148) gets none of the booking
+  // tools: matched by identity, so a renamed or new booking tool can't slip
+  // back onto it.
+  const shared = modeRules(task).books ? [...bookingCallTools, ...commonCallTools] : commonCallTools;
+  const base: VoiceTool<any, CallContext>[] = [...shared, pressDigitsTool];
   if (config.TRANSFER_ENABLED) base.push(transferToOwnerTool);
   if (canWaitOnHold()) base.push(waitOnHoldTool);
-  return task.mode === 'conversation' ? [...base, endConversationCallTool] : base;
+  return [...base, ...(MODE_TOOLS[task.mode] ?? [])];
 }
+
+/**
+ * Each mode's own tools, on top of the common ones: its way to end a call,
+ * and for an ask call record_answer, which saves each answer as it's settled
+ * (#148 review). Keyed by mode so a new one can't be left out.
+ */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+const MODE_TOOLS: Record<Task['mode'], VoiceTool<any, CallContext>[]> = {
+  booking: [],
+  conversation: [endConversationCallTool],
+  ask: [recordAnswerTool, reportAnswersAndEndCallTool],
+};
 
 /** Only OpenAI Realtime implements VoiceAIProvider.setHold/judgeHoldLine so far (#151). */
 export function canWaitOnHold(): boolean {
@@ -151,10 +180,17 @@ export function buildOutboundCallSessionOptions(params: {
   // transitionTask would refuse this write on a terminal task by itself; the
   // read first keeps the normal case (the call ending after an outcome tool
   // already ran) from logging transitionTask's ignored-transition warning.
-  async function failTaskIfStillNonTerminal(reason: string): Promise<void> {
+  //
+  // An ask call with answers saved by record_answer is recorded 'answered'
+  // from them instead (tasks/modes.ts's unfinishedCallOutcome, #148 review).
+  async function failTaskIfStillNonTerminal(reason: string, { endedOnItsOwn }: { endedOnItsOwn: boolean }): Promise<void> {
     const current = await getTask(task.id);
     if (current && !isTerminalStatus(current.status)) {
-      await transitionTask(task.id, 'failed', { outcome: { kind: 'failed', reason } });
+      // A call the owner stopped, or whose session failed, keeps its reason:
+      // stop_call promises "recorded as failed with that reason" (#148 review r2).
+      const unfinished = endedOnItsOwn ? modeRules(current).unfinishedCallOutcome(current) : undefined;
+      if (unfinished) await transitionTask(task.id, unfinished.status, { outcome: unfinished.outcome });
+      else await transitionTask(task.id, 'failed', { outcome: { kind: 'failed', reason } });
     }
   }
 
@@ -249,7 +285,7 @@ export function buildOutboundCallSessionOptions(params: {
           unregisterLiveCall(task.id);
           disclosure = recordDisclosure(patch.disclosure);
           await updateCallAttempt(callAttempt.id, { status: 'ended', endedAt: new Date(), disclosed: disclosedColumn(patch.disclosure) });
-          await failTaskIfStillNonTerminal(patch.reason);
+          await failTaskIfStillNonTerminal(patch.reason, { endedOnItsOwn: !patch.stopped });
           break;
         case 'failed':
           unregisterLiveCall(task.id);
@@ -273,7 +309,7 @@ export function buildOutboundCallSessionOptions(params: {
 
     async onFailure(reason: string) {
       unregisterLiveCall(task.id);
-      await failTaskIfStillNonTerminal(reason);
+      await failTaskIfStillNonTerminal(reason, { endedOnItsOwn: false });
     },
 
     async notifyIfTerminal() {

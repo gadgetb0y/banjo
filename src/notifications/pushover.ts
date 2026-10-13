@@ -1,11 +1,11 @@
 import { config } from '../config/index.js';
 import { logger } from '../lib/logger.js';
 import type { TaskOutcome } from '../tasks/schema.js';
-import type { NotificationChannel } from './channel.js';
+import { answerCounts, needsAttention, type NotificationChannel } from './channel.js';
+import { clipText, PUSHOVER_MAX_MESSAGE_CHARS } from './limits.js';
 
 const PUSHOVER_URL = 'https://api.pushover.net/1/messages.json';
 // Pushover's documented limits; longer messages are rejected, not truncated.
-const MAX_MESSAGE_CHARS = 1024;
 const MAX_TITLE_CHARS = 250;
 const REQUEST_TIMEOUT_MS = 10_000;
 /** Pushover asks clients to wait at least 5 seconds before retrying a 5xx. */
@@ -18,16 +18,12 @@ export interface PushoverMessage {
   urgent?: boolean;
 }
 
-function truncate(text: string, max: number): string {
-  return text.length <= max ? text : `${text.slice(0, max - 1)}…`;
-}
-
 function formBody({ message, title, urgent }: PushoverMessage): URLSearchParams {
   const body = new URLSearchParams({
     token: config.PUSHOVER_APP_TOKEN!,
     user: config.PUSHOVER_USER_KEY!,
-    message: truncate(message, MAX_MESSAGE_CHARS),
-    title: truncate(title ?? 'Banjo', MAX_TITLE_CHARS),
+    message: clipText(message, PUSHOVER_MAX_MESSAGE_CHARS),
+    title: clipText(title ?? 'Banjo', MAX_TITLE_CHARS),
     priority: urgent ? '1' : '0',
   });
   if (config.PUSHOVER_DEVICE) body.set('device', config.PUSHOVER_DEVICE);
@@ -69,13 +65,6 @@ export async function sendPushover(msg: PushoverMessage, logContext: Record<stri
   if (!result.ok) logger.error({ ...logContext, ...result.detail }, 'Failed to send Pushover notification');
 }
 
-/**
- * Outcomes sent past quiet hours: a call that got stuck and needs the owner.
- * Not 'failed': that's mostly a busy line or no answer, which the owner can
- * pick up in the morning.
- */
-const NEEDS_ATTENTION: ReadonlySet<TaskOutcome['kind']> = new Set(['negotiation_failed', 'escalated']);
-
 const TITLES: Record<TaskOutcome['kind'], string> = {
   confirmed: 'Banjo: booked',
   voicemail_left: 'Banjo: left a voicemail',
@@ -84,14 +73,28 @@ const TITLES: Record<TaskOutcome['kind'], string> = {
   failed: 'Banjo: call failed',
   conversation_completed: 'Banjo: call finished',
   transferred: 'Banjo: transferred a call to you',
+  answered: 'Banjo: got your answers',
 };
+
+/**
+ * An ask call ends 'answered' however many questions got an answer, so its
+ * title says which: "got your answers" over a call that got none misled.
+ */
+function titleFor(outcome: TaskOutcome): string {
+  if (outcome.kind !== 'answered') return TITLES[outcome.kind];
+  const { answered, total } = answerCounts(outcome);
+  if (answered === 0) return 'Banjo: no answers';
+  return answered === total ? TITLES.answered : 'Banjo: some answers';
+}
 
 export class PushoverNotificationChannel implements NotificationChannel {
   async notify(taskId: string, outcome: TaskOutcome, summary: string): Promise<void> {
     // The kind only in logs: a voicemail_left outcome carries the message
     // spoken to the other party (#8).
+    // Urgent goes past quiet hours: only for outcomes that need the owner
+    // (needsAttention).
     await sendPushover(
-      { message: summary, title: TITLES[outcome.kind], urgent: NEEDS_ATTENTION.has(outcome.kind) },
+      { message: summary, title: titleFor(outcome), urgent: needsAttention(outcome) },
       { taskId, outcomeKind: outcome.kind },
     );
   }

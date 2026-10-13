@@ -237,6 +237,62 @@ describe('OpenAIRealtimeProvider.sendToolResult', () => {
   });
 });
 
+describe("OpenAIRealtimeProvider.sendToolResult, respond: 'if-silent' (#148 review r2)", () => {
+  // record_answer: the model usually asks its next question in the same
+  // response as the tool call. Prompting another response then either
+  // collides with the one still open (conversation_already_has_active_response)
+  // or makes Banjo speak again over the other party.
+  async function openProvider() {
+    const provider = new OpenAIRealtimeProvider();
+    const connectPromise = provider.connect(sessionConfig);
+    const ws = wsInstances[wsInstances.length - 1]!;
+    ws.readyState = FakeWs.OPEN;
+    ws.emit('open');
+    await connectPromise;
+    ws.sent = [];
+    const server = (msg: Record<string, unknown>) => ws.emit('message', Buffer.from(JSON.stringify(msg)));
+    return { provider, ws, server };
+  }
+  const toolCall = (responseId: string) => ({
+    type: 'response.function_call_arguments.done',
+    response_id: responseId,
+    call_id: 'call-1',
+    name: 'record_answer',
+    arguments: '{"question":1,"answered":true,"answer":"6pm"}',
+  });
+
+  it('waits for the response that called the tool, and prompts none when it spoke', async () => {
+    const { provider, ws, server } = await openProvider();
+    server({ type: 'response.created', response: { id: 'resp-1' } });
+    server({ type: 'response.output_audio.delta', response_id: 'resp-1', delta: Buffer.from('x').toString('base64') });
+    server(toolCall('resp-1'));
+    provider.sendToolResult('call-1', { ok: true }, false, { respond: 'if-silent' });
+    expect(sentTypes(ws)).toEqual(['conversation.item.create']);
+    server({ type: 'response.done', response: { id: 'resp-1', output: [] } });
+    expect(sentTypes(ws)).toEqual(['conversation.item.create']);
+  });
+
+  it('prompts a response once the silent response that called the tool is done', async () => {
+    const { provider, ws, server } = await openProvider();
+    server({ type: 'response.created', response: { id: 'resp-1' } });
+    server(toolCall('resp-1'));
+    provider.sendToolResult('call-1', { ok: true }, false, { respond: 'if-silent' });
+    expect(sentTypes(ws)).toEqual(['conversation.item.create']);
+    server({ type: 'response.done', response: { id: 'resp-1', output: [] } });
+    expect(sentTypes(ws)).toEqual(['conversation.item.create', 'response.create']);
+  });
+
+  it('decides at once when the response is already done', async () => {
+    const { provider, ws, server } = await openProvider();
+    server({ type: 'response.created', response: { id: 'resp-1' } });
+    server({ type: 'response.output_text.delta', response_id: 'resp-1', delta: 'Thanks. And walk-ins?' });
+    server(toolCall('resp-1'));
+    server({ type: 'response.done', response: { id: 'resp-1', output: [] } });
+    provider.sendToolResult('call-1', { ok: true }, false, { respond: 'if-silent' });
+    expect(sentTypes(ws)).toEqual(['conversation.item.create']);
+  });
+});
+
 // The simulator (scripts/sim.ts, ROADMAP 4.5): same adapter, text in and out.
 describe('OpenAIRealtimeProvider: text-only mode', () => {
   async function open(options?: { textOnly?: boolean }) {

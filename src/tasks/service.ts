@@ -1,10 +1,11 @@
-import { and, count, desc, eq, gte, inArray, isNull, lte, or, sql } from 'drizzle-orm';
+import { and, count, desc, eq, gte, inArray, isNull, lte, ne, or, sql } from 'drizzle-orm';
 import { db } from '../db/index.js';
 import { logger } from '../lib/logger.js';
 import {
   callAttempts,
   tasks,
   type CallAttempt,
+  type CollectedAnswer,
   type Task,
   type TaskConstraints,
   type TaskOutcome,
@@ -30,7 +31,9 @@ export async function createTask(input: {
   channel: 'phone' | 'online';
   goalDescription: string;
   constraints: TaskConstraints;
-  mode?: 'booking' | 'conversation';
+  mode?: Task['mode'];
+  /** 'ask' tasks only (#148): the questions to put to the other party, in order. */
+  questions?: string[];
   /** Phone path: place the call no earlier than this instant. Omit to call as soon as possible. */
   scheduledFor?: Date;
 }): Promise<Task> {
@@ -42,6 +45,7 @@ export async function createTask(input: {
       goalDescription: input.goalDescription,
       constraints: input.constraints,
       ...(input.mode ? { mode: input.mode } : {}),
+      ...(input.questions ? { questions: input.questions } : {}),
       ...(input.scheduledFor ? { scheduledFor: input.scheduledFor } : {}),
     })
     .returning();
@@ -138,6 +142,32 @@ export async function transitionTask(
     'ignored transition: task already has a terminal status',
   );
   return current;
+}
+
+/**
+ * Saves one of an ask call's answers mid-call (record_answer, #148 review),
+ * replacing any earlier one for the same question number. Resolves false if
+ * the task doesn't exist or its answers are already in its outcome ('answered').
+ *
+ * Not a transition, so not through transitionTask: its compare-and-set
+ * would drop an answer saved as the call ends, and the answers have to
+ * outlast whatever ends it (they are how a call that ended early still
+ * reports what it found out). For the same reason it doesn't touch
+ * updatedAt, which ifUpdatedAt reads as "no transition since". Merged in the
+ * UPDATE itself, so two answers saved at once both land.
+ */
+export async function saveCollectedAnswer(taskId: string, answer: CollectedAnswer): Promise<boolean> {
+  const entry = { [String(answer.question)]: answer };
+  const rows = await db
+    .update(tasks)
+    .set({ collectedAnswers: sql`coalesce(${tasks.collectedAnswers}, '{}'::jsonb) || ${JSON.stringify(entry)}::jsonb` })
+    // Not once the answers are in the outcome (#148 review r2): a late save
+    // would make get_task_status's collectedAnswers disagree with it. Other
+    // terminal statuses still take one, since there the saved answers are
+    // the only record.
+    .where(and(eq(tasks.id, taskId), ne(tasks.status, 'answered')))
+    .returning({ id: tasks.id });
+  return rows.length > 0;
 }
 
 /**

@@ -120,8 +120,10 @@ export interface VoiceAIProvider {
    * `respond: false` leaves the model waiting for the other party instead of prompting it to speak now (#133: a
    * callee who cut in while Banjo was ending the call). Honoured by `openai` only. `openai-live` must continue the
    * backend response that is waiting on the result, and Gemini and ElevenLabs don't prompt a response here anyway.
+   * `respond: 'if-silent'` (#148 review r2, record_answer) prompts a reply only if the response that called the tool
+   * said nothing, once it's done; `openai` only, the others treat it as the default.
    */
-  sendToolResult(toolCallId: string, result: unknown, isError?: boolean, options?: { respond?: boolean }): void;
+  sendToolResult(toolCallId: string, result: unknown, isError?: boolean, options?: { respond?: boolean | 'if-silent' }): void;
   /** Tell the model to stop speaking (barge-in). */
   interrupt(): void;
   /**
