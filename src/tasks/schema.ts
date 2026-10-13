@@ -57,13 +57,25 @@ export type TaskOutcome =
  * One of an 'ask' task's questions (#148), in the order place_call gave them.
  * `question` is the task's own text, never the model's restatement of it;
  * `answer` is written by the voice model from what the other party said, so
- * like every other free-text outcome field it's data, not instructions.
+ * like every other free-text outcome field it's data, not instructions. An
+ * answered question always has its answer: a union, so the compiler holds
+ * every writer to it (#148 review).
  */
-export interface TaskAnswer {
-  question: string;
+export type TaskAnswer = { question: string; answered: true; answer: string } | { question: string; answered: false };
+
+/**
+ * One answer as the voice model reported it, by the question's number in the
+ * list, starting at 1: record_answer and report_answers_and_end_call's
+ * argument. Not yet checked; tasks/answers.ts makes it a TaskAnswer.
+ */
+export interface ReportedAnswer {
+  question: number;
   answered: boolean;
   answer?: string;
 }
+
+/** A ReportedAnswer once checked: what record_answer saves in tasks.collected_answers. */
+export type CollectedAnswer = { question: number; answered: true; answer: string } | { question: number; answered: false };
 
 export const tasks = pgTable('tasks', {
   id: uuid('id').primaryKey().defaultRandom(),
@@ -76,6 +88,12 @@ export const tasks = pgTable('tasks', {
   constraints: jsonb('constraints').$type<TaskConstraints>().notNull(),
   // 'ask' tasks only (#148): what to find out, in order. Null for every other mode.
   questions: jsonb('questions').$type<string[]>(),
+  // 'ask' tasks only (#148 review): each answer as record_answer saved it
+  // mid-call, keyed by question number ("1", "2", …), so answers survive a
+  // call that ends before report_answers_and_end_call. Written only by
+  // saveCollectedAnswer (./service.ts), never transitionTask. Null until the
+  // first one.
+  collectedAnswers: jsonb('collected_answers').$type<Record<string, CollectedAnswer>>(),
   status: taskStatusEnum('status').notNull().default('pending'),
   candidateWindows: jsonb('candidate_windows').$type<TimeWindow[]>(), // phone path only
   outcome: jsonb('outcome').$type<TaskOutcome | null>(),

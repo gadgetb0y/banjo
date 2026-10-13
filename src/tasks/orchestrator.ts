@@ -288,6 +288,10 @@ export async function sweepStaleCalls(): Promise<void> {
       logger.error({ err, taskId: task.id }, 'stale-call sweep could not reach the calendar — reporting outcome as unknown');
     }
 
+    // An ask call that saved answers before it died reports them, as one
+    // that ended early on a live process does (#148 review).
+    const unfinished = modeRules(task).unfinishedCallOutcome(task);
+
     if (booked) {
       logger.warn(
         { taskId: task.id, callAttemptId: attempt.id, eventId: booked.eventId },
@@ -307,6 +311,10 @@ export async function sweepStaleCalls(): Promise<void> {
         },
         { from: ['calling', 'negotiating'] },
       );
+    } else if (unfinished) {
+      const { status, outcome } = unfinished;
+      logger.warn({ taskId: task.id, callAttemptId: attempt.id }, 'stale call swept — recording the answers it saved');
+      await transitionTask(task.id, status, { outcome }, { from: ['calling', 'negotiating'] });
     } else {
       logger.warn({ taskId: task.id, callAttemptId: attempt.id }, 'stale call swept — no calendar event found');
       await transitionTask(

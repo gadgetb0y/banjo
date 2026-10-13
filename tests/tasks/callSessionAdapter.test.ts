@@ -243,6 +243,84 @@ describe('buildOutboundCallSessionOptions', () => {
     });
   });
 
+  it("gives an ask task record_answer, which doesn't end the call (#148 review)", () => {
+    const options = buildOutboundCallSessionOptions({
+      task: { ...fakeTask, mode: 'ask' } as Task,
+      callAttempt: fakeCallAttempt,
+      contact: fakeContact,
+      telephony: fakeTelephony,
+      calendar: fakeCalendar,
+      systemPrompt: 'irrelevant for this test',
+    });
+    const recordAnswer = options.tools.find((t) => t.name === 'record_answer');
+    expect(recordAnswer).toBeDefined();
+    expect(recordAnswer?.endsCall).toBeFalsy();
+    for (const mode of ['booking', 'conversation'] as const) {
+      const other = buildOutboundCallSessionOptions({
+        task: { ...fakeTask, mode } as Task,
+        callAttempt: fakeCallAttempt,
+        contact: fakeContact,
+        telephony: fakeTelephony,
+        calendar: fakeCalendar,
+        systemPrompt: 'irrelevant for this test',
+      });
+      expect(other.tools.some((t) => t.name === 'record_answer')).toBe(false);
+    }
+  });
+
+  type Options = ReturnType<typeof buildOutboundCallSessionOptions>;
+  for (const [how, end] of [
+    ['the other party hangs up', (o: Options) => o.onStatusChange({ kind: 'ended', reason: 'callee hung up', disclosure: 'disclosed' })],
+    ['the session fails', (o: Options) => o.onFailure('voice ai died')],
+  ] as const) {
+    it(`records an ask call's saved answers as answered when ${how} before it ends itself (#148 review)`, async () => {
+      getTask.mockResolvedValueOnce({
+        id: 'task-1',
+        mode: 'ask',
+        status: 'negotiating',
+        questions: ['Q1?', 'Q2?'],
+        collectedAnswers: { '1': { question: 1, answered: true, answer: '6pm.' } },
+      } as unknown as Task);
+      const options = buildOutboundCallSessionOptions({
+        task: { ...fakeTask, mode: 'ask', questions: ['Q1?', 'Q2?'] } as Task,
+        callAttempt: fakeCallAttempt,
+        contact: fakeContact,
+        telephony: fakeTelephony,
+        calendar: fakeCalendar,
+        systemPrompt: 'irrelevant for this test',
+      });
+
+      await end(options);
+
+      expect(transitionTask).toHaveBeenCalledWith('task-1', 'answered', {
+        outcome: {
+          kind: 'answered',
+          answers: [
+            { question: 'Q1?', answered: true, answer: '6pm.' },
+            { question: 'Q2?', answered: false },
+          ],
+          summary: expect.stringContaining('The call ended before Banjo could wrap it up'),
+        },
+      });
+    });
+  }
+
+  it('still fails an ask call that ends early with no answers saved (#148 review)', async () => {
+    getTask.mockResolvedValueOnce({ id: 'task-1', mode: 'ask', status: 'negotiating', questions: ['Q1?'], collectedAnswers: null } as unknown as Task);
+    const options = buildOutboundCallSessionOptions({
+      task: { ...fakeTask, mode: 'ask', questions: ['Q1?'] } as Task,
+      callAttempt: fakeCallAttempt,
+      contact: fakeContact,
+      telephony: fakeTelephony,
+      calendar: fakeCalendar,
+      systemPrompt: 'irrelevant for this test',
+    });
+
+    await options.onStatusChange({ kind: 'ended', reason: 'callee hung up', disclosure: 'disclosed' });
+
+    expect(transitionTask).toHaveBeenCalledWith('task-1', 'failed', { outcome: { kind: 'failed', reason: 'callee hung up' } });
+  });
+
   it("onStatusChange('ended'): does not touch a task that already reached a terminal status (e.g. confirm_appointment already ran) before the call ended", async () => {
     getTask.mockResolvedValueOnce({ id: 'task-1', status: 'confirmed' } as unknown as Task);
     const options = buildOutboundCallSessionOptions({

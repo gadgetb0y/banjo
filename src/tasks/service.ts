@@ -5,6 +5,7 @@ import {
   callAttempts,
   tasks,
   type CallAttempt,
+  type CollectedAnswer,
   type Task,
   type TaskConstraints,
   type TaskOutcome,
@@ -141,6 +142,28 @@ export async function transitionTask(
     'ignored transition: task already has a terminal status',
   );
   return current;
+}
+
+/**
+ * Saves one of an ask call's answers mid-call (record_answer, #148 review),
+ * replacing any earlier one for the same question number. Resolves false if
+ * the task doesn't exist.
+ *
+ * Not a transition, so not through transitionTask: its compare-and-set
+ * would drop an answer saved as the call ends, and the answers have to
+ * outlast whatever ends it (they are how a call that ended early still
+ * reports what it found out). For the same reason it doesn't touch
+ * updatedAt, which ifUpdatedAt reads as "no transition since". Merged in the
+ * UPDATE itself, so two answers saved at once both land.
+ */
+export async function saveCollectedAnswer(taskId: string, answer: CollectedAnswer): Promise<boolean> {
+  const entry = { [String(answer.question)]: answer };
+  const rows = await db
+    .update(tasks)
+    .set({ collectedAnswers: sql`coalesce(${tasks.collectedAnswers}, '{}'::jsonb) || ${JSON.stringify(entry)}::jsonb` })
+    .where(eq(tasks.id, taskId))
+    .returning({ id: tasks.id });
+  return rows.length > 0;
 }
 
 /**

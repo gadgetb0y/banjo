@@ -117,7 +117,8 @@ export function createMcpServer(): McpServer {
   server.tool(
     'get_task_status',
     'Check the current status and (if finished) outcome of a previously started task, whether it was ' +
-      'a phone call or a recorded online booking.',
+      "a phone call or a recorded online booking. For an 'ask' call, collectedAnswers holds the answers saved " +
+      'during the call, even when it ended as something other than answered (a transfer, an escalation).',
     getTaskStatusInputSchema.shape,
     { title: 'Get task status', ...READS },
     adapt(getTaskStatusHandler),

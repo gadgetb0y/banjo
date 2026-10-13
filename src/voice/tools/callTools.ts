@@ -6,9 +6,10 @@ import { formatInZone, formatSpokenInZone, zonedTimeToUtcIso } from '../../lib/t
 import { TimeoutError, withTimeout } from '../../lib/withTimeout.js';
 import { sendOwnerMessage } from '../../notifications/owner.js';
 import type { CallContext } from '../../session/types.js';
-import type { TaskAnswer } from '../../tasks/schema.js';
+import { answersFor, collectedAnswer, collectedReports } from '../../tasks/answers.js';
+import type { ReportedAnswer } from '../../tasks/schema.js';
 import { modeRules } from '../../tasks/modes.js';
-import { isTerminalStatus, transitionTask } from '../../tasks/service.js';
+import { isTerminalStatus, saveCollectedAnswer, transitionTask } from '../../tasks/service.js';
 import type { TelephonyProvider } from '../../telephony/providers/types.js';
 import type { ToolDefinition } from '../types.js';
 import { withoutRepeatedLead } from '../verbatimMatch.js';
@@ -574,26 +575,48 @@ export const endConversationCallTool: VoiceTool<{ summary: string }> = defineVoi
   },
 });
 
+export { answersFor };
+
 /**
- * Pairs the model's answers with the task's own questions (#148), by number:
- * the stored question text goes into the outcome, never the model's
- * paraphrase of it. A question the model skipped, numbered twice, or marked
- * answered with no answer text is recorded as not answered, so the outcome
- * always has exactly one entry per question.
+ * Saves one answer of an ask call as soon as it's settled (#148 review), so a
+ * call that ends before report_answers_and_end_call (the far end says "yep,
+ * bye" and hangs up, a refused goodbye, a hold limit, a transfer) still has
+ * it. Writes tasks.collected_answers through saveCollectedAnswer, never the
+ * task's status or outcome; report_answers_and_end_call and end_call fold
+ * these in, and a call that ends early is recorded from them
+ * (tasks/modes.ts). Returns an ordinary result, so the call carries on
+ * through the normal tool-result flow.
  */
-export function answersFor(
-  questions: string[],
-  reported: { question: number; answered: boolean; answer?: string }[],
-): TaskAnswer[] {
-  return questions.map((question, i) => {
-    const report = reported.find((r) => r.question === i + 1);
-    const answer = report?.answer?.trim();
-    return report?.answered && answer ? { question, answered: true, answer } : { question, answered: false };
-  });
-}
+export const recordAnswerTool: VoiceTool<ReportedAnswer> = defineVoiceTool({
+  name: 'record_answer',
+  description:
+    'Save one answer as soon as it is settled: call this right after the other party confirms your read-back of an ' +
+    'answer, without saying anything about it, then carry on with the call. Use the question\'s number in your ' +
+    "list. If they can't or won't answer one, save it with answered: false. Saving the same number again replaces " +
+    'what you saved before. This does not end the call; report_answers_and_end_call still does, at the end.',
+  schema: z.object({
+    question: z.number().int().positive().describe("The question's number in your list, starting at 1."),
+    answered: z.boolean().describe('Whether they gave you an answer to this question.'),
+    answer: z.string().optional().describe('Their answer, in a short plain sentence. Leave out if not answered.'),
+  }),
+  handler: async (input, ctx) => {
+    return runToolSafely('record_answer', async () => {
+      const count = ctx.task.questions?.length ?? 0;
+      if (input.question > count) {
+        return {
+          ok: false as const,
+          error: 'no_such_question' as const,
+          message: `There is no question ${input.question}: your list has ${count}.`,
+        };
+      }
+      await saveCollectedAnswer(ctx.task.id, collectedAnswer(input));
+      return { ok: true as const };
+    });
+  },
+});
 
 export const reportAnswersAndEndCallTool: VoiceTool<{
-  answers: { question: number; answered: boolean; answer?: string }[];
+  answers: ReportedAnswer[];
   summary?: string;
 }> = defineVoiceTool({
   name: 'report_answers_and_end_call',
@@ -601,7 +624,8 @@ export const reportAnswersAndEndCallTool: VoiceTool<{
     'Use this to end the call once you have asked every question on your list and they have answered what they ' +
     "can. Record one entry per question, by its number: what they said, in a short plain sentence, or answered: " +
     "false if they didn't know, wouldn't say, or you never got to it. Record only what they actually told you on " +
-    'this call. Never fill a gap with a guess. This is the normal, successful end of this call, even if some ' +
+    'this call. Never fill a gap with a guess. Answers you saved with record_answer are kept, and an entry here ' +
+    'for the same question replaces it. This is the normal, successful end of this call, even if some ' +
     'questions went unanswered.' +
     BEFORE_ENDING,
   schema: z.object({
@@ -622,10 +646,15 @@ export const reportAnswersAndEndCallTool: VoiceTool<{
   handler: async (input, ctx) => {
     return runToolSafely('report_answers_and_end_call', async () => {
       const summary = input.summary?.trim();
+      // What record_answer saved during the call, then this call's report:
+      // answersFor lets the later report for a number win, so the final
+      // report overrides a saved answer, and a question it leaves out keeps
+      // the saved one. ctx.task is re-fetched for each tool call, so it has
+      // every answer saved before this one.
       await transitionTask(ctx.task.id, 'answered', {
         outcome: {
           kind: 'answered',
-          answers: answersFor(ctx.task.questions ?? [], input.answers),
+          answers: answersFor(ctx.task.questions ?? [], [...collectedReports(ctx.task), ...input.answers]),
           ...(summary ? { summary } : {}),
         },
       });
