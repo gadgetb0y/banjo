@@ -438,7 +438,17 @@ questions are stored in `tasks.questions`. The differences from a booking call:
 
 `answers[].answer` and `summary` are written by the voice model from what was said on the call, so
 they are untrusted data like every other free-text outcome field. The webhook `text` gives counts
-only ("Banjo asked X 2 questions: 1 answered."). The owner's summary lists each question and answer.
+only ("Banjo asked X 3 questions: 2 of 3 answered."). The owner's summary opens with the same count
+and lists each question and answer. The status is `answered` even when nothing was, so a call with
+no answers reads as one: the summary opens "No answers from X", the webhook text says "0 answered"
+and both say it needs the owner, and on Pushover it's titled "Banjo: no answers" and sent urgent
+(`needsAttention()` in `src/notifications/channel.ts`). Five questions with long answers can pass
+Pushover's 1024 characters or Twilio's 1600 (Twilio rejects the text, so nothing arrives), so
+`buildOutcomeSummary` fits the summary to `OWNER_SUMMARY_MAX_CHARS`: each question and answer is
+clipped to an equal share, the free-text summary is clipped and then dropped, every question keeps
+its number and "(no answer)", and a last line points to `get_task_status` for the full answers. The
+summary is built before the channel is known, so it fits the smaller of the two. `sendSms` also
+clips any body to 1600 as a backstop.
 Voicemail, escalation, transfer and `end_call` (whose safety net still records `escalated`) work as
 on any call.
 

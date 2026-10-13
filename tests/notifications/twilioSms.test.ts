@@ -53,3 +53,19 @@ describe('SMS delivery is checked after sending', () => {
     expect(fakeLog.error).not.toHaveBeenCalled();
   });
 });
+
+describe('SMS length', () => {
+  // Twilio rejects a body over 1600 characters (error 21617), and the owner
+  // then gets nothing at all.
+  it("clips a message to Twilio's 1600-character limit rather than have it rejected", async () => {
+    vi.useFakeTimers();
+    try {
+      await new TwilioSmsNotificationChannel().notify('task-1', { kind: 'conversation_completed', summary: 'x' }, 'y'.repeat(5000));
+    } finally {
+      vi.useRealTimers();
+    }
+    const body = (create.mock.calls[0] as unknown as [{ body: string }])[0].body;
+    expect(body).toHaveLength(1600);
+    expect(body.endsWith('…')).toBe(true);
+  });
+});

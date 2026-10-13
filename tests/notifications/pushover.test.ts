@@ -117,6 +117,29 @@ describe('with NOTIFICATION_CHANNEL=pushover', () => {
     expect(sentForm(0).get('priority')).toBe('0');
   });
 
+  // #148 review: an ask call with no answers was titled "got your answers",
+  // at normal priority.
+  it('titles an ask call by how many questions were answered, urgent when none were', async () => {
+    fetchMock.mockResolvedValue(ok());
+    const channel = owner.createNotificationChannel();
+    const ask = (...answered: boolean[]) => ({
+      kind: 'answered' as const,
+      answers: answered.map((a, i) => (a ? { question: `Q${i}`, answered: true, answer: 'yes' } : { question: `Q${i}`, answered: false })),
+    });
+
+    await channel.notify('task-4', ask(true, true), 'Asked Luigi');
+    await channel.notify('task-5', ask(true, false), 'Asked Luigi');
+    await channel.notify('task-6', ask(false, false), 'No answers from Luigi');
+    await channel.notify('task-7', ask(), 'No answers from Luigi');
+
+    expect([0, 1, 2, 3].map((i) => [sentForm(i).get('title'), sentForm(i).get('priority')])).toEqual([
+      ['Banjo: got your answers', '0'],
+      ['Banjo: some answers', '0'],
+      ['Banjo: no answers', '1'],
+      ['Banjo: no answers', '1'],
+    ]);
+  });
+
   it('sends direct messages to the owner through Pushover too', async () => {
     fetchMock.mockResolvedValue(ok());
 
