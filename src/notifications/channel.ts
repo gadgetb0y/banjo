@@ -55,7 +55,7 @@ export function withSavedAnswers(summary: string, contact: Contact, saved: TaskA
   const outcome = { kind: 'answered' as const, answers: saved };
   // buildAskSummary opens with its own count line, which the header replaces;
   // fitted so the section is `room` long at most once that swap is made.
-  const ownHeader = buildAskSummary(contact.displayName, outcome, Infinity).split('\n')[0]!;
+  const ownHeader = askHeader(contact.displayName, answerCounts(outcome));
   const lines = buildAskSummary(contact.displayName, outcome, room - header.length + ownHeader.length).split('\n').slice(1);
   const section = [header, ...lines].join('\n');
   if (lines.length > 0 && section.length <= room) return `${summary}\n\n${section}`;
@@ -118,12 +118,9 @@ const MIN_ITEM_CHARS_WITH_SUMMARY = 80;
  * up under the wrong question, and a last line says it was shortened.
  */
 function buildAskSummary(name: string, outcome: Extract<TaskOutcome, { kind: 'answered' }>, maxChars: number): string {
-  const { answered, total } = answerCounts(outcome);
-  if (total === 0) return `No answers from ${name}: none were recorded. Needs your attention.`;
-  const header =
-    answered === 0
-      ? `No answers from ${name} (0 of ${total}). Needs your attention.`
-      : `Asked ${name}: ${answered === total ? `all ${total}` : `${answered} of ${total}`} answered.`;
+  const counts = answerCounts(outcome);
+  if (counts.total === 0) return `No answers from ${name}: none were recorded. Needs your attention.`;
+  const header = askHeader(name, counts);
 
   const render = (itemChars: number, summary: string | undefined, shortened: boolean) =>
     [
@@ -166,6 +163,17 @@ function buildAskSummary(name: string, outcome: Extract<TaskOutcome, { kind: 'an
     out = next;
   }
   return out;
+}
+
+/**
+ * An ask summary's first line, with at least one question: how many were
+ * answered. It doesn't depend on the budget, so withSavedAnswers can swap it
+ * out without rendering the summary twice.
+ */
+function askHeader(name: string, { answered, total }: { answered: number; total: number }): string {
+  return answered === 0
+    ? `No answers from ${name} (0 of ${total}). Needs your attention.`
+    : `Asked ${name}: ${answered === total ? `all ${total}` : `${answered} of ${total}`} answered.`;
 }
 
 /**
