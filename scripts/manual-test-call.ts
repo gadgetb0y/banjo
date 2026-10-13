@@ -24,6 +24,10 @@
  *
  * Usage:
  *   npx tsx scripts/manual-test-call.ts --phone "+15551234567" [options]
+ *   npx tsx scripts/manual-test-call.ts --phone "+15551234567" --mode ask --question "Are you open Sunday?"
+ *
+ * It goes through placeCallHandler, so the per-number call cap
+ * (MAX_CALLS_PER_NUMBER_PER_DAY) applies as it does to place_call.
  *
  * Options:
  *   --phone <e164>         Required (unless --contact-id given). Number to call.
@@ -31,13 +35,16 @@
  *   --contact-id <uuid>    Reuse an existing contact instead of creating one.
  *   --category <string>    salon|medical|restaurant|home_services|other. Default: other.
  *   --goal <string>        Task description read into the call's system prompt.
- *   --mode <mode>          booking|conversation. Default: booking. Use conversation for a call
- *                          with no booking goal — it ends via end_conversation_call.
+ *   --mode <mode>          booking|conversation|ask. Default: booking. Use conversation for a call
+ *                          with no booking goal — it ends via end_conversation_call. Use ask to
+ *                          find something out (#148): give the questions with --question.
+ *   --question <text>      With --mode ask: something Banjo should find out, on one line. Repeat
+ *                          for more than one (at most 5). Checked as place_call checks them.
  *   --at <datetime>        Place the call no earlier than this local date-time in CALENDAR_TIMEZONE,
  *                          e.g. "2026-09-14T09:00:00". The script keeps its server running until then.
  *   --notes <string>       Extra context injected into the call system prompt.
- *   --duration <minutes>   Appointment duration to negotiate. Default: 15.
- *   --window-days <n>      How many days out the offerable window extends. Default: 3.
+ *   --duration <minutes>   Appointment duration to negotiate. Default: 15. Not used by --mode ask.
+ *   --window-days <n>      How many days out the offerable window extends. Default: 3. Not used by --mode ask.
  *   --yes                  Skip the interactive confirmation prompt.
  */
 import { createInterface } from 'node:readline/promises';
@@ -51,7 +58,8 @@ import { startServer } from '../src/server.js';
 import { callAttempts } from '../src/tasks/schema.js';
 import { getTask, isTerminalStatus } from '../src/tasks/service.js';
 import { startOrchestrationPoller } from '../src/tasks/orchestrator.js';
-import { parseScheduledFor, placeCallHandler } from '../src/mcp/tools/placeCall.js';
+import { placeCallHandler } from '../src/mcp/tools/placeCall.js';
+import { buildPlaceCallInput, type ManualCallInput } from './manual-test-call/lib.js';
 
 async function main() {
   const { values } = parseArgs({
@@ -60,19 +68,10 @@ async function main() {
       name: { type: 'string', default: 'Manual Test Contact' },
       'contact-id': { type: 'string' },
       category: { type: 'string', default: 'other' },
-      goal: {
-        type: 'string',
-        // end_call is the correct fit for "just a connectivity test,
-        // nothing to book" — it ends the call without mislabeling the task
-        // as an escalation (which needlessly flags it for Steve's
-        // attention). Only a tool handler can call TelephonyProvider.
-        // hangUp() — the model itself has no way to end a call unprompted —
-        // so the goal must explicitly name a tool for the model to reach a
-        // clean ending at all.
-        default:
-          "This is a manual scaffold test call — please mention it's a test, confirm you can hear the caller, then call end_call to end the call. Do not attempt a real booking.",
-      },
+      // Defaults to a test goal for the mode: see manual-test-call/lib.ts.
+      goal: { type: 'string' },
       mode: { type: 'string', default: 'booking' },
+      question: { type: 'string', multiple: true },
       at: { type: 'string' },
       notes: { type: 'string', default: '' },
       duration: { type: 'string', default: '15' },
@@ -86,18 +85,31 @@ async function main() {
     console.error('Usage: npx tsx scripts/manual-test-call.ts --phone "+15551234567" [--goal "..."] [--yes]');
     process.exit(1);
   }
-  if (values.mode !== 'booking' && values.mode !== 'conversation') {
-    console.error(`Error: --mode must be "booking" or "conversation" (got "${values.mode}").`);
+  // Checked before anything is created or started, with place_call's own rules.
+  let input: ManualCallInput;
+  try {
+    input = buildPlaceCallInput({
+      mode: values.mode,
+      goal: values.goal,
+      question: values.question,
+      notes: values.notes,
+      duration: values.duration,
+      windowDays: values['window-days'],
+      at: values.at,
+    });
+  } catch (err) {
+    console.error(`Error: ${err instanceof Error ? err.message : String(err)}`);
     process.exit(1);
   }
-  const mode: 'booking' | 'conversation' = values.mode;
 
   console.log('\n--- ea manual test call ---');
   console.log(`Telephony provider: twilio`);
   console.log(`Voice AI provider:  ${config.VOICE_AI_PROVIDER}`);
   console.log(`Public hostname:    ${config.PUBLIC_HOSTNAME ?? '(not set — Twilio will not be able to reach this process!)'}`);
   console.log(`Target:             ${values['contact-id'] ? `existing contact ${values['contact-id']}` : `${values.name} <${values.phone}>`}`);
-  console.log(`Goal:                ${values.goal}`);
+  console.log(`Mode:               ${input.mode}`);
+  console.log(`Goal:               ${input.taskDescription}`);
+  input.questions?.forEach((q, i) => console.log(`  ${i + 1}. ${q}`));
   console.log(`Scheduled for:      ${values.at ? `${values.at} (${config.CALENDAR_TIMEZONE})` : '(now)'}`);
   console.log('----------------------------\n');
 
@@ -119,24 +131,8 @@ async function main() {
 
   const contactId = await resolveContactId(values);
 
-  const durationMinutes = Number.parseInt(values.duration ?? '15', 10);
-  const windowDays = Number.parseInt(values['window-days'] ?? '3', 10);
-  // The offerable window starts when the call does, not when this script ran —
-  // for a call scheduled days out, "the next N days from now" is already over.
-  const windowStart = values.at ? new Date(Math.max(Date.now(), parseScheduledFor(values.at).getTime())) : new Date();
-  const windowEnd = new Date(windowStart.getTime() + windowDays * 24 * 60 * 60 * 1000);
-
-  const { taskId, ackMessage } = await placeCallHandler({
-    contactId,
-    taskDescription: values.goal ?? '',
-    mode,
-    ...(values.at ? { scheduledFor: values.at } : {}),
-    constraints: {
-      durationMinutes,
-      dateWindows: [{ start: windowStart.toISOString(), end: windowEnd.toISOString() }],
-      notes: values.notes || undefined,
-    },
-  });
+  // The same handler as place_call, so the per-number call cap applies.
+  const { taskId, ackMessage } = await placeCallHandler({ contactId, ...input });
 
   console.log(`\nTask created: ${taskId}`);
   console.log(`${ackMessage}\n`);
@@ -145,7 +141,7 @@ async function main() {
   await pollUntilTerminal(taskId);
 }
 
-async function resolveContactId(values: Record<string, string | boolean | undefined>): Promise<string> {
+async function resolveContactId(values: Record<string, string | string[] | boolean | undefined>): Promise<string> {
   if (values['contact-id']) return values['contact-id'] as string;
 
   const name = values.name as string;

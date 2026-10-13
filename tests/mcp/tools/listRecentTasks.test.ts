@@ -41,6 +41,22 @@ describe('mcp: list_recent_tasks', () => {
     expect(summary).toEqual(rest);
   });
 
+  it("leaves out an ask task's saved answers, which get_task_status pairs with their questions (#148 review)", async () => {
+    const askTask = {
+      ...TASK,
+      mode: 'ask',
+      status: 'escalated',
+      candidateWindows: [],
+      questions: ['Open Sunday?', 'Walk-ins?'],
+      collectedAnswers: { '1': { question: 1, answered: true, answer: 'No, closed Sundays.' } },
+      outcome: { kind: 'escalated', reason: 'They asked for a card number.' },
+    };
+    listRecentTasks.mockResolvedValue([askTask]);
+    const [summary] = await listRecentTasksHandler({});
+    expect(summary).not.toHaveProperty('collectedAnswers');
+    expect(summary).toMatchObject({ mode: 'ask', status: 'escalated', questions: ['Open Sunday?', 'Walk-ins?'] });
+  });
+
   it('asks for 20 tasks by default, or the limit given', async () => {
     listRecentTasks.mockResolvedValue([]);
     await listRecentTasksHandler({});
