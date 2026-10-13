@@ -404,6 +404,49 @@ describe('recording consent on hold: no way around the notice (#151, #8)', () =>
   });
 });
 
+describe('recording consent on hold: starting is gated like resuming (#151, #8)', () => {
+  const NOTICE_LINE = "Hi, I'm an AI assistant calling on behalf of Alex. This call is recorded.";
+
+  /** The notice's recording was only scheduled when the hold began, so it never started; then a person picks up. */
+  async function scheduledThenHeld() {
+    vi.useFakeTimers();
+    const s = setup({ recordCalls: true });
+    Object.assign(s.telephony, { startRecording: vi.fn(async () => ({ recordingId: 'RE-1' })), pauseRecording: vi.fn(), resumeRecording: vi.fn() });
+    await new CallSession(s.options).start();
+    s.emitTelephony({ callId: 'call-1', type: 'connected', meta: { callId: 'call-1', providerCallId: 'CA-1', toNumber: '+15555550100' } });
+    voice({ type: 'transcript', role: 'assistant', text: NOTICE_LINE, isFinal: true });
+    voice({ type: 'turn_end' });
+    voice({ type: 'tool_call', call: { id: 'hold-1', name: 'wait_on_hold', arguments: {} } });
+    await vi.advanceTimersByTimeAsync(1_000);
+    fakeVoiceAI.judgeHoldLine.mockImplementationOnce(async () => 'person');
+    heard('This is Dana.');
+    await vi.advanceTimersByTimeAsync(0);
+    expect(s.telephony.startRecording).not.toHaveBeenCalled();
+    return s;
+  }
+
+  it('a later line that merely says "recorded" never starts it, when the pickup opener had no notice', async () => {
+    const s = await scheduledThenHeld();
+    voice({ type: 'transcript', role: 'assistant', text: "Hi, I'm an AI assistant calling about a refill.", isFinal: true });
+    voice({ type: 'turn_end' });
+    voice({ type: 'transcript', role: 'assistant', text: "Thanks, I've recorded that.", isFinal: true });
+    voice({ type: 'turn_end' });
+    await vi.advanceTimersByTimeAsync(2_000);
+    expect(s.telephony.startRecording).not.toHaveBeenCalled();
+  });
+
+  it('a pickup notice cut off fails closed for a fresh start too', async () => {
+    const s = await scheduledThenHeld();
+    voice({ type: 'transcript', role: 'assistant', text: NOTICE_LINE, isFinal: true });
+    voice({ type: 'interrupted' });
+    voice({ type: 'turn_end' });
+    voice({ type: 'transcript', role: 'assistant', text: NOTICE_LINE, isFinal: true });
+    voice({ type: 'turn_end' });
+    await vi.advanceTimersByTimeAsync(2_000);
+    expect(s.telephony.startRecording).not.toHaveBeenCalled();
+  });
+});
+
 describe('waiting on hold needs every hold method', () => {
   it('refuses on a provider that cannot add context', async () => {
     const addContext = fakeVoiceAI.addContext;

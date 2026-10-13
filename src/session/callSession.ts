@@ -266,6 +266,12 @@ export class CallSession<TCtx = CallContext> {
    */
   private awaitingPickupOpener = false;
   /**
+   * The call has been on hold (#151). From then on, starting a recording is
+   * gated exactly like resuming one: only the pickup opener's notice counts,
+   * since whoever is on the line now heard nothing said before the hold.
+   */
+  private heldOnce = false;
+  /**
    * Recording start, pause and resume, one at a time (#151): a pause sent while
    * a resume is still in flight could land first and leave the recording
    * running through the next hold.
@@ -474,9 +480,11 @@ export class CallSession<TCtx = CallContext> {
           }
           const pickupOpener = event.role === 'assistant' && this.awaitingPickupOpener;
           if (pickupOpener) this.awaitingPickupOpener = false;
-          // A paused recording resumes only on a notice in the first thing
-          // the new person hears (#151); without one, it stays off for good.
-          if (pickupOpener && this.recordingState === 'paused' && !RECORDING_NOTICE.test(event.text)) {
+          // After a hold, a recording starts or resumes only on a notice in the
+          // first thing the new person hears (#151); without one, it stays off
+          // for good. Start and resume are gated alike.
+          const recordable = this.recordingState === 'idle' || this.recordingState === 'paused';
+          if (pickupOpener && recordable && !RECORDING_NOTICE.test(event.text)) {
             logger.warn({ callId: this.opts.callId }, 'no recording notice after the hold — the rest of this call is not recorded');
             this.recordingState = 'cancelled';
           }
@@ -484,7 +492,8 @@ export class CallSession<TCtx = CallContext> {
             event.role === 'assistant' &&
             RECORDING_NOTICE.test(event.text) &&
             this.opts.recordCalls &&
-            (this.recordingState === 'idle' || (this.recordingState === 'paused' && pickupOpener)) &&
+            recordable &&
+            (pickupOpener || (!this.heldOnce && this.recordingState === 'idle')) &&
             !this.hold
           ) {
             this.recordingResumes = this.recordingState === 'paused';
@@ -519,7 +528,7 @@ export class CallSession<TCtx = CallContext> {
         // have reached the other party. Wait for Banjo to say it again.
         // A resume's notice cut off fails closed (#151): only the pickup opener
         // may carry it, and that line is gone.
-        if (this.recordingState === 'awaiting_turn_end') this.recordingState = this.recordingResumes ? 'cancelled' : 'idle';
+        if (this.recordingState === 'awaiting_turn_end') this.recordingState = this.heldOnce ? 'cancelled' : 'idle';
         // #71: the turn can end well before its audio has played (the model
         // writes faster than it speaks), so the flush may also take a notice
         // whose recording is already scheduled. Once it has played, keep it:
@@ -939,6 +948,7 @@ export class CallSession<TCtx = CallContext> {
   /** On hold (#151): the model stops replying, the silence watchdog stops, and a limit starts running. */
   private startHold(): void {
     const maxMs = this.holdBudget();
+    this.heldOnce = true;
     this.clearSilenceWatchdog();
     this.voiceAI.setHold?.(true);
     this.hold = { startedAt: Date.now(), timer: setTimeout(() => void this.holdLimitReached(), maxMs), heard: [], judging: false };

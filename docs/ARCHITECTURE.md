@@ -447,7 +447,7 @@ Then a plain response is triggered. This deliberately isn't a `triggerResponse(c
 
 **Recording consent.** Whoever picks up heard none of the recording notice, so they mustn't be recorded until Banjo has said it to them (#8's ordering).
 - **Before the hold starts,** `CallSession` pauses a running recording (`TelephonyProvider.pauseRecording`, Twilio `status: 'paused'`), or calls off one only scheduled.
-- **Resuming:** only Banjo's *first* line to the person who picked up can resume the same recording (`resumeRecording`, `in-progress`), and only once that line's notice has played.
+- **Resuming:** only Banjo's *first* line to the person who picked up can resume the same recording (`resumeRecording`, `in-progress`), and only once that line's notice has played. Once a call has been on hold, a recording that never started is gated the same way: it can only *start* on that line's notice.
   - If that first line has no notice, or the person cuts it off, the recording stays off for the rest of the call. `RECORDING_NOTICE` matches any later line that merely says "recorded", which is also why `'cancelled'` never re-arms.
   - Start, pause and resume run one at a time (`recordingOps`), so a pause can't overtake a resume still in flight.
   - No hold starts if the call ended while the recording was being paused.
