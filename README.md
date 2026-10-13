@@ -82,7 +82,8 @@ AI rather than waiting to be asked ([#8](https://github.com/shatch/banjo/issues/
 - **Handles voicemail and phone menus.** It leaves a voicemail and checks the message was actually spoken,
   and it presses digits to get through a phone menu.
 - **Waits on hold.** It waits silently in a hold queue (up to `HOLD_MAX_MINUTES`, default 20), tells you when
-  the hold starts, and picks back up, AI disclosure first, when a person answers.
+  the hold starts, and picks back up, AI disclosure first, when a person answers. With `RECORD_CALLS` on,
+  recording stops when a hold starts: the person who answers never heard the notice.
 - **Hands a call to you.** Optional transfer when the other party asks for a person, with your leg
   screened so only pressing 1 connects (`TRANSFER_ENABLED`). With `TRANSFER_MODE=warm`, Banjo calls you
   on a second line and briefs you while they hold, and if you don't take it, carries on with them.

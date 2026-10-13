@@ -66,15 +66,12 @@ export interface TelephonyProvider {
   startRecording?(callId: string): Promise<{ recordingId: string }>;
 
   /**
-   * Pause a running recording while the call waits on hold (#151), so whoever
-   * picks up isn't recorded before hearing the notice. 'stopped' if it could
-   * only be stopped for good, which also keeps them unrecorded. Optional, with
-   * resumeRecording.
+   * Stop the call's recording for good (#151: nothing is recorded after a
+   * hold). A call with no recording counts as stopped. Throws if a running
+   * recording couldn't be stopped. Optional: without it, a recorded call
+   * can't wait on hold.
    */
-  pauseRecording?(callId: string): Promise<'paused' | 'stopped'>;
-
-  /** Resume a paused recording, once the notice has been said again (#151). */
-  resumeRecording?(callId: string): Promise<void>;
+  stopRecording?(callId: string): Promise<void>;
 
   /** Delete a stored recording; one that is already gone counts as deleted. Used by retention (recordings/retention.ts). */
   deleteRecording?(recordingId: string): Promise<void>;

@@ -3,7 +3,7 @@ import type { Contact } from '../contacts/schema.js';
 import { getContact } from '../contacts/service.js';
 import type { CallSessionOptions } from '../session/callSession.js';
 import type { CallContext } from '../session/types.js';
-import { config, disclosureLine } from '../config/index.js';
+import { config, disclosureLine, disclosureLineWithoutNotice } from '../config/index.js';
 import { logger } from '../lib/logger.js';
 import { buildOutcomeSummary, withDisclosureNote } from '../notifications/channel.js';
 import type { DisclosureResult } from '../session/disclosure.js';
@@ -179,6 +179,8 @@ export function buildOutboundCallSessionOptions(params: {
     // What a silence nudge says if Banjo hasn't spoken yet, so the call still
     // opens with the disclosure (#118).
     openingLine: disclosureLine(),
+    // Nothing is recorded after a hold (#151), so no notice in the reopening.
+    pickupLine: disclosureLineWithoutNotice(),
     ...(task.constraints?.maxHoldMinutes ? { maxHoldMs: task.constraints.maxHoldMinutes * 60_000 } : {}),
 
     // #151: the owner hears when a hold starts and when someone picks up. A

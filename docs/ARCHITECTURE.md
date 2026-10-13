@@ -445,13 +445,13 @@ It returns one word: PERSON or RECORDING. Judgments run one at a time, and only 
 
 Then a plain response is triggered. This deliberately isn't a `triggerResponse(cue)`: a cue *replaces* the session's instructions for that response, which would drop the call's rules and put the other party's words in instruction position. From there Banjo carries on, and can use the warm transfer (#149) like any call.
 
-**Recording consent.** Whoever picks up heard none of the recording notice, so they mustn't be recorded until Banjo has said it to them (#8's ordering).
-- **Before the hold starts,** `CallSession` pauses a running recording (`TelephonyProvider.pauseRecording`, Twilio `status: 'paused'`), or calls off one only scheduled.
-- **Resuming:** only Banjo's *first* line to the person who picked up can resume the same recording (`resumeRecording`, `in-progress`), and only once that line's notice has played. Once a call has been on hold, a recording that never started is gated the same way: it can only *start* on that line's notice.
-  - If that first line has no notice, or the person cuts it off, the recording stays off for the rest of the call. `RECORDING_NOTICE` matches any later line that merely says "recorded", which is also why `'cancelled'` never re-arms.
-  - Start, pause and resume run one at a time (`recordingOps`), so a pause can't overtake a resume still in flight.
-  - No hold starts if the call ended while the recording was being paused.
-- **Fails closed:** if Twilio refuses the pause, the recording is stopped for good. If it can be neither paused nor stopped, `wait_on_hold` is refused.
+**Recording consent: nothing is recorded after a hold.** Whoever picks up heard none of the recording notice, so the rest of the call isn't recorded at all.
+- **Before the hold starts,** `CallSession` stops a running recording for good (`TelephonyProvider.stopRecording`, Twilio `status: 'stopped'`), or calls off one only scheduled. Either way the recording state becomes `'cancelled'`, which never re-arms.
+- **The reopening** after a pickup uses the disclosure without the notice (`pickupLine`, `disclosureLineWithoutNotice()`), since saying "this call is recorded" would now be false.
+- **Start and stop run one at a time** (`recordingOps`), so a stop can't overtake a start still in flight.
+- **Fails closed:** if a running recording can't be stopped, `wait_on_hold` is refused. No hold starts if the call ended while the recording was being stopped.
+
+This replaced a pause-and-resume design that re-established consent with the new person. Three rounds of security review each found a gap in its state machine, and keeping the recording off after a hold has no such state machine at all. The cost: the conversation with whoever picks up after a hold, usually the part that matters, isn't recorded.
 
 **Limits.** A hold lasts at most `HOLD_MAX_MINUTES` (default 20, at most 45), or the task's `constraints.maxHoldMinutes`. It's always cut short to leave 10 minutes of the voice session to talk in, since OpenAI ends a session at 60 minutes with no warning (`VoiceAIProvider.maxSessionMs`). No time left means `wait_on_hold` is refused. Running out ends the call as `escalated` with `stuckAt: 'hold_limit'`. A menu Banjo can't get through is `escalated` with `stuckAt: 'phone_menu'`, from `escalate_and_end_call`. The owner hears when a hold starts (with its limit) and when someone picks up. A hold that runs out reaches them as the usual end-of-call summary.
 

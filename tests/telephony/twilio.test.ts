@@ -854,7 +854,7 @@ describe('TwilioProvider warm transfer (#149)', () => {
   });
 });
 
-describe('TwilioProvider recording pause for a hold (#151)', () => {
+describe('TwilioProvider.stopRecording (#151)', () => {
   function withRecording(callId: string, update: ReturnType<typeof vi.fn>) {
     const provider = new TwilioProvider();
     provider.registerInboundCall(callId, '+15555550100');
@@ -864,27 +864,27 @@ describe('TwilioProvider recording pause for a hold (#151)', () => {
     return provider;
   }
 
-  it('pauses, then resumes the same recording', async () => {
+  it('stops the running recording for good', async () => {
     const update = vi.fn(async () => ({}));
     const provider = withRecording('CA-r1', update);
     await provider.startRecording('CA-r1');
-    await expect(provider.pauseRecording('CA-r1')).resolves.toBe('paused');
-    await provider.resumeRecording('CA-r1');
-    expect(update.mock.calls).toEqual([[{ status: 'paused' }], [{ status: 'in-progress' }]]);
+    await provider.stopRecording('CA-r1');
+    expect(update).toHaveBeenCalledWith({ status: 'stopped' });
   });
 
-  it('stops the recording when Twilio refuses the pause, and throws only if that fails too', async () => {
-    const update = vi.fn(async (_: unknown) => ({})).mockRejectedValueOnce(new Error('cannot pause'));
+  it('has nothing to stop on a call that was never recorded', async () => {
+    const update = vi.fn(async () => ({}));
     const provider = withRecording('CA-r2', update);
-    await provider.startRecording('CA-r2');
-    await expect(provider.pauseRecording('CA-r2')).resolves.toBe('stopped');
-    expect(update).toHaveBeenLastCalledWith({ status: 'stopped' });
-
-    update.mockRejectedValueOnce(new Error('a')).mockRejectedValueOnce(new Error('b'));
-    await expect(provider.pauseRecording('CA-r2')).rejects.toThrow('b');
+    await expect(provider.stopRecording('CA-r2')).resolves.toBeUndefined();
+    expect(update).not.toHaveBeenCalled();
   });
 
-  it('refuses a call with no recording', async () => {
-    await expect(new TwilioProvider().pauseRecording('nope')).rejects.toThrow();
+  it('throws when Twilio refuses, so the hold is refused', async () => {
+    const update = vi.fn(async () => {
+      throw new Error('twilio 500');
+    });
+    const provider = withRecording('CA-r3', update);
+    await provider.startRecording('CA-r3');
+    await expect(provider.stopRecording('CA-r3')).rejects.toThrow('twilio 500');
   });
 });

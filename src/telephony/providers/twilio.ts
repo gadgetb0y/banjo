@@ -892,29 +892,15 @@ export class TwilioProvider implements TelephonyProvider {
   }
 
   /**
-   * Pauses the call's recording for a hold (#151). If Twilio refuses the pause,
-   * stops it instead: consent fails closed, so nobody who picks up is recorded
-   * before hearing the notice. Throws only if neither works.
+   * Stops the call's recording for good (#151). A start that failed, or never
+   * happened, leaves no recordingSid, and there's nothing to stop.
    */
-  async pauseRecording(callId: string): Promise<'paused' | 'stopped'> {
+  async stopRecording(callId: string): Promise<void> {
     const state = this.calls.get(callId);
-    if (!state?.providerCallId || !state.recordingSid) throw new Error(`pauseRecording: no recording on ${callId}`);
-    const recording = this.client.calls(state.providerCallId).recordings(state.recordingSid);
-    try {
-      await recording.update({ status: 'paused' });
-      return 'paused';
-    } catch (err) {
-      logger.warn({ err, callId }, 'could not pause the recording for the hold — stopping it instead');
-      await recording.update({ status: 'stopped' });
-      return 'stopped';
-    }
-  }
-
-  async resumeRecording(callId: string): Promise<void> {
-    const state = this.calls.get(callId);
-    if (!state?.providerCallId || !state.recordingSid) throw new Error(`resumeRecording: no recording on ${callId}`);
-    await this.client.calls(state.providerCallId).recordings(state.recordingSid).update({ status: 'in-progress' });
-    logger.info({ callId, recordingId: state.recordingSid }, 'call recording resumed after the hold');
+    if (!state?.recordingSid) return;
+    if (!state.providerCallId) throw new Error(`stopRecording: no live Twilio call for ${callId}`);
+    await this.client.calls(state.providerCallId).recordings(state.recordingSid).update({ status: 'stopped' });
+    logger.info({ callId, recordingId: state.recordingSid }, 'call recording stopped');
   }
 
   /** Deletes a recording from Twilio. Already gone (404) counts as deleted, so retention can't get stuck on one. */
