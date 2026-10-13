@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { isCuttingIn, saidGoodbye } from '../../src/session/goodbye.js';
+import { isCuttingIn, isSigningOff, saidGoodbye } from '../../src/session/goodbye.js';
 
 describe('saidGoodbye (#102)', () => {
   it.each([
@@ -53,4 +53,32 @@ describe('isCuttingIn (#133)', () => {
       expect(isCuttingIn(line)).toBe(false);
     },
   );
+});
+
+describe('isSigningOff (#144)', () => {
+  it.each([
+    // Live calls (2026-10-13): each was followed by a narrated goodbye.
+    "Okay, thanks. Thanks. That's all.",
+    "That's everything, thanks.",
+    "I think we're good.",
+    "Okay, thanks, that's all I needed.",
+    'Bye now!',
+    'Thank you so much.',
+    "No, we're all set.",
+    "That's it for me.",
+  ])('treats a done signal as signing off: %s', (line) => {
+    expect(isSigningOff(line)).toBe(true);
+  });
+
+  it.each([
+    'Mhm.',
+    'Okay.',
+    'Yes, I wanna watch it right now.',
+    'Thanks, but can you also ask about Saturday?',
+    'Thank you. What time was that again?',
+    "That's all fine, but hold on a second.",
+    'Before you go, one more thing.',
+  ])("doesn't treat an acknowledgement, a question or a redirect as signing off: %s", (line) => {
+    expect(isSigningOff(line)).toBe(false);
+  });
 });
