@@ -154,7 +154,29 @@ describe('buildWebhookText', () => {
         { question: 'Walk-ins?', answered: false },
       ],
     };
-    expect(webhook.buildWebhookText(contact, outcome)).toMatch(/^Banjo asked Luigi's 2 questions: 1 answered\./);
+    expect(webhook.buildWebhookText(contact, outcome)).toMatch(/^Banjo asked Luigi's 2 questions: 1 of 2 answered\. Call details/);
+  });
+
+  it('says when every question was answered', () => {
+    const outcome = { kind: 'answered' as const, answers: [{ question: 'Open Sunday?', answered: true, answer: 'No.' }] };
+    expect(webhook.buildWebhookText(contact, outcome)).toMatch(/^Banjo asked Luigi's 1 question: all 1 answered\. Call details/);
+  });
+
+  // #148 review: an ask call with nothing answered read like success.
+  it('says none were answered, and that the owner is needed, when no question was answered', () => {
+    const outcome = {
+      kind: 'answered' as const,
+      answers: [
+        { question: 'Open Sunday?', answered: false },
+        { question: 'Walk-ins?', answered: false },
+      ],
+    };
+    expect(webhook.buildWebhookText(contact, outcome)).toMatch(
+      /^Banjo asked Luigi's 2 questions: 0 answered\. Needs the owner's attention\./,
+    );
+    expect(webhook.buildWebhookText(contact, { kind: 'answered', answers: [] })).toMatch(
+      /^Banjo called Luigi's with questions, but no answers were recorded\. Needs the owner's attention\./,
+    );
   });
 
   it('says when Banjo missed the AI disclosure', () => {

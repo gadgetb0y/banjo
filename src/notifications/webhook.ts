@@ -5,6 +5,7 @@ import { logger } from '../lib/logger.js';
 import { formatSpokenInZone } from '../lib/timezone.js';
 import type { DisclosureResult } from '../session/disclosure.js';
 import type { Task, TaskOutcome } from '../tasks/schema.js';
+import { answerCounts } from './channel.js';
 
 const REQUEST_TIMEOUT_MS = 5_000;
 export const RETRY_DELAY_MS = 5_000;
@@ -73,10 +74,13 @@ export function buildWebhookText(contact: Pick<Contact, 'displayName'>, outcome:
         return `Banjo transferred a call from ${name} to the owner.`;
       case 'answered': {
         // Counts only: the questions came from the requesting agent and the
-        // answers from the call, so both stay in outcome.
-        const total = outcome.answers.length;
-        const answered = outcome.answers.filter((a) => a.answered).length;
-        return `Banjo asked ${name} ${total} question${total === 1 ? '' : 's'}: ${answered} answered.`;
+        // answers from the call, so both stay in outcome. The status is
+        // 'answered' even when nothing was, so the text says so plainly.
+        const { answered, total } = answerCounts(outcome);
+        if (total === 0) return `Banjo called ${name} with questions, but no answers were recorded. Needs the owner's attention.`;
+        const asked = `Banjo asked ${name} ${total} question${total === 1 ? '' : 's'}`;
+        if (answered === 0) return `${asked}: 0 answered. Needs the owner's attention.`;
+        return `${asked}: ${answered === total ? `all ${total}` : `${answered} of ${total}`} answered.`;
       }
     }
   })();
