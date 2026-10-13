@@ -35,10 +35,11 @@ Options:
   --category <string>    salon|medical|restaurant|home_services|other. Default: salon.
   --goal <string>        What the call is for. Default: book a grooming appointment.
   --mode <mode>          booking|conversation|ask. Default: booking.
-  --question <text>      With --mode ask: something Banjo should find out. Repeat for
-                         more than one. Default goal for ask: find out a few things.
-  --duration <minutes>   Appointment length to negotiate. Default: 60.
-  --window-days <n>      How many days out Banjo may book. Default: 3.
+  --question <text>      With --mode ask: something Banjo should find out, on one line.
+                         Repeat for more than one (at most 5). Checked as place_call
+                         checks them. Default goal for ask: find out a few things.
+  --duration <minutes>   Appointment length to negotiate. Default: 60. Not used by --mode ask.
+  --window-days <n>      How many days out Banjo may book. Default: 3. Not used by --mode ask.
   --transfer             Offer transfer_to_owner, as with TRANSFER_ENABLED=true.
   --warm                 Make it a warm transfer (TRANSFER_MODE=warm). Implies --transfer.
   --owner <answer>       With --warm: what the owner does. accept|decline|no-answer. Default: accept.
@@ -114,7 +115,7 @@ async function main(): Promise<void> {
 
   const { config } = await import('../src/config/index.js');
   const { OpenAIRealtimeProvider } = await import('../src/voice/providers/openai.js');
-  const { startSimCall } = await import('../src/sim/simCall.js');
+  const { startSimCall, SimInputError } = await import('../src/sim/simCall.js');
 
   const rl = createInterface({ input: process.stdin, output: process.stdout, prompt: 'You: ' });
   // Clears the half-typed "You: " line first, then redraws it, so Banjo's lines don't land mid-prompt.
@@ -142,6 +143,9 @@ async function main(): Promise<void> {
     createVoiceAI: () => new OpenAIRealtimeProvider({ textOnly: true }),
     owner,
     print,
+  }).catch((err: unknown) => {
+    if (err instanceof SimInputError) fail(`place_call would refuse this call: ${err.message}`);
+    throw err;
   });
   process.on('SIGINT', () => call.telephony.calleeHangsUp());
 

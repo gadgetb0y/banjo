@@ -123,9 +123,35 @@ escalate_and_end_call is still the right call if something genuinely goes wrong 
 understand each other, you're truly stuck) — just not as a way to wrap up a conversation that went normally.`;
 }
 
-/** The task's questions as a numbered list, the numbers report_answers_and_end_call records them by. */
+/**
+ * The task's questions as a numbered list, the numbers report_answers_and_end_call
+ * records them by. Each is collapsed onto one line: a line break inside one would
+ * add a number (place_call refuses them too; this is the second line of defence).
+ */
 function numberedQuestions(task: Task): string {
-  return (task.questions ?? []).map((q, i) => `${i + 1}. ${q}`).join('\n');
+  return (task.questions ?? []).map((q, i) => `${i + 1}. ${q.replace(/\s+/g, ' ').trim()}`).join('\n');
+}
+
+/**
+ * What an 'ask' call may say about the principal, and what it turns down (#148
+ * review). A status question ("is my prescription ready?") needs a name or the
+ * task's own details to answer; anything more is declined, or, where the call
+ * can transfer, handed to the transfer rules, which cover exactly what only the
+ * principal can give. "Hold" here is a reservation, not the phone line: being
+ * asked to hold is waiting, which the hold rules cover.
+ */
+function askLimits(): string {
+  const principal = config.ASSISTANT_PRINCIPAL_NAME;
+  const personal = config.TRANSFER_ENABLED
+    ? `If they ask for a deposit, payment or other personal details, only ${principal} can give those: follow the rules ` +
+      `above for connecting them to ${principal}. If they'd rather not, say you can't give that, and carry on asking.`
+    : `If they ask for a deposit, payment or other personal details, say you can't give that, and carry on asking.`;
+  return `If they offer to book, order or reserve something, or to put something on hold for ${principal}, answer them out
+loud: thank them, say you're only calling to ask today, and do not agree to it. The person you're talking to asking you
+to hold ("Can you hold one moment?") is different: that's not an offer, so just say "Sure" and let them come back.
+To answer a question they may need ${principal}'s name, or a detail from what you are calling about or from the
+notes for this call (to find a prescription or an order, say). You may give them those, and nothing else.
+${personal}`;
 }
 
 /**
@@ -139,16 +165,17 @@ function askModeGuidance(task: Task): string {
   return `Your questions, in order:
 ${numberedQuestions(task)}
 
-This call is only to find things out for ${principal}. It books nothing and agrees to nothing. If they offer to book,
-hold, order or reserve something, or ask for a deposit, payment or personal details, answer them out loud: thank
-them, say you're only calling to ask today, and do not agree to it.
+This call is only to find things out for ${principal}. It books nothing and agrees to nothing. ${askLimits()}
 Ask one question at a time, and let them answer before the next. When they answer, say it back in a few words as
 you go, so they can correct you ("Six on Saturdays, got it. And how much is…"). If they don't know or won't say,
 accept that after asking once more at most, and move on.
+Once they confirm your read-back of an answer, or that they don't know, call record_answer for that question right
+away, without saying anything about it, and carry on.
 After the last answer, say it back and let them reply before you end the call: never end it in the same turn as a
 read-back or a question. Then say goodbye and call report_answers_and_end_call in that same turn, with one entry
 per question by its number. Record only what they actually told you on this call; never fill in a guess. This is
 the normal, successful end of the call, even if some questions went unanswered.
+End this call that way, not with end_call.
 `;
 }
 
@@ -221,10 +248,10 @@ function askModeFrontendGuidance(task: Task): string {
 
 This call is only to find things out. Your questions, in order:
 ${numberedQuestions(task)}
-Ask one at a time, and say each answer back in a few words as you go, so they can correct you. Agree to nothing:
-if they offer a booking, order, hold or payment, say out loud that you're only calling to ask today. After the last
-answer, say it back and let them reply; then say goodbye and immediately delegate ending the call, with the answers
-they gave.`;
+Ask one at a time, and say each answer back in a few words as you go, so they can correct you. Agree to nothing.
+${askLimits()}
+After the last answer, say it back and let them reply; then say goodbye and immediately delegate ending the call, with
+the answers they gave.`;
 }
 
 /**
