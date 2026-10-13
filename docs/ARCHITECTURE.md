@@ -432,11 +432,23 @@ On OpenAI, `setHold(true)` resends `audio.input` with `turn_detection: { type: '
 **Is it a person?** Each new held line goes through `isRepeatOnHold()` (`src/session/hold.ts`) first. A line whose wording mostly matches one already heard on this hold is skipped, since queues repeat the same announcement every half minute. Anything new goes to `judgeHoldLine()`, an out-of-band response with these settings:
 - `conversation: 'none'`: nothing enters the call's conversation;
 - `output_modalities: ['text']`: no audio, so the other party hears nothing;
+- `tools: []` and `tool_choice: 'none'`: the line is the other party's words and could ask for anything, so
+  the judgment can't act on it. The adapter also drops any function-call event from an out-of-band
+  response;
 - tagged in `metadata`, so the adapter keeps its text and `response.done` from looking like Banjo speaking.
 
 It returns one word: PERSON or RECORDING. Judgments run one at a time, and only the latest line that arrived meanwhile is judged next. A failed or late judgment (8s) counts as a person: a person left in silence hangs up, while Banjo woken by a recording can go back on hold.
 
-**A person picks up.** `setHold(false)`, the owner gets a message, and Banjo is cued (`personPickedUpCue`) with what they said. They haven't heard anything from before the hold, so Banjo opens again with the AI disclosure, then carries on. From there it can use the warm transfer (#149) like any call.
+**A person picks up.** `setHold(false)` runs and the owner gets a message. Then `VoiceAIProvider.addContext()` adds two conversation items:
+- a fixed system note (`personPickedUpNote`): open again with the AI disclosure, since they heard nothing from before the hold;
+- what they said, as a user line.
+
+Then a plain response is triggered. This deliberately isn't a `triggerResponse(cue)`: a cue *replaces* the session's instructions for that response, which would drop the call's rules and put the other party's words in instruction position. From there Banjo carries on, and can use the warm transfer (#149) like any call.
+
+**Recording consent.** Whoever picks up heard none of the recording notice, so they mustn't be recorded until Banjo has said it to them (#8's ordering).
+- **Before the hold starts,** `CallSession` pauses a running recording (`TelephonyProvider.pauseRecording`, Twilio `status: 'paused'`), or calls off one only scheduled.
+- **Resuming:** the next notice Banjo says, once its turn has played, resumes the same recording (`resumeRecording`, `in-progress`), or starts the scheduled one.
+- **Fails closed:** if Twilio refuses the pause, the recording is stopped for good. If it can be neither paused nor stopped, `wait_on_hold` is refused.
 
 **Limits.** A hold lasts at most `HOLD_MAX_MINUTES` (default 20, at most 45), or the task's `constraints.maxHoldMinutes`. It's always cut short to leave 10 minutes of the voice session to talk in, since OpenAI ends a session at 60 minutes with no warning (`VoiceAIProvider.maxSessionMs`). No time left means `wait_on_hold` is refused. Running out ends the call as `escalated` with `stuckAt: 'hold_limit'`. A menu Banjo can't get through is `escalated` with `stuckAt: 'phone_menu'`, from `escalate_and_end_call`. The owner hears when a hold starts (with its limit) and when someone picks up. A hold that runs out reaches them as the usual end-of-call summary.
 

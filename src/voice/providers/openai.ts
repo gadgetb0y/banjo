@@ -426,6 +426,9 @@ export class OpenAIRealtimeProvider implements VoiceAIProvider {
         response: {
           conversation: 'none',
           output_modalities: ['text'],
+          // The line is the other party's words: the judgment must not be able to act on them.
+          tools: [],
+          tool_choice: 'none',
           metadata: { banjo_hold_check: id },
           instructions: HOLD_CHECK_INSTRUCTIONS,
           input: [{ type: 'message', role: 'user', content: [{ type: 'input_text', text: holdCheckInput(line, earlier) }] }],
@@ -433,6 +436,18 @@ export class OpenAIRealtimeProvider implements VoiceAIProvider {
       }),
     );
     return verdict;
+  }
+
+  /**
+   * Adds lines to the conversation without prompting a reply (#151). The other
+   * party's words go in as a user message, never as instructions, and the
+   * session's instructions stay in force for the reply that follows.
+   */
+  addContext(items: { role: 'system' | 'user'; text: string }[]): void {
+    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return;
+    for (const { role, text } of items) {
+      this.ws.send(JSON.stringify({ type: 'conversation.item.create', item: { type: 'message', role, content: [{ type: 'input_text', text }] } }));
+    }
   }
 
   sayVerbatim(text: string): void {
@@ -565,6 +580,8 @@ export class OpenAIRealtimeProvider implements VoiceAIProvider {
       // Accumulate function-call argument deltas keyed by call id.
       // NEEDS VERIFICATION (see file header, item 5).
       case 'response.function_call_arguments.delta': {
+        // A hold judgment never runs a tool, whatever the line it judged said (#151).
+        if (this.outOfBandResponseIds.has(msg.response_id)) return;
         const callId: string | undefined = msg.call_id;
         if (!callId) return;
         const existing = this.pendingCalls.get(callId);
@@ -581,6 +598,7 @@ export class OpenAIRealtimeProvider implements VoiceAIProvider {
       }
 
       case 'response.function_call_arguments.done': {
+        if (this.outOfBandResponseIds.has(msg.response_id)) return;
         const callId: string | undefined = msg.call_id;
         if (!callId) return;
         const pending = this.pendingCalls.get(callId);

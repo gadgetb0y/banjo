@@ -32,19 +32,19 @@ export function isRepeatOnHold(line: string, heard: readonly string[]): boolean 
 }
 
 /**
- * The one-time cue Banjo gets when a person picks up after a hold (#151).
- * They never heard the call's opening, so Banjo opens again: the disclosure
- * first, as on any outbound call, then why it's calling.
+ * The system note added to the conversation when a person picks up after a
+ * hold (#151), just before their own words go in as a user line. Fixed text:
+ * what they said is never part of it, so it can't carry instructions. They
+ * never heard the call's opening, so Banjo opens again, disclosure first.
  */
-export function personPickedUpCue(personLine: string, openingLine: string | undefined): string {
+export function personPickedUpNote(openingLine: string | undefined): string {
   const opener = openingLine
     ? `Your first sentence must be: ${JSON.stringify(openingLine)} Then say briefly why you're calling.`
     : "Greet them, say you're an AI assistant, and say briefly why you're calling.";
   return (
-    `One-time cue for this moment only: you were waiting on hold, and a live person has just picked up. They said: ` +
-    `${JSON.stringify(personLine)} They haven't heard anything you said before the hold. ${opener} ` +
-    'Then carry on with the call as usual. If it turns out to be another recording after all, call wait_on_hold again ' +
-    'without saying anything more. Disregard this cue on every later turn.'
+    'You were waiting on hold, and a live person has just picked up; their words follow. They have not heard anything ' +
+    `you said before the hold. ${opener} Then carry on with the call as usual. If it turns out to be another recording ` +
+    'after all, call wait_on_hold again without saying anything more.'
   );
 }
 

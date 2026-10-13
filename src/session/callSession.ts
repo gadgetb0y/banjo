@@ -11,7 +11,7 @@ import { negotiateAudioFormats, resolveAudioPipeline, type AudioPipeline } from 
 import type { CallContext } from './types.js';
 import { checkDisclosure, type DisclosureResult } from './disclosure.js';
 import { isCuttingIn, saidGoodbye } from './goodbye.js';
-import { holdBudgetMs, isRepeatOnHold, personPickedUpCue } from './hold.js';
+import { holdBudgetMs, isRepeatOnHold, personPickedUpNote } from './hold.js';
 import { classifyTranscript } from './transcriptQuality.js';
 
 export type CallSessionState = 'connecting' | 'active' | 'tool-pending' | 'ending' | 'ended' | 'error';
@@ -255,7 +255,9 @@ export class CallSession<TCtx = CallContext> {
    * for good (#71): 'cancelled' never re-arms, since RECORDING_NOTICE would
    * match any later line that merely says "recorded".
    */
-  private recordingState: 'idle' | 'awaiting_turn_end' | 'scheduled' | 'cancelled' = 'idle';
+  private recordingState: 'idle' | 'awaiting_turn_end' | 'scheduled' | 'cancelled' | 'paused' = 'idle';
+  /** The next notice resumes a recording paused for a hold (#151), rather than starting one. */
+  private recordingResumes = false;
   private recordingTimer: ReturnType<typeof setTimeout> | null = null;
   /** When the recording notice itself is estimated to finish playing — a barge-in before then may have flushed it (#71). */
   private recordingNoticePlayedAt = 0;
@@ -457,7 +459,13 @@ export class CallSession<TCtx = CallContext> {
             if (this.callEndingToolCallId !== null) this.calleeSpokeDuringEnd = event.text;
             else this.endRefused = false;
           }
-          if (event.role === 'assistant' && RECORDING_NOTICE.test(event.text) && this.opts.recordCalls && this.recordingState === 'idle') {
+          if (
+            event.role === 'assistant' &&
+            RECORDING_NOTICE.test(event.text) &&
+            this.opts.recordCalls &&
+            (this.recordingState === 'idle' || (this.recordingState === 'paused' && !this.hold))
+          ) {
+            this.recordingResumes = this.recordingState === 'paused';
             this.recordingState = 'awaiting_turn_end';
             this.recordingNoticeFraction = noticeFraction(event.text);
           }
@@ -487,7 +495,7 @@ export class CallSession<TCtx = CallContext> {
       case 'interrupted':
         // #8: cut off before its turn ended, the recording notice may never
         // have reached the other party. Wait for Banjo to say it again.
-        if (this.recordingState === 'awaiting_turn_end') this.recordingState = 'idle';
+        if (this.recordingState === 'awaiting_turn_end') this.recordingState = this.recordingResumes ? 'paused' : 'idle';
         // #71: the turn can end well before its audio has played (the model
         // writes faster than it speaks), so the flush may also take a notice
         // whose recording is already scheduled. Once it has played, keep it:
@@ -613,6 +621,8 @@ export class CallSession<TCtx = CallContext> {
   private scheduleRecordingStart(): void {
     const { telephony, callId } = this.opts;
     if (!telephony.startRecording) return;
+    const resume = this.recordingResumes;
+    this.recordingResumes = false;
     this.recordingState = 'scheduled';
     const turnPlayedAt = this.audioPlaybackTracker.estimatedDoneAt();
     // Where the notice sentence ends within the turn, by its words, scaled to
@@ -622,6 +632,12 @@ export class CallSession<TCtx = CallContext> {
     const delay = Math.max(0, turnPlayedAt - Date.now()) + RECORDING_START_MARGIN_MS;
     this.recordingTimer = setTimeout(() => {
       this.recordingTimer = null;
+      if (resume) {
+        telephony
+          .resumeRecording?.(callId)
+          .catch((err) => logger.error({ err, callId }, 'failed to resume call recording — the rest of the call is unrecorded'));
+        return;
+      }
       telephony
         .startRecording!(callId)
         .then(({ recordingId }) => this.opts.onStatusChange({ kind: 'recording_started', recordingId }))
@@ -829,6 +845,18 @@ export class CallSession<TCtx = CallContext> {
       const ctx = await this.opts.buildToolContext(this.audioPlaybackTracker.estimatedDoneAt(), verbatimDelivery);
       const result = await tool.handler(parsed.data, ctx);
       if (tool.startsHold && (result as { ok?: unknown })?.ok === true) {
+        if (!(await this.pauseRecordingForHold())) {
+          this.voiceAI.sendToolResult(
+            toolCallId,
+            {
+              ok: false,
+              error: 'hold_unavailable',
+              message: 'Waiting on hold is not possible on this call right now. Escalate, saying you could not wait on hold.',
+            },
+            true,
+          );
+          return;
+        }
         // No reply to the result: Banjo has nothing to say to a hold queue.
         this.voiceAI.sendToolResult(toolCallId, result, false, { respond: false });
         this.startHold();
@@ -852,7 +880,7 @@ export class CallSession<TCtx = CallContext> {
   /** Why this call can't wait on hold right now (#151), as a tool result, or undefined if it can. */
   private holdRefusal(): Record<string, unknown> | undefined {
     if (this.hold) return { ok: false, error: 'already_on_hold', message: 'You are already waiting on hold. Say nothing.' };
-    if (!this.voiceAI.setHold || !this.voiceAI.judgeHoldLine) {
+    if (!this.voiceAI.setHold || !this.voiceAI.judgeHoldLine || !this.voiceAI.addContext) {
       return { ok: false, error: 'hold_unsupported', message: 'Waiting on hold is not available on this call. Escalate instead.' };
     }
     if (this.holdBudget() <= 0) {
@@ -883,6 +911,41 @@ export class CallSession<TCtx = CallContext> {
     this.hold = { startedAt: Date.now(), timer: setTimeout(() => void this.holdLimitReached(), maxMs), heard: [], judging: false };
     logger.info({ callId: this.opts.callId, maxMs }, 'waiting on hold');
     void this.opts.onHoldChange?.({ kind: 'started', maxMs }).catch((err: unknown) => logger.warn({ err, callId: this.opts.callId }, 'onHoldChange failed'));
+  }
+
+  /**
+   * Consent on hold (#151, #8): whoever picks up after the hold heard none of
+   * the notice, so they mustn't be recorded until Banjo has said it to them.
+   * A recording not yet started is called off and starts after the notice is
+   * said again; a running one is paused and resumes then. One that could only
+   * be stopped stays stopped. Fails closed: false if a running recording could
+   * be neither paused nor stopped, and then there is no hold.
+   */
+  private async pauseRecordingForHold(): Promise<boolean> {
+    const { telephony, callId } = this.opts;
+    if (this.recordingState === 'awaiting_turn_end') {
+      this.recordingState = this.recordingResumes ? 'paused' : 'idle';
+      return true;
+    }
+    if (this.recordingState !== 'scheduled') return true;
+    if (this.recordingTimer) {
+      // Scheduled, not started.
+      this.cancelPendingRecording();
+      this.recordingState = this.recordingResumes ? 'paused' : 'idle';
+      return true;
+    }
+    if (!telephony.pauseRecording || !telephony.resumeRecording) {
+      logger.error({ callId }, 'cannot pause the recording for a hold — not waiting on hold');
+      return false;
+    }
+    try {
+      const result = await telephony.pauseRecording(callId);
+      this.recordingState = result === 'stopped' ? 'cancelled' : 'paused';
+      return true;
+    } catch (err) {
+      logger.error({ err, callId }, 'could not pause or stop the recording for a hold — not waiting on hold');
+      return false;
+    }
   }
 
   /** Ends the hold without a word to anyone: the call ending, or the start of leaving it. */
@@ -932,7 +995,14 @@ export class CallSession<TCtx = CallContext> {
     const waitedMs = Date.now() - hold.startedAt;
     logger.info({ callId: this.opts.callId, waitedMs }, 'a person picked up after the hold');
     void this.opts.onHoldChange?.({ kind: 'person', waitedMs }).catch((err: unknown) => logger.warn({ err, callId: this.opts.callId }, 'onHoldChange failed'));
-    this.triggerVoiceAIResponse(personPickedUpCue(line, this.opts.openingLine));
+    // Their words as a user line and a fixed note, not a cue: a cue replaces
+    // the session's instructions for the reply, and would put what they said
+    // in instruction position.
+    this.voiceAI.addContext!([
+      { role: 'system', text: personPickedUpNote(this.opts.openingLine) },
+      { role: 'user', text: line },
+    ]);
+    this.triggerVoiceAIResponse();
   }
 
   /** The hold ran out with nobody picking up (#151): recorded by the caller of this session, then the call ends. */

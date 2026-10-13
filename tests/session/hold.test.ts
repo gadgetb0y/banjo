@@ -6,7 +6,7 @@ import type { CallContext } from '../../src/session/types.js';
 import type { TelephonyEvent, TelephonyProvider } from '../../src/telephony/providers/types.js';
 import type { VoiceAIEvent, VoiceAIProvider } from '../../src/voice/types.js';
 import { defineVoiceTool } from '../../src/voice/tools/defineVoiceTool.js';
-import { holdBudgetMs, isRepeatOnHold, personPickedUpCue } from '../../src/session/hold.js';
+import { holdBudgetMs, isRepeatOnHold, personPickedUpNote } from '../../src/session/hold.js';
 
 // Waiting on hold (#151), at the VoiceAIProvider/TelephonyProvider boundary,
 // like tests/session/callSession.test.ts, with a voice provider that can hold.
@@ -21,6 +21,7 @@ const fakeVoiceAI = {
   triggerResponse: vi.fn(),
   sayVerbatim: vi.fn(),
   setHold: vi.fn(),
+  addContext: vi.fn(),
   judgeHoldLine: vi.fn(async (_line: string, _earlier: string[]) => 'recording' as 'person' | 'recording'),
   disconnect: vi.fn(async () => {}),
   on: vi.fn((_event: 'event', listener: (e: VoiceAIEvent) => void) => voiceAIEmitter.on('event', listener)),
@@ -122,12 +123,11 @@ describe('holdBudgetMs', () => {
   });
 });
 
-describe('personPickedUpCue', () => {
-  it('quotes them, and has Banjo open again with the disclosure', () => {
-    const cue = personPickedUpCue('This is Dana, how can I help?', "Hi, I'm an AI assistant calling on behalf of Alex.");
-    expect(cue).toContain('"This is Dana, how can I help?"');
-    expect(cue).toContain(`Your first sentence must be: "Hi, I'm an AI assistant calling on behalf of Alex."`);
-    expect(cue).toContain('wait_on_hold again');
+describe('personPickedUpNote', () => {
+  it('has Banjo open again with the disclosure, and is fixed text', () => {
+    const note = personPickedUpNote("Hi, I'm an AI assistant calling on behalf of Alex.");
+    expect(note).toContain(`Your first sentence must be: "Hi, I'm an AI assistant calling on behalf of Alex."`);
+    expect(note).toContain('wait_on_hold again');
   });
 });
 
@@ -176,7 +176,13 @@ describe('CallSession on hold (#151)', () => {
     heard('Thanks for holding, this is Dana. How can I help?');
 
     await vi.waitFor(() => expect(fakeVoiceAI.setHold).toHaveBeenCalledWith(false));
-    expect(fakeVoiceAI.triggerResponse).toHaveBeenCalledWith(personPickedUpCue('Thanks for holding, this is Dana. How can I help?', options.openingLine));
+    // Their words as a user line after a fixed note, never inside instructions:
+    // a cue would replace the session's instructions and quote them there.
+    expect(fakeVoiceAI.addContext).toHaveBeenCalledWith([
+      { role: 'system', text: personPickedUpNote(options.openingLine) },
+      { role: 'user', text: 'Thanks for holding, this is Dana. How can I help?' },
+    ]);
+    expect(fakeVoiceAI.triggerResponse).toHaveBeenCalledWith();
     expect(options.onHoldChange).toHaveBeenCalledWith({ kind: 'person', waitedMs: expect.any(Number) });
     // Off hold, lines go to the model as usual, not to the judge.
     heard('Hello?');
@@ -223,5 +229,109 @@ describe('CallSession on hold (#151)', () => {
     await vi.waitFor(() =>
       expect(fakeVoiceAI.sendToolResult).toHaveBeenCalledWith('hold-2', expect.objectContaining({ error: 'already_on_hold' }), true),
     );
+  });
+});
+
+describe('recording consent on hold (#151, #8)', () => {
+  const NOTICE_LINE = "Hi, I'm an AI assistant calling on behalf of Alex. This call is recorded.";
+
+  /** A call whose recording is running: the notice was said, its turn ended, and the start timer fired. */
+  async function recordedCall(telephonyOverrides: Partial<TelephonyProvider> = {}) {
+    vi.useFakeTimers();
+    const s = setup({ recordCalls: true });
+    Object.assign(s.telephony, {
+      startRecording: vi.fn(async () => ({ recordingId: 'RE-1' })),
+      pauseRecording: vi.fn(async () => 'paused' as const),
+      resumeRecording: vi.fn(async () => {}),
+      ...telephonyOverrides,
+    });
+    const session = new CallSession(s.options);
+    await session.start();
+    s.emitTelephony({ callId: 'call-1', type: 'connected', meta: { callId: 'call-1', providerCallId: 'CA-1', toNumber: '+15555550100' } });
+    voice({ type: 'transcript', role: 'assistant', text: NOTICE_LINE, isFinal: true });
+    voice({ type: 'turn_end' });
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(s.telephony.startRecording).toHaveBeenCalledTimes(1);
+    return s;
+  }
+
+  it('pauses a running recording before going on hold, and resumes only after the notice is said again', async () => {
+    const s = await recordedCall();
+    voice({ type: 'tool_call', call: { id: 'hold-1', name: 'wait_on_hold', arguments: {} } });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(s.telephony.pauseRecording).toHaveBeenCalledWith('call-1');
+    expect(fakeVoiceAI.setHold).toHaveBeenCalledWith(true);
+
+    // A person picks up and talks: still not recorded.
+    fakeVoiceAI.judgeHoldLine.mockImplementationOnce(async () => 'person');
+    heard('This is Dana, how can I help?');
+    await vi.advanceTimersByTimeAsync(0);
+    expect(s.telephony.resumeRecording).not.toHaveBeenCalled();
+
+    // Banjo says the notice to them; once its turn has played, recording resumes, never restarts.
+    voice({ type: 'transcript', role: 'assistant', text: NOTICE_LINE, isFinal: true });
+    voice({ type: 'turn_end' });
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(s.telephony.resumeRecording).toHaveBeenCalledWith('call-1');
+    expect(s.telephony.startRecording).toHaveBeenCalledTimes(1);
+  });
+
+  it('a recording that could only be stopped stays stopped', async () => {
+    const s = await recordedCall({ pauseRecording: vi.fn(async () => 'stopped' as const) });
+    voice({ type: 'tool_call', call: { id: 'hold-1', name: 'wait_on_hold', arguments: {} } });
+    await vi.advanceTimersByTimeAsync(0);
+    fakeVoiceAI.judgeHoldLine.mockImplementationOnce(async () => 'person');
+    heard('This is Dana.');
+    await vi.advanceTimersByTimeAsync(0);
+    voice({ type: 'transcript', role: 'assistant', text: NOTICE_LINE, isFinal: true });
+    voice({ type: 'turn_end' });
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(s.telephony.resumeRecording).not.toHaveBeenCalled();
+    expect(s.telephony.startRecording).toHaveBeenCalledTimes(1);
+  });
+
+  it('fails closed: no hold if a running recording can be neither paused nor stopped', async () => {
+    await recordedCall({ pauseRecording: vi.fn(async () => { throw new Error('twilio 500'); }) });
+    voice({ type: 'tool_call', call: { id: 'hold-1', name: 'wait_on_hold', arguments: {} } });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(fakeVoiceAI.sendToolResult).toHaveBeenCalledWith('hold-1', expect.objectContaining({ ok: false, error: 'hold_unavailable' }), true);
+    expect(fakeVoiceAI.setHold).not.toHaveBeenCalled();
+  });
+
+  it('a recording scheduled but not yet started is called off, and starts after the notice is said again', async () => {
+    vi.useFakeTimers();
+    const s = setup({ recordCalls: true });
+    Object.assign(s.telephony, { startRecording: vi.fn(async () => ({ recordingId: 'RE-1' })), pauseRecording: vi.fn(), resumeRecording: vi.fn() });
+    await new CallSession(s.options).start();
+    s.emitTelephony({ callId: 'call-1', type: 'connected', meta: { callId: 'call-1', providerCallId: 'CA-1', toNumber: '+15555550100' } });
+    voice({ type: 'transcript', role: 'assistant', text: NOTICE_LINE, isFinal: true });
+    voice({ type: 'turn_end' });
+    voice({ type: 'tool_call', call: { id: 'hold-1', name: 'wait_on_hold', arguments: {} } });
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(s.telephony.startRecording).not.toHaveBeenCalled();
+    expect(s.telephony.pauseRecording).not.toHaveBeenCalled();
+    fakeVoiceAI.judgeHoldLine.mockImplementationOnce(async () => 'person');
+    heard('This is Dana.');
+    await vi.advanceTimersByTimeAsync(0);
+    voice({ type: 'transcript', role: 'assistant', text: NOTICE_LINE, isFinal: true });
+    voice({ type: 'turn_end' });
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(s.telephony.startRecording).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('waiting on hold needs every hold method', () => {
+  it('refuses on a provider that cannot add context', async () => {
+    const addContext = fakeVoiceAI.addContext;
+    // @ts-expect-error removed for this test only
+    delete fakeVoiceAI.addContext;
+    try {
+      const s = setup();
+      await new CallSession(s.options).start();
+      voice({ type: 'tool_call', call: { id: 'hold-1', name: 'wait_on_hold', arguments: {} } });
+      await vi.waitFor(() => expect(fakeVoiceAI.sendToolResult).toHaveBeenCalledWith('hold-1', expect.objectContaining({ error: 'hold_unsupported' }), true));
+    } finally {
+      fakeVoiceAI.addContext = addContext;
+    }
   });
 });

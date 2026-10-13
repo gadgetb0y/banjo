@@ -853,3 +853,38 @@ describe('TwilioProvider warm transfer (#149)', () => {
     expect(logged).not.toContain('vaccination');
   });
 });
+
+describe('TwilioProvider recording pause for a hold (#151)', () => {
+  function withRecording(callId: string, update: ReturnType<typeof vi.fn>) {
+    const provider = new TwilioProvider();
+    provider.registerInboundCall(callId, '+15555550100');
+    const recordings = Object.assign(vi.fn(() => ({ update })), { create: vi.fn(async () => ({ sid: 'RE-live' })) });
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    Object.defineProperty((provider as any).client, 'calls', { value: vi.fn(() => ({ recordings })), configurable: true });
+    return provider;
+  }
+
+  it('pauses, then resumes the same recording', async () => {
+    const update = vi.fn(async () => ({}));
+    const provider = withRecording('CA-r1', update);
+    await provider.startRecording('CA-r1');
+    await expect(provider.pauseRecording('CA-r1')).resolves.toBe('paused');
+    await provider.resumeRecording('CA-r1');
+    expect(update.mock.calls).toEqual([[{ status: 'paused' }], [{ status: 'in-progress' }]]);
+  });
+
+  it('stops the recording when Twilio refuses the pause, and throws only if that fails too', async () => {
+    const update = vi.fn(async (_: unknown) => ({})).mockRejectedValueOnce(new Error('cannot pause'));
+    const provider = withRecording('CA-r2', update);
+    await provider.startRecording('CA-r2');
+    await expect(provider.pauseRecording('CA-r2')).resolves.toBe('stopped');
+    expect(update).toHaveBeenLastCalledWith({ status: 'stopped' });
+
+    update.mockRejectedValueOnce(new Error('a')).mockRejectedValueOnce(new Error('b'));
+    await expect(provider.pauseRecording('CA-r2')).rejects.toThrow('b');
+  });
+
+  it('refuses a call with no recording', async () => {
+    await expect(new TwilioProvider().pauseRecording('nope')).rejects.toThrow();
+  });
+});

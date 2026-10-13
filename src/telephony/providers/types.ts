@@ -65,6 +65,17 @@ export interface TelephonyProvider {
   /** Start recording a live call (#8). Optional: a provider without it can't record, and CallSession won't try. */
   startRecording?(callId: string): Promise<{ recordingId: string }>;
 
+  /**
+   * Pause a running recording while the call waits on hold (#151), so whoever
+   * picks up isn't recorded before hearing the notice. 'stopped' if it could
+   * only be stopped for good, which also keeps them unrecorded. Optional, with
+   * resumeRecording.
+   */
+  pauseRecording?(callId: string): Promise<'paused' | 'stopped'>;
+
+  /** Resume a paused recording, once the notice has been said again (#151). */
+  resumeRecording?(callId: string): Promise<void>;
+
   /** Delete a stored recording; one that is already gone counts as deleted. Used by retention (recordings/retention.ts). */
   deleteRecording?(recordingId: string): Promise<void>;
 

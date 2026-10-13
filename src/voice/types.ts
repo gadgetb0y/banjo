@@ -175,6 +175,13 @@ export interface VoiceAIProvider {
    * left in silence would hang up, while a wrongly woken Banjo can go back on hold.
    */
   judgeHoldLine?(line: string, earlier: string[]): Promise<'person' | 'recording'>;
+  /**
+   * Adds lines to the conversation without prompting a reply (#151): a fixed
+   * system note, or what the other party said, as a user line. Unlike a
+   * triggerResponse() cue, it keeps the session's instructions in force and
+   * never puts the other party's words in instruction position.
+   */
+  addContext?(items: { role: 'system' | 'user'; text: string }[]): void;
   /** The longest a session can last (OpenAI Realtime: 60 minutes). Undefined: no known limit. Caps a hold (#151). */
   readonly maxSessionMs?: number;
   disconnect(): Promise<void>;
