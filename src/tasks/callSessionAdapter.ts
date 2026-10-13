@@ -16,6 +16,7 @@ import {
   bookingCallTools,
   commonCallTools,
   endConversationCallTool,
+  recordAnswerTool,
   reportAnswersAndEndCallTool,
   waitOnHoldTool,
 } from '../voice/tools/callTools.js';
@@ -100,7 +101,7 @@ export const transferToOwnerTool = defineTransferTool<CallContext>({
 
 /** All live-call tools for an outbound call, keyed by name — check_my_availability/confirm_appointment/etc.
  *  (backend-service tools) plus press_digits (telephony-layer, routed differently — see telephony/dtmf.ts).
- *  'ask' tasks (#148) drop the booking tools and get report_answers_and_end_call.
+ *  'ask' tasks (#148) drop the booking tools and get record_answer and report_answers_and_end_call.
  *  Conversation-mode tasks additionally get end_conversation_call — see docs/superpowers/specs/
  *  2026-08-12-outbound-conversational-call-design.md for why this is additive, not a separate restricted set.
  *  transfer_to_owner is added only when TRANSFER_ENABLED is on (#7). */
@@ -113,15 +114,19 @@ function outboundToolsFor(task: Task): VoiceTool<any, CallContext>[] {
   const base: VoiceTool<any, CallContext>[] = [...shared, pressDigitsTool];
   if (config.TRANSFER_ENABLED) base.push(transferToOwnerTool);
   if (canWaitOnHold()) base.push(waitOnHoldTool);
-  return [...base, ...(MODE_ENDING_TOOLS[task.mode] ?? [])];
+  return [...base, ...(MODE_TOOLS[task.mode] ?? [])];
 }
 
-/** Each mode's own way to end a call, on top of the common endings. Keyed by mode so a new one can't be left out. */
+/**
+ * Each mode's own tools, on top of the common ones: its way to end a call,
+ * and for an ask call record_answer, which saves each answer as it's settled
+ * (#148 review). Keyed by mode so a new one can't be left out.
+ */
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-const MODE_ENDING_TOOLS: Record<Task['mode'], VoiceTool<any, CallContext>[]> = {
+const MODE_TOOLS: Record<Task['mode'], VoiceTool<any, CallContext>[]> = {
   booking: [],
   conversation: [endConversationCallTool],
-  ask: [reportAnswersAndEndCallTool],
+  ask: [recordAnswerTool, reportAnswersAndEndCallTool],
 };
 
 /** Only OpenAI Realtime implements VoiceAIProvider.setHold/judgeHoldLine so far (#151). */
@@ -171,10 +176,15 @@ export function buildOutboundCallSessionOptions(params: {
   // transitionTask would refuse this write on a terminal task by itself; the
   // read first keeps the normal case (the call ending after an outcome tool
   // already ran) from logging transitionTask's ignored-transition warning.
+  //
+  // An ask call with answers saved by record_answer is recorded 'answered'
+  // from them instead (tasks/modes.ts's unfinishedCallOutcome, #148 review).
   async function failTaskIfStillNonTerminal(reason: string): Promise<void> {
     const current = await getTask(task.id);
     if (current && !isTerminalStatus(current.status)) {
-      await transitionTask(task.id, 'failed', { outcome: { kind: 'failed', reason } });
+      const unfinished = modeRules(current).unfinishedCallOutcome(current);
+      if (unfinished) await transitionTask(task.id, unfinished.status, { outcome: unfinished.outcome });
+      else await transitionTask(task.id, 'failed', { outcome: { kind: 'failed', reason } });
     }
   }
 

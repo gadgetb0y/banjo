@@ -1,3 +1,4 @@
+import { collectedAnswersFor, collectedReports } from './answers.js';
 import type { Task, TaskOutcome } from './schema.js';
 
 /**
@@ -24,7 +25,17 @@ export interface TaskModeRules {
    * net). The model reaches for the generic end_call on every kind of call.
    */
   endCallOutcome(task: Task, summary: string | undefined): { status: Task['status']; outcome: TaskOutcome };
+  /**
+   * What a call that ended with the task still unfinished is recorded as
+   * (the far end hung up, the session failed, the process died mid-call),
+   * or undefined to record it 'failed' as before. `task` is the row as it
+   * stands once the call is over.
+   */
+  unfinishedCallOutcome(task: Task): { status: Task['status']; outcome: TaskOutcome } | undefined;
 }
+
+/** The summary of an ask call recorded from answers saved mid-call. Banjo's own words, never the model's. */
+export const UNFINISHED_ASK_SUMMARY = 'The call ended before Banjo could wrap it up. These are the answers it saved as it went.';
 
 export const taskModes: Record<Task['mode'], TaskModeRules> = {
   booking: {
@@ -33,6 +44,7 @@ export const taskModes: Record<Task['mode'], TaskModeRules> = {
       status: 'escalated',
       outcome: { kind: 'escalated', reason: summary ?? 'Call ended without an explicit outcome being recorded.' },
     }),
+    unfinishedCallOutcome: () => undefined,
   },
   // Can still book if a time comes up (promptBuilder's conversation guidance).
   // A live call's end_call summary was a plain recap, not an escalation
@@ -43,19 +55,30 @@ export const taskModes: Record<Task['mode'], TaskModeRules> = {
       status: 'conversation_completed',
       outcome: { kind: 'conversation_completed', summary: summary ?? 'Call ended without an explicit summary being recorded.' },
     }),
+    unfinishedCallOutcome: () => undefined,
   },
   // Books nothing and agrees to nothing. Ending with end_call is still the
-  // end of an ask call, so it's recorded as one, with every question present.
+  // end of an ask call, so it's recorded as one, with every question present
+  // and the answers record_answer saved along the way.
+  //
+  // A call that ended before any ending tool ran keeps what record_answer
+  // saved (#148 review): a business saying "yep, bye" and hanging up used to
+  // fail the task and lose every answer. With nothing saved there's nothing
+  // to report, so it fails as any other call would.
   ask: {
     books: false,
     endCallOutcome: (task, summary) => ({
       status: 'answered',
       outcome: {
         kind: 'answered',
-        answers: (task.questions ?? []).map((question) => ({ question, answered: false })),
+        answers: collectedAnswersFor(task),
         ...(summary?.trim() ? { summary: summary.trim() } : {}),
       },
     }),
+    unfinishedCallOutcome: (task) =>
+      collectedReports(task).length > 0
+        ? { status: 'answered', outcome: { kind: 'answered', answers: collectedAnswersFor(task), summary: UNFINISHED_ASK_SUMMARY } }
+        : undefined,
   },
 };
 

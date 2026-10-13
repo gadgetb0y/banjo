@@ -432,11 +432,27 @@ questions are stored in `tasks.questions`. The differences from a booking call:
   numbered questions, and says to decline any offer to book, hold, order or pay out loud.
 - **Read-backs.** Banjo says each answer back as it goes, so a misheard answer gets corrected while
   the person is still on the line. It must not end the call in the same turn as the last read-back.
+- **Saved as it goes.** `record_answer` (ask calls only, doesn't end the call) saves one answer as
+  soon as the other party confirms the read-back, into `tasks.collected_answers`: jsonb keyed by
+  question number, a later save for the same number replacing the earlier. It's written only by
+  `saveCollectedAnswer()` (`src/tasks/service.ts`), merged in the UPDATE itself, never through
+  `transitionTask` (whose compare-and-set would drop a save that lands as the call ends) and
+  without touching `updatedAt`. Before this (the #148 review), answers lived only in the ending
+  tool's arguments, so anything that ended the call first lost all of them: the business saying
+  "yep, bye" and hanging up, a refused goodbye followed by a hang-up, a hold limit, a transfer.
 - **Its own ending.** `report_answers_and_end_call` (`requiresGoodbye`, like the other normal
   endings) moves the task to `answered`, with the outcome `{ kind: 'answered', answers, summary? }`.
-  The model reports answers by question number, and `answersFor()` pairs them with the stored
-  question text. The outcome therefore always has one entry per question, in order. An entry
-  with `answered: true` but no answer text is recorded as unanswered.
+  The model reports answers by question number, and `answersFor()` (`src/tasks/answers.ts`) pairs
+  them with the stored question text. It starts from the saved answers and lets the final report
+  override them: the last report for a number wins, so a correction later in the list replaces
+  what came before. The outcome therefore always has one entry per question, in order. An entry
+  with `answered: true` but no answer text is recorded as unanswered, and `TaskAnswer` is a
+  union (`answered: true` always has `answer`), so the compiler holds every writer to that.
+- **Ending early.** A call that ends with the task still unfinished (the far end hangs up, the
+  session fails, or the stale-call sweep finds its process died) is recorded from the saved
+  answers: `answered`, every question present, and a Banjo-written summary saying the call ended
+  before Banjo could wrap it up (`unfinishedCallOutcome` in `src/tasks/modes.ts`). With nothing
+  saved it's `failed`, as before.
 
 `answers[].answer` and `summary` are written by the voice model from what was said on the call, so
 they are untrusted data like every other free-text outcome field. The webhook `text` gives counts
@@ -451,13 +467,16 @@ clipped to an equal share, the free-text summary is clipped and then dropped, ev
 its number and "(no answer)", and a last line points to `get_task_status` for the full answers. The
 summary is built before the channel is known, so it fits the smaller of the two. `sendSms` also
 clips any body to 1600 as a backstop.
-Voicemail, escalation and transfer work as on any call. `end_call` with no outcome recorded first
-records the call `answered`, with each question present, rather than `escalated`.
+Voicemail, escalation, transfer and a hold limit work as on any call and keep their own status and
+outcome; the answers saved before them show in `get_task_status`'s `collectedAnswers` (ask tasks
+only, each question paired with its saved answer). `end_call` with no outcome recorded first
+records the call `answered` from the saved answers, rather than `escalated`.
 
 **One definition per mode.** `src/tasks/modes.ts` holds what differs by mode: `books` (calendar
-lookup and date-window check, booking tools, booking prompt lines) and what `end_call` records when
-nothing was recorded first. `outboundToolsFor()` adds each mode's own ending tool from a map keyed by
-mode. Both are `Record<Task['mode'], …>`, so a new mode can't leave one out. Ask mode first spread
+lookup and date-window check, booking tools, booking prompt lines), what `end_call` records when
+nothing was recorded first, and what a call that ended unfinished records instead of `failed`.
+`outboundToolsFor()` adds each mode's own tools (its ending, and `record_answer` for ask) from a map
+keyed by mode. Both are `Record<Task['mode'], …>`, so a new mode can't leave one out. Ask mode first spread
 its differences across string checks and missed three (the #148 review). `place_call` refuses
 `dateWindows` on an ask call.
 
