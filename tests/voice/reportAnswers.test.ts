@@ -152,6 +152,15 @@ describe('report_answers_and_end_call (#148)', () => {
     });
   });
 
+  it('saves the answers it reports before CallSession can refuse it, skipping unanswered ones (#148 review r2)', async () => {
+    await reportAnswersAndEndCallTool.beforeChecks!(
+      { answers: [{ question: 1, answered: true, answer: ' 6pm. ' }, { question: 2, answered: false }, { question: 9, answered: true, answer: 'x' }] },
+      ctx(vi.fn()),
+    );
+    expect(saveCollectedAnswer).toHaveBeenCalledTimes(1);
+    expect(saveCollectedAnswer).toHaveBeenCalledWith('task-1', { question: 1, answered: true, answer: '6pm.' });
+  });
+
   it('tells the model to record only what was said', () => {
     expect(reportAnswersAndEndCallTool.description).toContain('Record only what they actually told you on this call');
   });

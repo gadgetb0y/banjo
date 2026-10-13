@@ -33,6 +33,13 @@ export interface VoiceTool<TInput = unknown, TCtx = CallContext> {
    */
   requiresGoodbye?: boolean;
   /**
+   * Runs before CallSession's checks can refuse the call (#102, #133), so
+   * what the call carries is kept even when it's refused and the line then
+   * drops (#148 review r2: report_answers_and_end_call's answers). Must be
+   * safe to run again on a retry. A failure is logged and never stops the tool.
+   */
+  beforeChecks?: (input: TInput, ctx: TCtx) => Promise<void>;
+  /**
    * For an endsCall tool that should give way when the other party starts
    * talking while Banjo is ending the call (#133): CallSession refuses it once,
    * without prompting Banjo to speak, so it hears them out. Set on the

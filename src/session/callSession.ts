@@ -765,6 +765,13 @@ export class CallSession<TCtx = CallContext> {
       // #133: they started talking while Banjo was ending the call. Refused
       // without prompting Banjo to speak (on openai): server VAD answers once
       // they finish, rather than Banjo talking over them.
+      if (tool.beforeChecks) {
+        try {
+          await tool.beforeChecks(parsed.data, await this.opts.buildToolContext(this.audioPlaybackTracker.estimatedDoneAt()));
+        } catch (err) {
+          logger.warn({ err, callId: this.opts.callId, toolCallId, name }, 'beforeChecks failed; carrying on with the tool');
+        }
+      }
       const cutIn = this.calleeSpokeDuringEnd;
       if (tool.yieldsToCallee && this.canRefuseEnd() && cutIn !== null && (cutIn === '' || isCuttingIn(cutIn))) {
         this.endRefused = true;

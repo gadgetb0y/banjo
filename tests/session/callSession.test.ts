@@ -2133,7 +2133,10 @@ describe('CallSession: a call-ending tool needs a spoken goodbye first (#102)', 
     voiceAIEmitter.emit('event', { type: 'transcript', role, text, isFinal: true } satisfies VoiceAIEvent);
 
   async function startWithEndTool(
-    opts: { requiresGoodbye?: boolean; yieldsToCallee?: boolean } = { requiresGoodbye: true, yieldsToCallee: true },
+    opts: { requiresGoodbye?: boolean; yieldsToCallee?: boolean; beforeChecks?: (...args: unknown[]) => Promise<void> } = {
+      requiresGoodbye: true,
+      yieldsToCallee: true,
+    },
   ) {
     const telephony = makeFakeTelephony();
     const options = makeFakeCallSessionOptions(telephony.provider);
@@ -2161,6 +2164,29 @@ describe('CallSession: a call-ending tool needs a spoken goodbye first (#102)', 
     voiceAIEmitter.emit('event', { type: 'turn_end' } satisfies VoiceAIEvent);
     await pending;
   }
+
+  it('runs a tool\'s beforeChecks even when the call is refused, so what it carries is kept (#148 review r2)', async () => {
+    // A refused report_answers_and_end_call used to lose its answers if the
+    // other party then hung up.
+    const beforeChecks = vi.fn(async () => {});
+    const { handler, callTool } = await startWithEndTool({ requiresGoodbye: true, yieldsToCallee: true, beforeChecks });
+    say('user', 'Mhm.');
+    say('assistant', "Okay, let's close this out.");
+    await endTurnAndSettle(callTool('call-1'));
+
+    expect(handler).not.toHaveBeenCalled();
+    expect(beforeChecks).toHaveBeenCalledTimes(1);
+  });
+
+  it("doesn't let a failing beforeChecks stop the tool", async () => {
+    const beforeChecks = vi.fn(async () => {
+      throw new Error('db down');
+    });
+    const { handler, callTool } = await startWithEndTool({ requiresGoodbye: true, yieldsToCallee: true, beforeChecks });
+    say('assistant', 'Okay, take care—bye!');
+    await endTurnAndSettle(callTool('call-1'));
+    expect(handler).toHaveBeenCalledTimes(1);
+  });
 
   it('refuses once when the last thing Banjo said is not a goodbye, then allows the retry', async () => {
     const { handler, callTool } = await startWithEndTool();

@@ -652,6 +652,16 @@ export const reportAnswersAndEndCallTool: VoiceTool<{
   endsCall: true,
   yieldsToCallee: true,
   requiresGoodbye: true,
+  // Saved before CallSession can refuse this (no goodbye, or they're still
+  // talking): if the line then drops, the answers are kept (#148 review r2).
+  // Only answers: a closing "not answered" never erases a saved one.
+  beforeChecks: async (input, ctx) => {
+    const count = ctx.task.questions?.length ?? 0;
+    for (const report of input.answers) {
+      const checked = collectedAnswer(report);
+      if (checked.answered && checked.question <= count) await saveCollectedAnswer(ctx.task.id, checked);
+    }
+  },
   handler: async (input, ctx) => {
     return runToolSafely('report_answers_and_end_call', async () => {
       const summary = input.summary?.trim();
