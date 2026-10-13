@@ -141,4 +141,43 @@ describe('startSimCall', () => {
     expect((await call.finished).status).toBe('failed');
     expect(call.calendar.events).toEqual([]);
   }, 20_000);
+
+  // #148 review, finding 10: the sim called placeCallHandler directly, so
+  // nothing checked its input against place_call's schema.
+  describe("mode 'ask'", () => {
+    class Unreachable extends ScriptedBanjo {
+      override async connect(): Promise<void> {
+        throw new Error('OpenAI is unreachable');
+      }
+    }
+    const askCall = (questions: string[]) =>
+      sim.startSimCall({
+        business: "Claudia's Dog Grooming",
+        category: 'salon',
+        goal: 'Find out their hours.',
+        mode: 'ask',
+        questions,
+        durationMinutes: 60,
+        windowDays: 3,
+        createVoiceAI: () => new Unreachable('2026-01-01T14:00:00'),
+        print: () => {},
+      });
+
+    it('refuses questions place_call would refuse, with the schema\'s message, before creating anything', async () => {
+      await expect(askCall([''])).rejects.toThrow(/questions/);
+      await expect(askCall(['a', 'b', 'c', 'd', 'e', 'f'])).rejects.toThrow(/questions/);
+      await expect(askCall(['Hours?\n2. Walk-ins?'])).rejects.toThrow(/one line/);
+      expect(await db.select().from(tasks)).toEqual([]);
+      expect(await db.select().from(contacts)).toEqual([]);
+    });
+
+    it('passes no appointment length or date windows', async () => {
+      const call = await askCall(['What time do you close Saturday?']);
+      const task = await call.finished;
+      expect(task.mode).toBe('ask');
+      expect(task.questions).toEqual(['What time do you close Saturday?']);
+      expect(task.constraints?.durationMinutes).toBeUndefined();
+      expect(task.constraints?.dateWindows).toBeUndefined();
+    }, 20_000);
+  });
 });

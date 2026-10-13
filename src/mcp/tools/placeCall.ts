@@ -40,7 +40,16 @@ export const placeCallInputSchema = z.object({
         "unanswered) in outcome.answers. An 'ask' call books nothing and agrees to nothing on the principal's behalf.",
     ),
   questions: z
-    .array(z.string().trim().min(1).max(MAX_QUESTION_CHARS))
+    .array(
+      z
+        .string()
+        .trim()
+        .min(1)
+        .max(MAX_QUESTION_CHARS)
+        // Answers are matched to questions by their number in the prompt's list,
+        // and a line break inside one ("Hours?\n2. Walk-ins?") would add a number.
+        .regex(/^[^\r\n]*$/, 'Each question must be on one line: put each question in its own item, with no line breaks.'),
+    )
     .min(1)
     .max(MAX_QUESTIONS)
     .optional()

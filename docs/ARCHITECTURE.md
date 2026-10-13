@@ -429,9 +429,21 @@ questions are stored in `tasks.questions`. The differences from a booking call:
   `undo_confirmed_appointment`, `report_negotiation_failed`). An appointment length isn't put in
   the prompt. The prompt
   (`askModeGuidance()` in `src/tasks/promptBuilder.ts`) replaces the booking instructions with the
-  numbered questions, and says to decline any offer to book, hold, order or pay out loud.
+  numbered questions, and says to decline out loud any offer to book, order or reserve something,
+  or to put something on hold for the principal. Being asked to hold the line is not such an offer:
+  Banjo waits, as on any call. Each question must be on one line (`place_call` refuses a line break,
+  and the prompt collapses whitespace too): answers are matched by the list's numbers.
+- **What Banjo gives out.** A status question ("is my prescription ready?") can't be answered
+  without a name. Banjo may give the principal's name and details from the task's goal or notes
+  when the other party needs them to answer, and nothing else; the owner-profile rule is unchanged.
+  Asked for a deposit, payment or other personal details, Banjo says it can't give that and carries
+  on asking. When transfer is on, those are what only the principal can give, so the transfer
+  rules apply instead (the #148 review found the two rules contradicting each other).
 - **Read-backs.** Banjo says each answer back as it goes, so a misheard answer gets corrected while
-  the person is still on the line. It must not end the call in the same turn as the last read-back.
+  the person is still on the line. Once they confirm a read-back (or that they don't know), the
+  prompt has Banjo call `record_answer` silently, so answers are kept as they go. It must not end
+  the call in the same turn as the last read-back, and ends with `report_answers_and_end_call`,
+  not `end_call`. Tool names stay out of the voice-layer prompt, as for every mode.
 - **Saved as it goes.** `record_answer` (ask calls only, doesn't end the call) saves one answer as
   soon as the other party confirms the read-back, into `tasks.collected_answers`: jsonb keyed by
   question number, a later save for the same number replacing the earlier. It's written only by
@@ -481,6 +493,11 @@ nothing was recorded first, and what a call that ended unfinished records instea
 keyed by mode. Both are `Record<Task['mode'], …>`, so a new mode can't leave one out. Ask mode first spread
 its differences across string checks and missed three (the #148 review). `place_call` refuses
 `dateWindows` on an ask call.
+
+**The simulator** (`npm run sim -- --mode ask --question …`) parses its input with
+`placeCallInputSchema` before anything is created, so it refuses what `place_call` would, with the
+schema's message. It passes no `durationMinutes` or `dateWindows` on an ask call. It used to pass
+both on every run, and once `place_call` refused date windows on ask calls, every ask run was refused.
 
 ## Waiting on hold (`wait_on_hold`, #151)
 

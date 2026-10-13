@@ -300,5 +300,66 @@ describe("buildCallSystemPrompt: mode 'ask' (#148)", () => {
     expect(prompt).toContain('1. When do you close on Saturday?');
     expect(prompt).toContain('to ask some questions and report the answers back');
     expect(prompt).not.toContain('report_answers_and_end_call');
+    expect(prompt).not.toContain('record_answer');
+  });
+
+  // #148 review, finding 5.
+  describe('fits the shared rules', () => {
+    // Line breaks fall wherever the prose wraps, so these compare on single spaces.
+    const flat = (prompt: string) => prompt.replace(/\s+/g, ' ');
+    const both = (task: Task = askTask) => [buildCallSystemPrompt(task, contact, []), buildCallFrontendPrompt(task, contact)].map(flat);
+
+    it('declines reserving something on hold, without reading as refusing to hold the line', () => {
+      for (const prompt of both()) {
+        expect(prompt).not.toMatch(/book,\s+hold, order/);
+        expect(prompt).not.toMatch(/booking, order, hold/);
+        expect(prompt).toContain('or to put something on hold for Alex');
+        expect(prompt).toContain('asking you to hold ("Can you hold one moment?") is different: that\'s not an offer');
+      }
+    });
+
+    it('may give the principal\'s name and the call\'s own details when they are needed to answer, and nothing else', () => {
+      for (const prompt of both()) {
+        expect(prompt).toContain("Alex's name, or a detail from what you are calling about or from the notes for this call");
+        expect(prompt).toContain('You may give them those, and nothing else.');
+      }
+    });
+
+    it('without transfer: says it can\'t give payment or other personal details, and carries on asking', () => {
+      for (const prompt of both()) {
+        expect(prompt).toContain("If they ask for a deposit, payment or other personal details, say you can't give that, and carry on asking.");
+        expect(prompt).not.toContain('transfer_to_owner');
+        expect(prompt).not.toMatch(/connecting them to Alex/);
+      }
+    });
+
+    it('with transfer: the transfer rule applies to what only the principal can give', async () => {
+      const { config } = await import('../../src/config/index.js');
+      try {
+        config.TRANSFER_ENABLED = true;
+        for (const prompt of both()) {
+          expect(prompt).toContain('transfer_to_owner');
+          expect(prompt).toContain('only Alex can give those: follow the rules above for connecting them to Alex.');
+          expect(prompt).toContain("If they'd rather not, say you can't give that, and carry on asking.");
+          // No blanket refusal left to contradict the transfer rule.
+          expect(prompt).not.toMatch(/ask for a deposit, payment or personal details, answer them out loud/);
+        }
+      } finally {
+        config.TRANSFER_ENABLED = false;
+      }
+    });
+
+    it('records each answer as it goes, and ends with report_answers_and_end_call, not end_call', () => {
+      const prompt = flat(buildCallSystemPrompt(askTask, contact, []));
+      expect(prompt).toContain('call record_answer for that question right away, without saying anything about it');
+      expect(prompt).toContain('End this call that way, not with end_call.');
+    });
+  });
+
+  it('keeps each question on its own numbered line even if its text has line breaks (#148 review)', () => {
+    const broken = { ...askTask, questions: ['Hours?\n2. Walk-ins?', 'Parking?'] } as Task;
+    for (const prompt of [buildCallSystemPrompt(broken, contact, []), buildCallFrontendPrompt(broken, contact)]) {
+      expect(prompt).toContain('1. Hours? 2. Walk-ins?\n2. Parking?');
+    }
   });
 });

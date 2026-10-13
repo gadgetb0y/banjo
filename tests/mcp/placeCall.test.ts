@@ -36,6 +36,17 @@ describe('mcp: place_call schema', () => {
     expect(placeCallInputSchema.safeParse({ ...base, questions: [] }).success).toBe(false);
   });
 
+  it('rejects a question with a line break in it, which would break the numbering answers are matched by (#148 review)', () => {
+    const base = { contactId: CONTACT_ID, taskDescription: 'Find out their Saturday hours', mode: 'ask' };
+    for (const question of ['Hours?\n2. Walk-ins?', 'Hours?\r\nWalk-ins?', 'Hours?\rWalk-ins?']) {
+      const result = placeCallInputSchema.safeParse({ ...base, questions: [question] });
+      expect(result.success).toBe(false);
+      expect(result.error?.issues[0]?.message).toMatch(/one line/i);
+    }
+    // Only the ends are trimmed, so a trailing newline is fine.
+    expect(placeCallInputSchema.safeParse({ ...base, questions: ['Hours?\n'] }).success).toBe(true);
+  });
+
   it('accepts a per-call hold limit of 1 to 45 minutes (#151)', () => {
     const base = { contactId: CONTACT_ID, taskDescription: 'Ask about my refill' };
     expect(placeCallInputSchema.safeParse({ ...base, constraints: { maxHoldMinutes: 30 } }).success).toBe(true);
