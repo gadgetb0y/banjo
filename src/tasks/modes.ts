@@ -26,9 +26,10 @@ export interface TaskModeRules {
    */
   endCallOutcome(task: Task, summary: string | undefined): { status: Task['status']; outcome: TaskOutcome };
   /**
-   * What a call that ended with the task still unfinished is recorded as
-   * (the far end hung up, the session failed, the process died mid-call),
-   * or undefined to record it 'failed' as before. `task` is the row as it
+   * What a call that ended on its own with the task still unfinished is
+   * recorded as (the far end hung up, the process died mid-call), or
+   * undefined to record it 'failed' as before. Not used when the owner
+   * stopped the call or the session failed: those keep their reason (r2). `task` is the row as it
    * stands once the call is over.
    */
   unfinishedCallOutcome(task: Task): { status: Task['status']; outcome: TaskOutcome } | undefined;
@@ -67,18 +68,31 @@ export const taskModes: Record<Task['mode'], TaskModeRules> = {
   // to report, so it fails as any other call would.
   ask: {
     books: false,
-    endCallOutcome: (task, summary) => ({
-      status: 'answered',
-      outcome: {
-        kind: 'answered',
-        answers: collectedAnswersFor(task),
-        ...(summary?.trim() ? { summary: summary.trim() } : {}),
-      },
-    }),
-    unfinishedCallOutcome: (task) =>
-      collectedReports(task).length > 0
-        ? { status: 'answered', outcome: { kind: 'answered', answers: collectedAnswersFor(task), summary: UNFINISHED_ASK_SUMMARY } }
-        : undefined,
+    // With no answer saved, end_call is escalated with its summary instead:
+    // the model can put answers there without saving them, and 'answered'
+    // with none answered sent the owner an urgent "no answers" (r2).
+    endCallOutcome: (task, summary) => {
+      const answers = collectedAnswersFor(task);
+      const note = summary?.trim();
+      if (!answers.some((a) => a.answered)) {
+        return {
+          status: 'escalated',
+          outcome: {
+            kind: 'escalated',
+            reason: note ? `Ended without saving answers. Banjo noted: ${note}` : 'Ended without saving any answers.',
+          },
+        };
+      }
+      return { status: 'answered', outcome: { kind: 'answered', answers, ...(note ? { summary: note } : {}) } };
+    },
+    // Only a real answer counts: a call that broke after one "no idea" isn't
+    // an answered call (r2).
+    unfinishedCallOutcome: (task) => {
+      const answers = collectedAnswersFor(task);
+      return answers.some((a) => a.answered)
+        ? { status: 'answered', outcome: { kind: 'answered', answers, summary: UNFINISHED_ASK_SUMMARY } }
+        : undefined;
+    },
   },
 };
 

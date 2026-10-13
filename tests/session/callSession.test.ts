@@ -1239,6 +1239,11 @@ describe("CallSession: reports whether the call opened by saying it's an AI (#8)
     return vi.mocked(options.onStatusChange).mock.calls.map(([patch]) => patch).find((p) => p.kind === 'ended');
   }
 
+  it('marks an end from stop() as stopped, so the task keeps the stop reason (#148 review r2)', async () => {
+    const ended = await endAfter([]);
+    expect(ended).toMatchObject({ kind: 'ended', reason: 'test over', stopped: true });
+  });
+
   it('disclosed: Banjo\'s first line says AI', async () => {
     const ended = await endAfter([
       { role: 'user', text: "Claudia's, how can I help?" },

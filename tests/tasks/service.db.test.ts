@@ -295,6 +295,14 @@ describe('saveCollectedAnswer (#148 review)', () => {
     expect(Object.keys((await service.getTask(task.id))?.collectedAnswers ?? {}).sort()).toEqual(['1', '2', '3']);
   });
 
+  it("refuses a save once the task is answered, so its outcome and saved answers can't disagree (#148 review r2)", async () => {
+    const task = await askTask('+15551230104');
+    await service.transitionTask(task.id, 'answered', { outcome: { kind: 'answered', answers: [] } });
+
+    expect(await service.saveCollectedAnswer(task.id, { question: 2, answered: true, answer: 'Late.' })).toBe(false);
+    expect((await service.getTask(task.id))?.collectedAnswers).toBeNull();
+  });
+
   it('still saves once the task has a terminal status, and reports a missing task', async () => {
     const task = await askTask('+15551230103');
     await service.transitionTask(task.id, 'escalated', { outcome: { kind: 'escalated', reason: 'x' } });

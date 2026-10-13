@@ -45,9 +45,23 @@ describe('modeRules: ask (#148 review)', () => {
     expect(modeRules(askTask({})).unfinishedCallOutcome(askTask({}))).toBeUndefined();
   });
 
-  it('counts a question saved as unanswered: that was still asked', () => {
+  it("doesn't count a question saved as unanswered: a call that broke after one 'no idea' isn't answered (#148 review r2)", () => {
     const task = askTask({ '1': { question: 1, answered: false } });
-    expect(modeRules(task).unfinishedCallOutcome(task)?.status).toBe('answered');
+    expect(modeRules(task).unfinishedCallOutcome(task)).toBeUndefined();
+  });
+
+  it('end_call with no answer saved is escalated, keeping its summary, rather than an urgent "no answers" (#148 review r2)', () => {
+    // The model can put the answers in end_call's summary without saving them;
+    // 'answered' with 0 answered sent an urgent "no answers" push for that.
+    const task = askTask({ '1': { question: 1, answered: false } });
+    expect(modeRules(task).endCallOutcome(task, 'They close at 6; a full groom is $90.')).toEqual({
+      status: 'escalated',
+      outcome: { kind: 'escalated', reason: 'Ended without saving answers. Banjo noted: They close at 6; a full groom is $90.' },
+    });
+    expect(modeRules(askTask()).endCallOutcome(askTask(), undefined)).toEqual({
+      status: 'escalated',
+      outcome: { kind: 'escalated', reason: 'Ended without saving any answers.' },
+    });
   });
 });
 

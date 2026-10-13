@@ -613,7 +613,9 @@ export const recordAnswerTool: VoiceTool<ReportedAnswer> = defineVoiceTool({
           message: `There is no question ${input.question}: your list has ${count}.`,
         };
       }
-      await saveCollectedAnswer(ctx.task.id, collectedAnswer(input));
+      if (!(await saveCollectedAnswer(ctx.task.id, collectedAnswer(input)))) {
+        return { ok: false as const, error: 'not_saved' as const, message: 'The answers for this call are already reported.' };
+      }
       // The result gets a reply like any tool's. Said here, so the model
       // neither repeats a line it spoke with this call nor stalls after a
       // silent one (#148 review).

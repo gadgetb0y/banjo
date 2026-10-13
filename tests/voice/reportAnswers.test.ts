@@ -189,6 +189,12 @@ describe('record_answer (#148 review)', () => {
     expect(saveCollectedAnswer).toHaveBeenNthCalledWith(2, 'task-1', { question: 3, answered: false });
   });
 
+  it('tells the model when the answers were already reported (#148 review r2)', async () => {
+    saveCollectedAnswer.mockResolvedValueOnce(false);
+    const result = await recordAnswerTool.handler({ question: 1, answered: true, answer: '6pm.' }, ctx(vi.fn()));
+    expect(result).toMatchObject({ ok: false, error: 'not_saved' });
+  });
+
   it('refuses a number with no question, saving nothing', async () => {
     const result = await recordAnswerTool.handler({ question: 4, answered: true, answer: 'stray' }, ctx(vi.fn()));
     expect(result).toMatchObject({ ok: false, error: 'no_such_question' });

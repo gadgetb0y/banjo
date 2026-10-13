@@ -132,7 +132,8 @@ type AnsweredBy = Extract<TelephonyEvent, { type: 'answering_machine_detected' }
 export type CallSessionStatusPatch =
   | { kind: 'started'; providerCallId: string }
   | { kind: 'answering_machine_detected'; answeredBy: AnsweredBy }
-  | { kind: 'ended'; reason: string; disclosure: DisclosureResult }
+  /** `stopped`: ended from outside the session (CallSession.stop, e.g. stop_call), not by either party. */
+  | { kind: 'ended'; reason: string; disclosure: DisclosureResult; stopped?: true }
   | { kind: 'failed'; reason: string; disclosure: DisclosureResult }
   | { kind: 'recording_started'; recordingId: string };
 
@@ -1226,10 +1227,10 @@ export class CallSession<TCtx = CallContext> {
    */
   async stop(reason: string): Promise<void> {
     logger.info({ callId: this.opts.callId, reason }, 'call stopped from outside the session');
-    await this.end(reason);
+    await this.end(reason, { stopped: true });
   }
 
-  private async end(reason: string): Promise<void> {
+  private async end(reason: string, how: { stopped?: true } = {}): Promise<void> {
     if (this.state === 'ended' || this.state === 'error' || this.state === 'ending') return;
     this.clearSilenceWatchdog();
     this.stopHold();
@@ -1237,7 +1238,7 @@ export class CallSession<TCtx = CallContext> {
     this.setState('ending');
     this.cutOffVerbatimDelivery();
     await this.waitForInFlightToolHandlers();
-    await this.opts.onStatusChange({ kind: 'ended', reason, disclosure: checkDisclosure(this.firstAssistantLine) });
+    await this.opts.onStatusChange({ kind: 'ended', reason, disclosure: checkDisclosure(this.firstAssistantLine), ...how });
     await this.voiceAI.disconnect().catch(() => {});
     await this.hangUpTelephony();
     this.setState('ended');

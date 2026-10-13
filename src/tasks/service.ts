@@ -1,4 +1,4 @@
-import { and, count, desc, eq, gte, inArray, isNull, lte, or, sql } from 'drizzle-orm';
+import { and, count, desc, eq, gte, inArray, isNull, lte, ne, or, sql } from 'drizzle-orm';
 import { db } from '../db/index.js';
 import { logger } from '../lib/logger.js';
 import {
@@ -147,7 +147,7 @@ export async function transitionTask(
 /**
  * Saves one of an ask call's answers mid-call (record_answer, #148 review),
  * replacing any earlier one for the same question number. Resolves false if
- * the task doesn't exist.
+ * the task doesn't exist or its answers are already in its outcome ('answered').
  *
  * Not a transition, so not through transitionTask: its compare-and-set
  * would drop an answer saved as the call ends, and the answers have to
@@ -161,7 +161,11 @@ export async function saveCollectedAnswer(taskId: string, answer: CollectedAnswe
   const rows = await db
     .update(tasks)
     .set({ collectedAnswers: sql`coalesce(${tasks.collectedAnswers}, '{}'::jsonb) || ${JSON.stringify(entry)}::jsonb` })
-    .where(eq(tasks.id, taskId))
+    // Not once the answers are in the outcome (#148 review r2): a late save
+    // would make get_task_status's collectedAnswers disagree with it. Other
+    // terminal statuses still take one, since there the saved answers are
+    // the only record.
+    .where(and(eq(tasks.id, taskId), ne(tasks.status, 'answered')))
     .returning({ id: tasks.id });
   return rows.length > 0;
 }

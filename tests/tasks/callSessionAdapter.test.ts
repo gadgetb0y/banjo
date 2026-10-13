@@ -271,7 +271,6 @@ describe('buildOutboundCallSessionOptions', () => {
   type Options = ReturnType<typeof buildOutboundCallSessionOptions>;
   for (const [how, end] of [
     ['the other party hangs up', (o: Options) => o.onStatusChange({ kind: 'ended', reason: 'callee hung up', disclosure: 'disclosed' })],
-    ['the session fails', (o: Options) => o.onFailure('voice ai died')],
   ] as const) {
     it(`records an ask call's saved answers as answered when ${how} before it ends itself (#148 review)`, async () => {
       getTask.mockResolvedValueOnce({
@@ -302,6 +301,36 @@ describe('buildOutboundCallSessionOptions', () => {
           summary: expect.stringContaining('The call ended before Banjo could wrap it up'),
         },
       });
+    });
+  }
+
+  for (const [how, end, reason] of [
+    ['the owner stops it', (o: Options) => o.onStatusChange({ kind: 'ended', reason: 'wrong business, stop', disclosure: 'disclosed', stopped: true }), 'wrong business, stop'],
+    ['the session fails', (o: Options) => o.onFailure('voice ai died'), 'voice ai died'],
+  ] as const) {
+    it(`keeps the reason, recording it failed, when ${how} with answers saved (#148 review r2)`, async () => {
+      // stop_call tells the agent the task "is recorded as failed with that
+      // reason"; recording it answered dropped the reason. The saved answers
+      // still reach the owner (get_task_status, withSavedAnswers).
+      getTask.mockResolvedValueOnce({
+        id: 'task-1',
+        mode: 'ask',
+        status: 'negotiating',
+        questions: ['Q1?', 'Q2?'],
+        collectedAnswers: { '1': { question: 1, answered: true, answer: '6pm.' } },
+      } as unknown as Task);
+      const options = buildOutboundCallSessionOptions({
+        task: { ...fakeTask, mode: 'ask', questions: ['Q1?', 'Q2?'] } as Task,
+        callAttempt: fakeCallAttempt,
+        contact: fakeContact,
+        telephony: fakeTelephony,
+        calendar: fakeCalendar,
+        systemPrompt: 'irrelevant for this test',
+      });
+
+      await end(options);
+
+      expect(transitionTask).toHaveBeenCalledWith('task-1', 'failed', { outcome: { kind: 'failed', reason } });
     });
   }
 
