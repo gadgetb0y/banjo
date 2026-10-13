@@ -279,6 +279,12 @@ notifications, a failed webhook must never throw into a call or a transition.
 
 ### 4.5 A text-mode simulator
 
+> **Shipped** as `npm run sim` (`scripts/sim.ts`, `src/sim/`). The voice side is OpenAI Realtime in
+> text-only mode (`OpenAIRealtimeProvider({ textOnly: true })`), so it runs the same model, prompt
+> and tools as a call. The phone line, calendar and voice provider are swapped in through override
+> seams in the three factories. The sim uses its own `banjo_sim` database. Not yet covered: inbound
+> calls, and the hold mode #151 needs.
+
 `CONTRIBUTING.md` says it plainly: there is no offline simulator. Trying Banjo today takes Twilio,
 a voice-AI key, a public hostname and, for SMS, A2P registration. That's too much to ask of
 someone who just landed on the README. `npm run sim` should run the real system prompt and real

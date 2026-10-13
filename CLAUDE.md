@@ -25,6 +25,7 @@ npm run db:generate        # drizzle-kit generate (runs build first)
 npm run db:migrate         # drizzle-kit migrate (runs build first)
 npm run db:studio          # drizzle-kit studio
 npm run test:call          # tsx scripts/manual-test-call.ts — places a real outbound call for manual testing
+npm run sim                # text-mode simulator: type as the business while Banjo calls it (OpenAI key + Postgres only; own banjo_sim DB; see docs/ARCHITECTURE.md)
 npm run dav:check          # read-only: lists CalDAV calendars / CardDAV address books, shows what Banjo sees
 npm run setup              # interactive: asks for required settings, validates with the app's own schema, writes .env (backs up an existing one)
 docker compose up          # Postgres + Banjo in Docker (migrations applied on boot)

@@ -5,12 +5,20 @@ import { OpenAIRealtimeProvider } from './providers/openai.js';
 import { OpenAILiveProvider } from './providers/openaiLive.js';
 import type { VoiceAIProvider } from './types.js';
 
+let override: (() => VoiceAIProvider) | null = null;
+
+/** For the text simulator (scripts/sim.ts) only: createVoiceAIProvider() builds providers with `factory` until cleared with null. Nothing in src/ sets it. */
+export function overrideVoiceAIProvider(factory: (() => VoiceAIProvider) | null): void {
+  override = factory;
+}
+
 /**
  * Vendor-keyed registry/factory. Application code (session/callSession.ts)
  * should only ever call createVoiceAIProvider() and program against the
  * VoiceAIProvider interface — never import a provider class directly.
  */
 export function createVoiceAIProvider(): VoiceAIProvider {
+  if (override) return override();
   switch (config.VOICE_AI_PROVIDER) {
     case 'openai':
       return new OpenAIRealtimeProvider();

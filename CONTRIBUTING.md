@@ -31,7 +31,13 @@ live traffic.
 
 See the README's Quickstart. `docker compose up` gets you a running instance; `npm run dev` with
 `docker compose up -d postgres` gets you hot reload. Placing a real call needs real Twilio and voice
-AI credentials and a publicly reachable hostname — there is no offline simulator.
+AI credentials and a publicly reachable hostname.
+
+To try a prompt or tool change without placing a call, use `npm run sim`: you type as the business,
+and Banjo runs the real prompt, tools and call handling against a fake phone line and calendar. It
+needs only an OpenAI key and Postgres. It can't tell you how a change sounds (interruptions, noise,
+timing), so anything about audio still needs a real call. `--script <file>` replays the business's
+side from a file, which makes a before-and-after comparison of a prompt change quick to repeat.
 
 ```bash
 npm run typecheck

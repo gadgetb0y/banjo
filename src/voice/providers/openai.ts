@@ -43,6 +43,12 @@
  *     particular response's spoken content (e.g. a voicemail message)
  *     rather than trusting the model already said it in an earlier,
  *     unconstrained turn. Not yet exercised against a live call.
+ *   - Text-only mode (the simulator, scripts/sim.ts), checked 2026-10-12
+ *     against the same file: `session.output_modalities: ['text']` turns
+ *     audio output off; replies then stream as `response.output_text.delta`
+ *     (`delta`) and `response.output_text.done` (`text`); a typed caller
+ *     line is a `conversation.item.create` with a `message` item, role
+ *     `user`, content `[{ type: 'input_text', text }]`.
  *
  * NEEDS VERIFICATION (not cross-checked against the SDK source, only
  * sketched from general API conventions):
@@ -126,8 +132,18 @@ interface PendingFunctionCall {
   argsBuffer: string;
 }
 
+export interface OpenAIRealtimeProviderOptions {
+  /**
+   * Text in, text out, no audio: the simulator (scripts/sim.ts), where you type
+   * as the business. Same model, prompt and tools as a call; the caller's lines
+   * come in through sendUserText(). Never set on a real call.
+   */
+  textOnly?: boolean;
+}
+
 export class OpenAIRealtimeProvider implements VoiceAIProvider {
   readonly name = 'openai';
+  private readonly textOnly: boolean;
 
   private ws: WebSocket | undefined;
   /** The socket disconnect() is closing: if it hasn't opened yet, `ws` reports the close as an error, which isn't one (#100). */
@@ -140,6 +156,10 @@ export class OpenAIRealtimeProvider implements VoiceAIProvider {
   private outputSampleRate = 24000;
   /** A triggerResponse() that arrived before the socket opened: false for none, else its cue (undefined for none). */
   private pendingTriggerResponse: false | { cue?: string } = false;
+
+  constructor(options: OpenAIRealtimeProviderOptions = {}) {
+    this.textOnly = options.textOnly ?? false;
+  }
 
   connect(sessionConfig: VoiceAISessionConfig): Promise<void> {
     const apiKey = config.OPENAI_API_KEY;
@@ -174,29 +194,34 @@ export class OpenAIRealtimeProvider implements VoiceAIProvider {
                 type: 'realtime',
                 instructions: sessionConfig.instructions,
                 tools: toOpenAITools(sessionConfig.tools),
-                audio: {
-                  // `transcription` is a genuinely separate opt-in feature
-                  // from the model's ability to understand spoken input —
-                  // Realtime models consume audio natively, so omitting this
-                  // does NOT stop the model from understanding the caller
-                  // (confirmed on a live call: it correctly answered a
-                  // question after a multi-second pause with no
-                  // transcription enabled). It only stops US from ever
-                  // seeing what the caller said in our own logs/transcript
-                  // events — every 'transcript' event with role: 'user' was
-                  // silently never firing because of this, not because
-                  // audio wasn't reaching the model.
-                  input: {
-                    format: toOpenAIAudioFormat(sessionConfig.inputAudioFormat),
-                    transcription: { model: 'gpt-4o-mini-transcribe' },
-                    // Filtered before server VAD sees it, so noise and echo
-                    // don't count as a barge-in (#143).
-                    ...(config.OPENAI_NOISE_REDUCTION !== 'off' && {
-                      noise_reduction: { type: config.OPENAI_NOISE_REDUCTION },
+                // Text-only mode sends no audio config at all.
+                ...(this.textOnly
+                  ? { output_modalities: ['text'] }
+                  : {
+                      audio: {
+                        // `transcription` is a genuinely separate opt-in feature
+                        // from the model's ability to understand spoken input —
+                        // Realtime models consume audio natively, so omitting this
+                        // does NOT stop the model from understanding the caller
+                        // (confirmed on a live call: it correctly answered a
+                        // question after a multi-second pause with no
+                        // transcription enabled). It only stops US from ever
+                        // seeing what the caller said in our own logs/transcript
+                        // events — every 'transcript' event with role: 'user' was
+                        // silently never firing because of this, not because
+                        // audio wasn't reaching the model.
+                        input: {
+                          format: toOpenAIAudioFormat(sessionConfig.inputAudioFormat),
+                          transcription: { model: 'gpt-4o-mini-transcribe' },
+                          // Filtered before server VAD sees it, so noise and echo
+                          // don't count as a barge-in (#143).
+                          ...(config.OPENAI_NOISE_REDUCTION !== 'off' && {
+                            noise_reduction: { type: config.OPENAI_NOISE_REDUCTION },
+                          }),
+                        },
+                        output: { format: outputFormat, voice: sessionConfig.voice },
+                      },
                     }),
-                  },
-                  output: { format: outputFormat, voice: sessionConfig.voice },
-                },
               },
             }),
           );
@@ -247,6 +272,27 @@ export class OpenAIRealtimeProvider implements VoiceAIProvider {
         audio: chunk.data.toString('base64'),
       }),
     );
+  }
+
+  /**
+   * Text-only mode: one line from the other party, as typed. Reported back as a
+   * final user transcript, the way a call reports transcribed speech, so
+   * CallSession handles it exactly like a spoken turn.
+   */
+  sendUserText(text: string): void {
+    if (!this.textOnly) throw new Error('sendUserText is only for text-only mode');
+    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
+      log.warn({ textLength: text.length }, 'sendUserText called with no open connection — line was dropped');
+      return;
+    }
+    this.emitEvent({ type: 'transcript', role: 'user', text, isFinal: true });
+    this.ws.send(
+      JSON.stringify({
+        type: 'conversation.item.create',
+        item: { type: 'message', role: 'user', content: [{ type: 'input_text', text }] },
+      }),
+    );
+    this.ws.send(JSON.stringify({ type: 'response.create' }));
   }
 
   sendToolResult(toolCallId: string, result: unknown, isError?: boolean, options?: { respond?: boolean }): void {
@@ -370,7 +416,8 @@ export class OpenAIRealtimeProvider implements VoiceAIProvider {
       }
 
       case 'response.audio_transcript.delta':
-      case 'response.output_audio_transcript.delta': {
+      case 'response.output_audio_transcript.delta':
+      case 'response.output_text.delta': {
         if (typeof msg.delta === 'string') {
           this.emitEvent({ type: 'transcript', role: 'assistant', text: msg.delta, isFinal: false });
         }
@@ -381,6 +428,14 @@ export class OpenAIRealtimeProvider implements VoiceAIProvider {
       case 'response.output_audio_transcript.done': {
         if (typeof msg.transcript === 'string') {
           this.emitEvent({ type: 'transcript', role: 'assistant', text: msg.transcript, isFinal: true });
+        }
+        return;
+      }
+
+      // Text-only mode's replies: the same assistant transcript, with no audio behind it.
+      case 'response.output_text.done': {
+        if (typeof msg.text === 'string') {
+          this.emitEvent({ type: 'transcript', role: 'assistant', text: msg.text, isFinal: true });
         }
         return;
       }

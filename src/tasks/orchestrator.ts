@@ -1,4 +1,5 @@
 import { createCalendarProvider } from '../calendar/factory.js';
+import type { CalendarProvider } from '../calendar/types.js';
 import { getContact } from '../contacts/service.js';
 import { logger } from '../lib/logger.js';
 import { CallSession } from '../session/callSession.js';
@@ -20,7 +21,10 @@ import {
 } from './service.js';
 import type { TimeWindow } from './schema.js';
 
-const calendar = createCalendarProvider();
+/** Asked for on each use rather than once at import, so the simulator's overrideCalendarProvider() (scripts/sim.ts) takes effect. */
+function getCalendar(): CalendarProvider {
+  return createCalendarProvider();
+}
 
 // Tracks tasks currently being driven, so a duplicate poller tick (or a
 // duplicate MCP place_call for the same task) can't kick off two orchestration
@@ -117,7 +121,7 @@ async function runTask(taskId: string): Promise<void> {
     await failOverCallCap(task.id, describeCallCapRefusal(earlyCap), stillOurs);
     return;
   }
-  const candidateWindows = await calendar.computeCandidateWindows({
+  const candidateWindows = await getCalendar().computeCandidateWindows({
     dateWindows,
     durationMinutes: task.constraints.durationMinutes ?? 30,
   });
@@ -171,7 +175,15 @@ async function runTask(taskId: string): Promise<void> {
   const frontendSystemPrompt = buildCallFrontendPrompt(task, contact, ownerProfile);
 
   const session = new CallSession(
-    buildOutboundCallSessionOptions({ task, callAttempt, contact, telephony, calendar, systemPrompt, frontendSystemPrompt }),
+    buildOutboundCallSessionOptions({
+      task,
+      callAttempt,
+      contact,
+      telephony,
+      calendar: getCalendar(),
+      systemPrompt,
+      frontendSystemPrompt,
+    }),
   );
   // Registered for as long as the call runs: stop_call needs a handle on it,
   // and the stale-call sweep uses membership here to tell a live call apart
@@ -260,10 +272,10 @@ export async function sweepStaleCalls(): Promise<void> {
 
     // A Calendar outage must not stall the sweep — an honest "we don't know"
     // still beats leaving the task in limbo, which is the bug being fixed.
-    let booked: Awaited<ReturnType<typeof calendar.findEventByIdempotencyKey>>;
+    let booked: Awaited<ReturnType<CalendarProvider['findEventByIdempotencyKey']>>;
     let calendarChecked = true;
     try {
-      booked = await calendar.findEventByIdempotencyKey(`confirm:${attempt.id}`);
+      booked = await getCalendar().findEventByIdempotencyKey(`confirm:${attempt.id}`);
     } catch (err) {
       calendarChecked = false;
       logger.error({ err, taskId: task.id }, 'stale-call sweep could not reach the calendar — reporting outcome as unknown');
