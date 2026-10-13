@@ -250,6 +250,8 @@ This call is only to find things out. Your questions, in order:
 ${numberedQuestions(task)}
 Ask one at a time, and say each answer back in a few words as you go, so they can correct you. Agree to nothing.
 ${askLimits()}
+Once they confirm your read-back of an answer, or that they don't know, delegate saving that answer to your backend
+right away, without saying anything about it, and carry on.
 After the last answer, say it back and let them reply; then say goodbye and immediately delegate ending the call, with
 the answers they gave.`;
 }

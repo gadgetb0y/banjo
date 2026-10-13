@@ -443,7 +443,19 @@ questions are stored in `tasks.questions`. The differences from a booking call:
   the person is still on the line. Once they confirm a read-back (or that they don't know), the
   prompt has Banjo call `record_answer` silently, so answers are kept as they go. It must not end
   the call in the same turn as the last read-back, and ends with `report_answers_and_end_call`,
-  not `end_call`. Tool names stay out of the voice-layer prompt, as for every mode.
+  not `end_call`. Tool names stay out of the voice-layer prompt, as for every mode. On
+  `openai-live` the backend acts only when the voice layer delegates, so the voice-layer prompt
+  (`askModeFrontendGuidance()`) tells it to delegate saving each confirmed answer, silently; without
+  that line `record_answer` never ran mid-call there.
+- **Shared rules without the booking lines.** `buildBaseSystemPromptGuidance` and
+  `buildFrontendSystemPromptGuidance` (`src/voice/systemPrompt.ts`) take `purpose: 'ask'`, and on
+  it the shared sections drop what only fits a booking: waiting for a clear yes to a specific time,
+  restating an offered time, saying what was booked, "So shall I book Friday at 10?", and the
+  "Yes, Friday at 10 works." example. Two lines are swapped for ask versions: a hedged answer is
+  said back as hedged (not pushed for a firm yes), and the no-callback rule loses "an unavailable
+  time" and "offer alternatives". "Handling tool calls" adds that saving an answer is silent, with
+  no filler before it, since the filler rule otherwise covers every action. Booking and
+  conversation prompts are byte-for-byte what they were (the #148 review, round 2).
 - **Saved as it goes.** `record_answer` (ask calls only, doesn't end the call) saves one answer as
   soon as the other party confirms the read-back, into `tasks.collected_answers`: jsonb keyed by
   question number, a later save for the same number replacing the earlier. It's written only by
