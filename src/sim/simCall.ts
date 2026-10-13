@@ -14,6 +14,7 @@ import type { VoiceAIProvider } from '../voice/types.js';
 import { SIM_BUSINESS_NUMBER } from './env.js';
 import { SimCalendarProvider } from './simCalendar.js';
 import { SimTelephonyProvider } from './simTelephony.js';
+import { modeRules } from '../tasks/modes.js';
 
 /** A voice session the other party types into: OpenAIRealtimeProvider in text-only mode, or a test's fake. */
 export interface TextVoiceAIProvider extends VoiceAIProvider {
@@ -72,7 +73,7 @@ export async function startSimCall(opts: SimCallOptions): Promise<SimCall> {
     mode: opts.mode,
     questions: opts.questions,
     constraints:
-      opts.mode === 'ask'
+      !modeRules({ mode: opts.mode }).books
         ? undefined
         : {
             durationMinutes: opts.durationMinutes,

@@ -21,6 +21,12 @@ export interface TaskModeRules {
    */
   books: boolean;
   /**
+   * Whether the call finds out answers to the task's questions: the
+   * questions are required, the prompt asks them (purpose 'ask'), and
+   * get_task_status and the owner's notice carry what record_answer saved.
+   */
+  asks: boolean;
+  /**
    * What end_call records when nothing was recorded before it (its safety
    * net). The model reaches for the generic end_call on every kind of call.
    */
@@ -41,6 +47,7 @@ export const UNFINISHED_ASK_SUMMARY = 'The call ended before Banjo could wrap it
 export const taskModes: Record<Task['mode'], TaskModeRules> = {
   booking: {
     books: true,
+    asks: false,
     endCallOutcome: (_task, summary) => ({
       status: 'escalated',
       outcome: { kind: 'escalated', reason: summary ?? 'Call ended without an explicit outcome being recorded.' },
@@ -52,6 +59,7 @@ export const taskModes: Record<Task['mode'], TaskModeRules> = {
   // reason: landing it in 'escalated' flagged a normal call for follow-up.
   conversation: {
     books: true,
+    asks: false,
     endCallOutcome: (_task, summary) => ({
       status: 'conversation_completed',
       outcome: { kind: 'conversation_completed', summary: summary ?? 'Call ended without an explicit summary being recorded.' },
@@ -68,6 +76,7 @@ export const taskModes: Record<Task['mode'], TaskModeRules> = {
   // to report, so it fails as any other call would.
   ask: {
     books: false,
+    asks: true,
     // With no answer saved, end_call is escalated with its summary instead:
     // the model can put answers there without saving them, and 'answered'
     // with none answered sent the owner an urgent "no answers" (r2).

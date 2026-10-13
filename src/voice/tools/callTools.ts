@@ -6,8 +6,7 @@ import { formatInZone, formatSpokenInZone, zonedTimeToUtcIso } from '../../lib/t
 import { TimeoutError, withTimeout } from '../../lib/withTimeout.js';
 import { sendOwnerMessage } from '../../notifications/owner.js';
 import type { CallContext } from '../../session/types.js';
-import { answersFor, collectedAnswer, finalAnswers } from '../../tasks/answers.js';
-import type { ReportedAnswer } from '../../tasks/schema.js';
+import { collectedAnswer, finalAnswers, reportedAnswerSchema, type ReportedAnswer } from '../../tasks/answers.js';
 import { modeRules } from '../../tasks/modes.js';
 import { isTerminalStatus, saveCollectedAnswer, transitionTask } from '../../tasks/service.js';
 import type { TelephonyProvider } from '../../telephony/providers/types.js';
@@ -575,8 +574,6 @@ export const endConversationCallTool: VoiceTool<{ summary: string }> = defineVoi
   },
 });
 
-export { answersFor };
-
 /**
  * Saves one answer of an ask call as soon as it's settled (#148 review), so a
  * call that ends before report_answers_and_end_call (the far end says "yep,
@@ -598,11 +595,7 @@ export const recordAnswerTool: VoiceTool<ReportedAnswer> = defineVoiceTool({
     'answer, without saying anything about it, then carry on with the call. Use the question\'s number in your ' +
     "list. If they can't or won't answer one, save it with answered: false. Saving the same number again replaces " +
     'what you saved before. This does not end the call; report_answers_and_end_call still does, at the end.',
-  schema: z.object({
-    question: z.number().int().positive().describe("The question's number in your list, starting at 1."),
-    answered: z.boolean().describe('Whether they gave you an answer to this question.'),
-    answer: z.string().optional().describe('Their answer, in a short plain sentence. Leave out if not answered.'),
-  }),
+  schema: reportedAnswerSchema,
   replyOnlyIfSilent: true,
   handler: async (input, ctx) => {
     return runToolSafely('record_answer', async () => {
@@ -639,13 +632,7 @@ export const reportAnswersAndEndCallTool: VoiceTool<{
     BEFORE_ENDING,
   schema: z.object({
     answers: z
-      .array(
-        z.object({
-          question: z.number().int().positive().describe('The question\'s number in your list, starting at 1.'),
-          answered: z.boolean().describe('Whether they gave you an answer to this question.'),
-          answer: z.string().optional().describe('Their answer, in a short plain sentence. Leave out if not answered.'),
-        }),
-      )
+      .array(reportedAnswerSchema)
       .describe('One entry per question on your list.'),
     summary: z.string().optional().describe('Anything else worth passing on that they told you, briefly. Leave out if nothing.'),
   }),
@@ -718,14 +705,7 @@ export const bookingCallTools: VoiceTool[] = [
 /** The tools every outbound call gets. */
 export const commonCallTools: VoiceTool[] = [leaveVoicemailAndEndCallTool, escalateAndEndCallTool, endCallTool] as VoiceTool[];
 
-export const callTools: VoiceTool[] = [
-  checkMyAvailabilityTool,
-  confirmAppointmentTool,
-  undoConfirmedAppointmentTool,
-  leaveVoicemailAndEndCallTool,
-  reportNegotiationFailedTool,
-  escalateAndEndCallTool,
-  endCallTool,
-] as VoiceTool[];
+/** Every tool a call that can book gets: the shared list for tests and tool-definition checks. */
+export const callTools: VoiceTool[] = [...bookingCallTools, ...commonCallTools];
 
 export const callToolDefinitions: ToolDefinition[] = callTools.map(toToolDefinition);

@@ -42,11 +42,12 @@ describe('voice tools: schema + JSON Schema conversion', () => {
   it('registers all 7 call tools with unique names', () => {
     const names = callTools.map((t) => t.name);
     expect(names).toEqual([
+      // bookingCallTools, then commonCallTools: the order every call gets them in.
       'check_my_availability',
       'confirm_appointment',
       'undo_confirmed_appointment',
-      'leave_voicemail_and_end_call',
       'report_negotiation_failed',
+      'leave_voicemail_and_end_call',
       'escalate_and_end_call',
       'end_call',
     ]);

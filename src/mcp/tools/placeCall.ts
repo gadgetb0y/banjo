@@ -5,6 +5,7 @@ import { checkCallCap, describeCallCapRefusal } from '../../tasks/callCap.js';
 import { createTask } from '../../tasks/service.js';
 import { triggerOrchestration } from '../../tasks/orchestrator.js';
 import type { TaskConstraints, TimeWindow } from '../../tasks/schema.js';
+import { modeRules } from '../../tasks/modes.js';
 
 /** Enough for an errand; a longer list is a survey, not a phone call. */
 const MAX_QUESTIONS = 5;
@@ -150,13 +151,14 @@ function formatInCalendarTimezone(date: Date): string {
  */
 export async function placeCallHandler(input: z.infer<typeof placeCallInputSchema>): Promise<PlaceCallResult> {
   // Checked here, not in the schema, so the MCP tool's JSON Schema stays a plain object.
-  if (input.mode === 'ask' && !input.questions?.length) {
+  const asks = modeRules({ mode: input.mode ?? 'booking' }).asks;
+  if (asks && !input.questions?.length) {
     throw new Error("mode 'ask' needs at least one question in `questions`: what should Banjo find out?");
   }
-  if (input.mode === 'ask' && input.constraints?.dateWindows?.length) {
+  if (!modeRules({ mode: input.mode ?? 'booking' }).books && input.constraints?.dateWindows?.length) {
     throw new Error("constraints.dateWindows don't apply to mode 'ask': it books nothing. To ask about a time, put it in a question.");
   }
-  if (input.mode !== 'ask' && input.questions) {
+  if (!asks && input.questions) {
     throw new Error("`questions` is only for mode 'ask'. Put a booking or conversation goal in taskDescription.");
   }
   const constraints: TaskConstraints = { ...input.constraints };

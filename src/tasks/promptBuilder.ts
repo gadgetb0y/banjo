@@ -212,7 +212,7 @@ export function buildCallSystemPrompt(
   candidateWindows: TimeWindow[],
   ownerProfile?: string,
 ): string {
-  const ask = task.mode === 'ask';
+  const ask = modeRules(task).asks;
   return `
 ${buildBaseSystemPromptGuidance('outbound', { purpose: ask ? 'ask' : 'book' })}
 
@@ -243,7 +243,7 @@ call does not end when you say goodbye; it ends only when your backend ends it.`
 }
 
 function askModeFrontendGuidance(task: Task): string {
-  if (task.mode !== 'ask') return '';
+  if (!modeRules(task).asks) return '';
   return `
 
 This call is only to find things out. Your questions, in order:
@@ -267,7 +267,7 @@ the answers they gave.`;
  */
 export function buildCallFrontendPrompt(task: Task, contact: Contact, ownerProfile?: string): string {
   return `
-${buildFrontendSystemPromptGuidance('outbound', { purpose: task.mode === 'ask' ? 'ask' : 'book' })}
+${buildFrontendSystemPromptGuidance('outbound', { purpose: modeRules(task).asks ? 'ask' : 'book' })}
 
 You are calling ${contact.displayName} on behalf of ${config.ASSISTANT_PRINCIPAL_NAME} to: ${task.goalDescription}.
 

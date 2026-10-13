@@ -199,7 +199,7 @@ export function createMcpServer(): McpServer {
 
   server.tool(
     'list_recent_tasks',
-    'List the most recently updated tasks (phone calls and online bookings), most recent first.',
+    "List the most recently updated tasks (phone calls and online bookings), most recent first. An ask call's answers saved before it ended some other way aren't included: get_task_status has them (collectedAnswers).",
     listRecentTasksInputSchema.shape,
     { title: 'List recent tasks', ...READS },
     adapt(listRecentTasksHandler),

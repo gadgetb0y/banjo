@@ -49,7 +49,7 @@ export async function notifyTaskOutcome(taskId: string, disclosure?: DisclosureR
   const outcome = current.outcome;
   // An ask call that ended some other way keeps its own outcome; the answers
   // it saved before that go with it (#148 review).
-  const saved = current.mode === 'ask' && outcome.kind !== 'answered' ? collectedAnswersFor(current) : [];
+  const saved = modeRules(current).asks && outcome.kind !== 'answered' ? collectedAnswersFor(current) : [];
   const summary = withDisclosureNote(withSavedAnswers(buildOutcomeSummary(contact, outcome), contact, saved), disclosure);
   // Built inside the async function, not as an argument: an exception while
   // building the event then rejects this promise, which allSettled holds,

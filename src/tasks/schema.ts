@@ -63,18 +63,7 @@ export type TaskOutcome =
  */
 export type TaskAnswer = { question: string; answered: true; answer: string } | { question: string; answered: false };
 
-/**
- * One answer as the voice model reported it, by the question's number in the
- * list, starting at 1: record_answer and report_answers_and_end_call's
- * argument. Not yet checked; tasks/answers.ts makes it a TaskAnswer.
- */
-export interface ReportedAnswer {
-  question: number;
-  answered: boolean;
-  answer?: string;
-}
-
-/** A ReportedAnswer once checked: what record_answer saves in tasks.collected_answers. */
+/** A reported answer (tasks/answers.ts's ReportedAnswer) once checked: what record_answer saves in tasks.collected_answers. */
 export type CollectedAnswer = { question: number; answered: true; answer: string } | { question: number; answered: false };
 
 export const tasks = pgTable('tasks', {

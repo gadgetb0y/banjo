@@ -14,7 +14,8 @@ vi.mock('../../src/tasks/service.js', () => ({
   isTerminalStatus: (status: string) => !['pending', 'checking_availability', 'calling', 'negotiating'].includes(status),
 }));
 
-const { answersFor, callTools, recordAnswerTool, reportAnswersAndEndCallTool } = await import('../../src/voice/tools/callTools.js');
+const { callTools, recordAnswerTool, reportAnswersAndEndCallTool } = await import('../../src/voice/tools/callTools.js');
+const { answersFor } = await import('../../src/tasks/answers.js');
 
 const QUESTIONS = ['What time do you close on Saturday?', 'Do you take walk-ins?', 'How much is a full groom?'];
 

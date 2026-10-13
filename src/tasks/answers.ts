@@ -1,4 +1,19 @@
-import type { CollectedAnswer, ReportedAnswer, Task, TaskAnswer } from './schema.js';
+import { z } from 'zod';
+import type { CollectedAnswer, Task, TaskAnswer } from './schema.js';
+
+/**
+ * One answer as the voice model reports it, by the question's number in the
+ * list, starting at 1: record_answer's arguments, and each entry of
+ * report_answers_and_end_call's. One definition for both (#148 review r2), so
+ * the mid-call save and the final report can't drift apart. Not yet checked;
+ * collectedAnswer() makes it a CollectedAnswer.
+ */
+export const reportedAnswerSchema = z.object({
+  question: z.number().int().positive().describe("The question's number in your list, starting at 1."),
+  answered: z.boolean().describe('Whether they gave you an answer to this question.'),
+  answer: z.string().optional().describe('Their answer, in a short plain sentence. Leave out if not answered.'),
+});
+export type ReportedAnswer = z.infer<typeof reportedAnswerSchema>;
 
 /**
  * An ask call's answers (#148), from what the voice model reported to what

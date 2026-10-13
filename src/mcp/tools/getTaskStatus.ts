@@ -2,6 +2,7 @@ import { z } from 'zod';
 import { collectedAnswersFor } from '../../tasks/answers.js';
 import type { TaskAnswer } from '../../tasks/schema.js';
 import { getTask } from '../../tasks/service.js';
+import { modeRules } from '../../tasks/modes.js';
 
 export const getTaskStatusInputSchema = z.object({
   taskId: z.string().uuid().describe('Id of the task to check, as returned by place_call, list_recent_tasks, or record_task_outcome.'),
@@ -41,6 +42,6 @@ export async function getTaskStatusHandler(input: z.infer<typeof getTaskStatusIn
     outcome: task.outcome ?? null,
     updatedAt: task.updatedAt.toISOString(),
     scheduledFor: task.scheduledFor?.toISOString() ?? null,
-    ...(task.mode === 'ask' ? { collectedAnswers: collectedAnswersFor(task) } : {}),
+    ...(modeRules(task).asks ? { collectedAnswers: collectedAnswersFor(task) } : {}),
   };
 }
