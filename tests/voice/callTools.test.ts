@@ -422,6 +422,31 @@ describe('outcome-recording order relative to hangUpAfterSpeaking (regression fo
     expect(transitionOrder).toBeLessThan(hangUpOrder);
   });
 
+  it("end_call on an ask task records it answered, with every question listed, instead of escalating (#148 review)", async () => {
+    // Escalating dropped the questions and told the owner the call got stuck.
+    vi.useFakeTimers();
+    const hangUp = vi.fn(async () => {});
+    const promise = endCallTool.handler(
+      { summary: 'They said to call back tomorrow.' },
+      makeCtx(hangUp, Date.now(), { mode: 'ask', questions: ['Open Sunday?', 'Walk-ins?'] }),
+    );
+    await vi.advanceTimersByTimeAsync(6000);
+    await promise;
+    vi.useRealTimers();
+
+    expect(transitionTask).toHaveBeenCalledWith('task-1', 'answered', {
+      outcome: {
+        kind: 'answered',
+        answers: [
+          { question: 'Open Sunday?', answered: false },
+          { question: 'Walk-ins?', answered: false },
+        ],
+        summary: 'They said to call back tomorrow.',
+      },
+    });
+    expect(transitionTask).not.toHaveBeenCalledWith('task-1', 'escalated', expect.anything());
+  });
+
   it('end_call on a conversation-mode task completes the conversation instead of escalating — the model can reach the generic end_call tool on these tasks too (see outboundToolsFor), and treating that as an escalation mislabels a normal close as needing Steve follow-up', async () => {
     vi.useFakeTimers();
     const hangUp = vi.fn(async () => {});

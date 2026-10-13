@@ -3,6 +3,7 @@ import { config } from '../config/index.js';
 import { formatSpokenInZone } from '../lib/timezone.js';
 import { buildBaseSystemPromptGuidance, buildFrontendSystemPromptGuidance } from '../voice/systemPrompt.js';
 import type { Task, TimeWindow } from './schema.js';
+import { modeRules } from './modes.js';
 
 /**
  * Candidate windows arrive as UTC ISO instants, one per appointment-length
@@ -52,7 +53,8 @@ function formatWindows(windows: TimeWindow[]): string {
 function taskDetails(task: Task): string {
   const lines: string[] = [];
   const duration = task.constraints?.durationMinutes;
-  if (duration) {
+  // Only where booking is possible: an 'ask' call has no booking tools to use it in (#148).
+  if (duration && modeRules(task).books) {
     lines.push(
       `Appointment length: ${duration} minutes. Use this duration in every check_my_availability and confirm_appointment call. ` +
         `Do not ask the other party how long to book — you already know. If they tell you the service itself takes a different ` +

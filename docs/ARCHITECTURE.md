@@ -423,9 +423,11 @@ Exposed over **HTTP/SSE (remote MCP)**, since Banjo runs as a persistent AWS ser
 `place_call` with `mode: 'ask'` and 1–5 `questions` finds something out and books nothing. The
 questions are stored in `tasks.questions`. The differences from a booking call:
 
-- **No calendar.** The orchestrator skips the free-time lookup (`candidateWindows` is `[]`), and
-  `outboundToolsFor()` (`src/tasks/callSessionAdapter.ts`) leaves out `check_my_availability`,
-  `confirm_appointment`, `undo_confirmed_appointment` and `report_negotiation_failed`. The prompt
+- **No calendar.** The orchestrator skips the date-window check and the free-time lookup
+  (`candidateWindows` is `[]`), and `outboundToolsFor()` (`src/tasks/callSessionAdapter.ts`) leaves
+  out `bookingCallTools` (`check_my_availability`, `confirm_appointment`,
+  `undo_confirmed_appointment`, `report_negotiation_failed`). An appointment length isn't put in
+  the prompt. The prompt
   (`askModeGuidance()` in `src/tasks/promptBuilder.ts`) replaces the booking instructions with the
   numbered questions, and says to decline any offer to book, hold, order or pay out loud.
 - **Read-backs.** Banjo says each answer back as it goes, so a misheard answer gets corrected while
@@ -439,8 +441,15 @@ questions are stored in `tasks.questions`. The differences from a booking call:
 `answers[].answer` and `summary` are written by the voice model from what was said on the call, so
 they are untrusted data like every other free-text outcome field. The webhook `text` gives counts
 only ("Banjo asked X 2 questions: 1 answered."). The owner's summary lists each question and answer.
-Voicemail, escalation, transfer and `end_call` (whose safety net still records `escalated`) work as
-on any call.
+Voicemail, escalation and transfer work as on any call. `end_call` with no outcome recorded first
+records the call `answered`, with each question present, rather than `escalated`.
+
+**One definition per mode.** `src/tasks/modes.ts` holds what differs by mode: `books` (calendar
+lookup and date-window check, booking tools, booking prompt lines) and what `end_call` records when
+nothing was recorded first. `outboundToolsFor()` adds each mode's own ending tool from a map keyed by
+mode. Both are `Record<Task['mode'], …>`, so a new mode can't leave one out. Ask mode first spread
+its differences across string checks and missed three (the #148 review). `place_call` refuses
+`dateWindows` on an ask call.
 
 ## Waiting on hold (`wait_on_hold`, #151)
 

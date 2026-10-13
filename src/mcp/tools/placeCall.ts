@@ -144,6 +144,9 @@ export async function placeCallHandler(input: z.infer<typeof placeCallInputSchem
   if (input.mode === 'ask' && !input.questions?.length) {
     throw new Error("mode 'ask' needs at least one question in `questions`: what should Banjo find out?");
   }
+  if (input.mode === 'ask' && input.constraints?.dateWindows?.length) {
+    throw new Error("constraints.dateWindows don't apply to mode 'ask': it books nothing. To ask about a time, put it in a question.");
+  }
   if (input.mode !== 'ask' && input.questions) {
     throw new Error("`questions` is only for mode 'ask'. Put a booking or conversation goal in taskDescription.");
   }

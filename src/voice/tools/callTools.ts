@@ -7,6 +7,7 @@ import { TimeoutError, withTimeout } from '../../lib/withTimeout.js';
 import { sendOwnerMessage } from '../../notifications/owner.js';
 import type { CallContext } from '../../session/types.js';
 import type { TaskAnswer } from '../../tasks/schema.js';
+import { modeRules } from '../../tasks/modes.js';
 import { isTerminalStatus, transitionTask } from '../../tasks/service.js';
 import type { TelephonyProvider } from '../../telephony/providers/types.js';
 import type { ToolDefinition } from '../types.js';
@@ -530,35 +531,17 @@ export const endCallTool: VoiceTool<{ summary?: string }> = defineVoiceTool({
       // outcome-recording can never be lost to hangUpAfterSpeaking's wait
       // exceeding the enclosing tool call's timeout budget.
       //
-      // Conversation-mode tasks get end_conversation_call ADDITIVELY
-      // alongside this generic tool (see outboundToolsFor in
-      // tasks/callSessionAdapter.ts), so the model can and does sometimes
-      // reach for end_call to close out a conversation instead. Landing
-      // that in 'escalated' mislabels a normal, successful close as
-      // something needing Steve's follow-up — caught on a live call where
-      // the model's end_call summary was a plain conversation recap, not
-      // an escalation reason. Route conversation-mode tasks through the
-      // same outcome end_conversation_call would have recorded instead.
+      // What it records depends on the mode (tasks/modes.ts): conversation
+      // and ask calls get their own ending tool ADDITIVELY alongside this
+      // one, and the model can and does reach for end_call to close them
+      // out instead, so it records what their own ending would have.
       //
       // ctx.task is re-fetched for each tool call, so no second read here;
       // the status check only skips the usual case (end_call right after
       // confirm_appointment) — transitionTask's own guard covers any race.
       if (!isTerminalStatus(ctx.task.status)) {
-        if (ctx.task.mode === 'conversation') {
-          await transitionTask(ctx.task.id, 'conversation_completed', {
-            outcome: {
-              kind: 'conversation_completed',
-              summary: input.summary ?? 'Call ended without an explicit summary being recorded.',
-            },
-          });
-        } else {
-          await transitionTask(ctx.task.id, 'escalated', {
-            outcome: {
-              kind: 'escalated',
-              reason: input.summary ?? 'Call ended without an explicit outcome being recorded.',
-            },
-          });
-        }
+        const { status, outcome } = modeRules(ctx.task).endCallOutcome(ctx.task, input.summary);
+        await transitionTask(ctx.task.id, status, { outcome });
       }
       await hangUpAfterSpeaking(ctx);
       return { ok: true };
@@ -677,6 +660,17 @@ export const waitOnHoldTool: VoiceTool<Record<string, never>> = defineVoiceTool(
 // caller (session/callSession.ts) looks tools up by name and invokes
 // `handler(parsedArgs, ctx)` without static knowledge of each tool's exact
 // input type, validated instead at runtime via each tool's own Zod schema.
+/** The tools only a call that can book gets (tasks/modes.ts's `books`); an ask call never sees them (#148). */
+export const bookingCallTools: VoiceTool[] = [
+  checkMyAvailabilityTool,
+  confirmAppointmentTool,
+  undoConfirmedAppointmentTool,
+  reportNegotiationFailedTool,
+] as VoiceTool[];
+
+/** The tools every outbound call gets. */
+export const commonCallTools: VoiceTool[] = [leaveVoicemailAndEndCallTool, escalateAndEndCallTool, endCallTool] as VoiceTool[];
+
 export const callTools: VoiceTool[] = [
   checkMyAvailabilityTool,
   confirmAppointmentTool,

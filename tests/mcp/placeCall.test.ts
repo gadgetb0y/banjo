@@ -59,6 +59,20 @@ describe('mcp: place_call schema', () => {
   });
 });
 
+describe("mcp: place_call, mode 'ask'", () => {
+  it('refuses date windows, which an ask call never uses (#148 review)', async () => {
+    await expect(
+      placeCallHandler({
+        contactId: CONTACT_ID,
+        taskDescription: 'Find out their Saturday hours',
+        mode: 'ask',
+        questions: ['When do you close Saturday?'],
+        constraints: { dateWindows: [{ start: '2026-10-20T09:00:00', end: '2026-10-20T17:00:00' }] },
+      }),
+    ).rejects.toThrow(/dateWindows/);
+  });
+});
+
 describe('mcp: place_call scheduling', () => {
   beforeEach(() => {
     vi.clearAllMocks();

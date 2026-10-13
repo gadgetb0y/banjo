@@ -274,6 +274,17 @@ describe("buildCallSystemPrompt: mode 'ask' (#148)", () => {
     expect(prompt).toContain('escalate_and_end_call');
   });
 
+  it('leaves out the appointment length even when one is set, but keeps the notes (#148 review)', () => {
+    // The sim always passes durationMinutes, so every ask sim run got told to
+    // use it in confirm_appointment, a tool ask calls don't have.
+    const withConstraints = { ...askTask, constraints: { durationMinutes: 60, notes: 'Ask for Dana.' } } as Task;
+    for (const prompt of [buildCallSystemPrompt(withConstraints, contact, []), buildCallFrontendPrompt(withConstraints, contact)]) {
+      expect(prompt).not.toMatch(/Appointment length/);
+      expect(prompt).not.toContain('check_my_availability');
+      expect(prompt).toContain('Ask for Dana.');
+    }
+  });
+
   it('booking prompt is unchanged by the ask branch', () => {
     const prompt = buildCallSystemPrompt(bookingTask, contact, []);
     expect(prompt).toContain('to negotiate or book an appointment.');

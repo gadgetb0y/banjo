@@ -20,6 +20,7 @@ import {
   type TransitionGuard,
 } from './service.js';
 import type { TimeWindow } from './schema.js';
+import { modeRules } from './modes.js';
 
 /** Asked for on each use rather than once at import, so the simulator's overrideCalendarProvider() (scripts/sim.ts) takes effect. */
 function getCalendar(): CalendarProvider {
@@ -98,12 +99,15 @@ async function runTask(taskId: string): Promise<void> {
   // Only this run's own claim may move the task on from here.
   const stillOurs = { from: ['checking_availability'], ifUpdatedAt: checking.updatedAt } satisfies TransitionGuard;
 
+  // Only a call that can book has windows to check (tasks/modes.ts): an
+  // 'ask' call (#148) once failed here over times it never used.
+  const books = modeRules(task).books;
   // Every requested window can be over by the time a scheduled call runs.
   // Calling anyway used to go ahead with no pre-checked windows at all, so
   // the model could book any free time (#3) — fail and tell the owner instead.
   const requestedWindows = task.constraints.dateWindows ?? [];
   const dateWindows = requestedWindows.length ? clipWindowsToFuture(requestedWindows) : defaultLookaheadWindow();
-  if (!dateWindows.length) {
+  if (books && !dateWindows.length) {
     const failed = await transitionTask(
       task.id,
       'failed',
@@ -121,14 +125,13 @@ async function runTask(taskId: string): Promise<void> {
     await failOverCallCap(task.id, describeCallCapRefusal(earlyCap), stillOurs);
     return;
   }
-  // An 'ask' call books nothing (#148), so there's no free time to look up.
-  const candidateWindows =
-    task.mode === 'ask'
-      ? []
-      : await getCalendar().computeCandidateWindows({
-          dateWindows,
-          durationMinutes: task.constraints.durationMinutes ?? 30,
-        });
+  // A call that can't book has no free time to look up.
+  const candidateWindows = !books
+    ? []
+    : await getCalendar().computeCandidateWindows({
+        dateWindows,
+        durationMinutes: task.constraints.durationMinutes ?? 30,
+      });
   // The per-number call cap, checked again right before dialing: place_call
   // checked it when the call was requested, but a scheduled call can come due
   // after other calls to the same number. Held under a per-contact lock until

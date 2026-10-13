@@ -182,6 +182,22 @@ describe('buildOutboundCallSessionOptions', () => {
     }
   });
 
+  it('leaves every booking tool off an ask task, by identity rather than name (#148 review)', async () => {
+    // Filtering by a list of name strings let a renamed or new booking tool
+    // back onto ask calls silently.
+    const { bookingCallTools } = await import('../../src/voice/tools/callTools.js');
+    const options = buildOutboundCallSessionOptions({
+      task: { ...fakeTask, mode: 'ask' } as Task,
+      callAttempt: fakeCallAttempt,
+      contact: fakeContact,
+      telephony: fakeTelephony,
+      calendar: fakeCalendar,
+      systemPrompt: 'irrelevant for this test',
+    });
+    expect(bookingCallTools.length).toBeGreaterThan(0);
+    for (const tool of bookingCallTools) expect(options.tools).not.toContain(tool);
+  });
+
   it('adds end_conversation_call to the tool set for a conversation-mode task, without removing anything', () => {
     const bookingOptions = buildOutboundCallSessionOptions({
       task: { ...fakeTask, mode: 'booking' } as Task,

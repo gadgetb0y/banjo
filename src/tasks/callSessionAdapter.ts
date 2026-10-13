@@ -12,7 +12,14 @@ import { buildWebhookText, sendTaskWebhook } from '../notifications/webhook.js';
 import { pressDigitsTool } from '../telephony/dtmf.js';
 import type { TelephonyProvider } from '../telephony/providers/types.js';
 import { defineTransferTool } from '../telephony/transfer.js';
-import { callTools, endConversationCallTool, reportAnswersAndEndCallTool, waitOnHoldTool } from '../voice/tools/callTools.js';
+import {
+  bookingCallTools,
+  commonCallTools,
+  endConversationCallTool,
+  reportAnswersAndEndCallTool,
+  waitOnHoldTool,
+} from '../voice/tools/callTools.js';
+import { modeRules } from './modes.js';
 import type { VoiceTool } from '../voice/tools/defineVoiceTool.js';
 import { unregisterLiveCall } from './liveCalls.js';
 import { getTask, isTerminalStatus, transitionTask, updateCallAttempt } from './service.js';
@@ -99,23 +106,23 @@ export const transferToOwnerTool = defineTransferTool<CallContext>({
  *  transfer_to_owner is added only when TRANSFER_ENABLED is on (#7). */
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 function outboundToolsFor(task: Task): VoiceTool<any, CallContext>[] {
-  // An 'ask' call books nothing and agrees to nothing (#148): no calendar
-  // tools and no negotiation outcome, just its own way to report back.
-  const shared = task.mode === 'ask' ? callTools.filter((tool) => !BOOKING_ONLY_TOOLS.has(tool.name)) : callTools;
+  // A call that can't book (an 'ask' call, #148) gets none of the booking
+  // tools: matched by identity, so a renamed or new booking tool can't slip
+  // back onto it.
+  const shared = modeRules(task).books ? [...bookingCallTools, ...commonCallTools] : commonCallTools;
   const base: VoiceTool<any, CallContext>[] = [...shared, pressDigitsTool];
   if (config.TRANSFER_ENABLED) base.push(transferToOwnerTool);
   if (canWaitOnHold()) base.push(waitOnHoldTool);
-  if (task.mode === 'conversation') return [...base, endConversationCallTool];
-  if (task.mode === 'ask') return [...base, reportAnswersAndEndCallTool];
-  return base;
+  return [...base, ...(MODE_ENDING_TOOLS[task.mode] ?? [])];
 }
 
-const BOOKING_ONLY_TOOLS: ReadonlySet<string> = new Set([
-  'check_my_availability',
-  'confirm_appointment',
-  'undo_confirmed_appointment',
-  'report_negotiation_failed',
-]);
+/** Each mode's own way to end a call, on top of the common endings. Keyed by mode so a new one can't be left out. */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+const MODE_ENDING_TOOLS: Record<Task['mode'], VoiceTool<any, CallContext>[]> = {
+  booking: [],
+  conversation: [endConversationCallTool],
+  ask: [reportAnswersAndEndCallTool],
+};
 
 /** Only OpenAI Realtime implements VoiceAIProvider.setHold/judgeHoldLine so far (#151). */
 export function canWaitOnHold(): boolean {
