@@ -56,6 +56,9 @@ interface TwilioCallState {
   providerCallId: string | null;
   toNumber: string;
   recordingSid?: string; // set by startRecording, so transferCall can stop it (#7)
+  // A start that failed after it was sent (#151): Twilio may still have begun
+  // recording, and not list it yet. stopRecording then can't confirm a stop.
+  recordingUncertain?: boolean;
 }
 
 function sleep(ms: number): Promise<void> {
@@ -884,7 +887,14 @@ export class TwilioProvider implements TelephonyProvider {
   async startRecording(callId: string): Promise<{ recordingId: string }> {
     const providerCallId = this.calls.get(callId)?.providerCallId;
     if (!providerCallId) throw new Error(`startRecording: no live Twilio call for ${callId}`);
-    const recording = await this.client.calls(providerCallId).recordings.create({ recordingChannels: 'dual', recordingTrack: 'both' });
+    let recording: { sid: string };
+    try {
+      recording = await this.client.calls(providerCallId).recordings.create({ recordingChannels: 'dual', recordingTrack: 'both' });
+    } catch (err) {
+      const failed = this.calls.get(callId);
+      if (failed) failed.recordingUncertain = true;
+      throw err;
+    }
     const state = this.calls.get(callId);
     if (state) state.recordingSid = recording.sid;
     logger.info({ callId, recordingId: recording.sid }, 'call recording started');
@@ -892,21 +902,27 @@ export class TwilioProvider implements TelephonyProvider {
   }
 
   /**
-   * Stops every recording on the call for good (#151), asking Twilio which
-   * are running rather than trusting recordingSid: a start whose response
-   * was lost or timed out can be recording with no SID known here. Fails
-   * closed: throws for a call it can't find, or if Twilio can't be asked, so
-   * the caller never treats an unconfirmed stop as done.
+   * Stops every recording on the call for good (#151). It stops what Twilio
+   * lists as running or paused, plus the recording this process started even
+   * if the list doesn't show it (Twilio's lists can lag). Fails closed: throws
+   * for a call it can't find, if Twilio can't be asked, or if a start failed
+   * after it was sent and the list shows nothing to stop, since Twilio may
+   * have begun that recording without listing it yet.
    */
   async stopRecording(callId: string): Promise<void> {
     const state = this.calls.get(callId);
     if (!state?.providerCallId) throw new Error(`stopRecording: no live Twilio call for ${callId}`);
     const call = this.client.calls(state.providerCallId);
-    const recordings = await call.recordings.list();
-    for (const recording of recordings) {
-      if (recording.status !== 'in-progress' && recording.status !== 'paused') continue;
-      await call.recordings(recording.sid).update({ status: 'stopped' });
-      logger.info({ callId, recordingId: recording.sid }, 'call recording stopped');
+    const listed = await call.recordings.list();
+    const toStop = new Set(listed.filter((r) => r.status === 'in-progress' || r.status === 'paused').map((r) => r.sid));
+    const known = state.recordingSid;
+    if (known && !listed.some((r) => r.sid === known)) toStop.add(known);
+    if (toStop.size === 0 && state.recordingUncertain) {
+      throw new Error(`stopRecording: a recording start on ${callId} failed after it was sent, and Twilio lists none to stop`);
+    }
+    for (const sid of toStop) {
+      await call.recordings(sid).update({ status: 'stopped' });
+      logger.info({ callId, recordingId: sid }, 'call recording stopped');
     }
   }
 

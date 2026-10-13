@@ -901,4 +901,29 @@ describe('TwilioProvider.stopRecording (#151)', () => {
     await expect(provider.stopRecording('CA-r4')).rejects.toThrow('cannot stop');
     await expect(new TwilioProvider().stopRecording('nope')).rejects.toThrow();
   });
+
+  it("stops the recording this process started even when Twilio's list doesn't show it yet", async () => {
+    const { provider, update } = withRecordings('CA-r5', []);
+    await provider.startRecording('CA-r5'); // RE-live
+    await provider.stopRecording('CA-r5');
+    expect(update.mock.calls).toEqual([['RE-live', { status: 'stopped' }]]);
+  });
+
+  it('fails closed after a start that failed once sent: an empty list is not proof nothing is recording', async () => {
+    const { provider } = withRecordings('CA-r6', []);
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const recordings = (provider as any).client.calls('CA-r6').recordings;
+    recordings.create.mockRejectedValueOnce(new Error('socket hang up'));
+    await expect(provider.startRecording('CA-r6')).rejects.toThrow('socket hang up');
+    await expect(provider.stopRecording('CA-r6')).rejects.toThrow(/failed after it was sent/);
+  });
+
+  it('after an uncertain start, still stops what Twilio does list', async () => {
+    const { provider, update } = withRecordings('CA-r7', [{ sid: 'RE-late', status: 'in-progress' }]);
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (provider as any).client.calls('CA-r7').recordings.create.mockRejectedValueOnce(new Error('timeout'));
+    await expect(provider.startRecording('CA-r7')).rejects.toThrow();
+    await provider.stopRecording('CA-r7');
+    expect(update.mock.calls).toEqual([['RE-late', { status: 'stopped' }]]);
+  });
 });
