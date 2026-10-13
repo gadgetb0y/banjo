@@ -905,9 +905,10 @@ export class TwilioProvider implements TelephonyProvider {
    * Stops every recording on the call for good (#151). It stops what Twilio
    * lists as running or paused, plus the recording this process started even
    * if the list doesn't show it (Twilio's lists can lag). Fails closed: throws
-   * for a call it can't find, if Twilio can't be asked, or if a start failed
-   * after it was sent and the list shows nothing to stop, since Twilio may
-   * have begun that recording without listing it yet.
+   * for a call it can't find, if Twilio can't be asked, or whenever a start
+   * failed after it was sent: Twilio may have begun that recording without
+   * listing it yet, so no list can confirm the stop. It still stops what it
+   * finds first.
    */
   async stopRecording(callId: string): Promise<void> {
     const state = this.calls.get(callId);
@@ -917,12 +918,12 @@ export class TwilioProvider implements TelephonyProvider {
     const toStop = new Set(listed.filter((r) => r.status === 'in-progress' || r.status === 'paused').map((r) => r.sid));
     const known = state.recordingSid;
     if (known && !listed.some((r) => r.sid === known)) toStop.add(known);
-    if (toStop.size === 0 && state.recordingUncertain) {
-      throw new Error(`stopRecording: a recording start on ${callId} failed after it was sent, and Twilio lists none to stop`);
-    }
     for (const sid of toStop) {
       await call.recordings(sid).update({ status: 'stopped' });
       logger.info({ callId, recordingId: sid }, 'call recording stopped');
+    }
+    if (state.recordingUncertain) {
+      throw new Error(`stopRecording: a recording start on ${callId} failed after it was sent, so no stop can be confirmed`);
     }
   }
 

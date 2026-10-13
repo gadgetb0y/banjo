@@ -915,15 +915,16 @@ describe('TwilioProvider.stopRecording (#151)', () => {
     const recordings = (provider as any).client.calls('CA-r6').recordings;
     recordings.create.mockRejectedValueOnce(new Error('socket hang up'));
     await expect(provider.startRecording('CA-r6')).rejects.toThrow('socket hang up');
-    await expect(provider.stopRecording('CA-r6')).rejects.toThrow(/failed after it was sent/);
+    await expect(provider.stopRecording('CA-r6')).rejects.toThrow(/no stop can be confirmed/);
   });
 
-  it('after an uncertain start, still stops what Twilio does list', async () => {
-    const { provider, update } = withRecordings('CA-r7', [{ sid: 'RE-late', status: 'in-progress' }]);
+  it('after an uncertain start, stops what Twilio does list and still refuses to confirm', async () => {
+    const { provider, update } = withRecordings('CA-r7', [{ sid: 'RE-other', status: 'in-progress' }]);
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     (provider as any).client.calls('CA-r7').recordings.create.mockRejectedValueOnce(new Error('timeout'));
     await expect(provider.startRecording('CA-r7')).rejects.toThrow();
-    await provider.stopRecording('CA-r7');
-    expect(update.mock.calls).toEqual([['RE-late', { status: 'stopped' }]]);
+    // The listed one may not be the one that start made, which may not be listed yet.
+    await expect(provider.stopRecording('CA-r7')).rejects.toThrow(/no stop can be confirmed/);
+    expect(update.mock.calls).toEqual([['RE-other', { status: 'stopped' }]]);
   });
 });
