@@ -167,8 +167,8 @@ describe('buildWebhookText', () => {
     const outcome = {
       kind: 'answered' as const,
       answers: [
-        { question: 'Open Sunday?', answered: false },
-        { question: 'Walk-ins?', answered: false },
+        { question: 'Open Sunday?', answered: false as const },
+        { question: 'Walk-ins?', answered: false as const },
       ],
     };
     expect(webhook.buildWebhookText(contact, outcome)).toMatch(

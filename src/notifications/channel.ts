@@ -115,7 +115,7 @@ function buildAskSummary(name: string, outcome: Extract<TaskOutcome, { kind: 'an
   if (whole.length <= maxChars) return whole;
 
   // The largest per-question budget that fits with this summary, or -1.
-  const longest = Math.max(...outcome.answers.map((a) => a.question.length + (a.answer?.length ?? 0)));
+  const longest = Math.max(...outcome.answers.map((a) => a.question.length + (a.answered ? a.answer.length : 0)));
   const fit = (summary: string | undefined): number => {
     let lo = -1;
     let hi = longest;
@@ -153,9 +153,8 @@ function buildAskSummary(name: string, outcome: Extract<TaskOutcome, { kind: 'an
  */
 function renderAnswer(n: number, a: TaskAnswer, itemChars: number): string {
   if (!a.answered) return `${n}. ${clipText(a.question, itemChars)} (no answer)`;
-  const answer = a.answer ?? '';
   let q = a.question;
-  let ans = answer;
+  let ans = a.answer;
   if (q.length + ans.length > itemChars) {
     const questionShare = Math.floor(itemChars * 0.4);
     if (q.length <= questionShare) ans = clipText(ans, itemChars - q.length);

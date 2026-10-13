@@ -124,7 +124,7 @@ describe('with NOTIFICATION_CHANNEL=pushover', () => {
     const channel = owner.createNotificationChannel();
     const ask = (...answered: boolean[]) => ({
       kind: 'answered' as const,
-      answers: answered.map((a, i) => (a ? { question: `Q${i}`, answered: true, answer: 'yes' } : { question: `Q${i}`, answered: false })),
+      answers: answered.map((a, i) => (a ? { question: `Q${i}`, answered: true as const, answer: 'yes' } : { question: `Q${i}`, answered: false as const })),
     });
 
     await channel.notify('task-4', ask(true, true), 'Asked Luigi');
