@@ -324,11 +324,13 @@ refusal path, and fails closed: if the check errors, no call is placed.
 - **Warm loop-in** ([#149]): today's `transfer_to_owner` is a cold transfer, so a principal who
   doesn't pick up sends the other party to voicemail. Instead, call the principal on a second
   line, brief them, and bridge only on a yes; on a no, no answer or their voicemail, Banjo goes
-  back to the call and carries on.
+  back to the call and carries on. **Built** as `TRANSFER_MODE=warm` (opt-in; default stays
+  `cold` until a live call verifies the accept and decline paths).
 - **Wait on hold** ([#151]): get through the phone tree with `press_digits`, detect hold music
   or silence without hanging up, and loop in the principal when a human answers. Needs a
   hold-aware silence watchdog (today's would end the call), hold music kept from triggering server
-  VAD, and an upper time limit. This is the feature people would share.
+  VAD, and an upper time limit. This is the feature people would share. **Built** as `wait_on_hold`
+  (OpenAI Realtime only) with `HOLD_MAX_MINUTES`; still needs a real call through a 5-minute-plus hold.
 
 ### 4.8 Easier self-hosting and more vendors
 

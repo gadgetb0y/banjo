@@ -28,6 +28,9 @@ export type TelephonyEvent = { callId: string } & (
   | { type: 'error'; error: Error }
 );
 
+/** How a warm transfer's call to the owner ended (#149). 'no_answer' covers busy, unanswered, and answered without a key press (their voicemail). */
+export type LoopInResult = 'accepted' | 'declined' | 'no_answer';
+
 export type TelephonyEventListener = (event: TelephonyEvent) => void;
 
 /**
@@ -62,6 +65,14 @@ export interface TelephonyProvider {
   /** Start recording a live call (#8). Optional: a provider without it can't record, and CallSession won't try. */
   startRecording?(callId: string): Promise<{ recordingId: string }>;
 
+  /**
+   * Stop every recording on the call for good (#151: nothing is recorded
+   * after a hold), including one started without its ID ever reaching Banjo.
+   * A call with none running counts as stopped. Throws if that can't be
+   * confirmed. Optional: without it, a recorded call can't wait on hold.
+   */
+  stopRecording?(callId: string): Promise<void>;
+
   /** Delete a stored recording; one that is already gone counts as deleted. Used by retention (recordings/retention.ts). */
   deleteRecording?(recordingId: string): Promise<void>;
 
@@ -72,6 +83,16 @@ export interface TelephonyProvider {
    * Throws when the redirect fails; the call is then still Banjo's.
    */
   transferCall?(callId: string, opts: { to: string }): Promise<void>;
+
+  /**
+   * Warm transfer (#149): call `to` on a second line, read them `brief`, and
+   * bridge them into this call only if they accept, within `timeoutMs`.
+   * 'accepted': the call is bridged and Banjo is off it, as after
+   * transferCall. Anything else: the second line is gone and the call is
+   * still Banjo's. Optional, like transferCall. Throws if the second call
+   * can't be placed.
+   */
+  loopInOwner?(callId: string, opts: { to: string; brief: string; timeoutMs: number }): Promise<LoopInResult>;
 
   on(event: 'event', listener: TelephonyEventListener): void;
   off(event: 'event', listener: TelephonyEventListener): void;

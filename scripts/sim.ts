@@ -40,7 +40,11 @@ Options:
   --duration <minutes>   Appointment length to negotiate. Default: 60.
   --window-days <n>      How many days out Banjo may book. Default: 3.
   --transfer             Offer transfer_to_owner, as with TRANSFER_ENABLED=true.
-  --script <file>        Read your lines from a file, one per line (# for comments).
+  --warm                 Make it a warm transfer (TRANSFER_MODE=warm). Implies --transfer.
+  --owner <answer>       With --warm: what the owner does. accept|decline|no-answer. Default: accept.
+  --script <file>        Read your lines from a file, one per line (# for comments). A line starting
+                         with ~ plays 3 seconds after the one before it, without waiting for
+                         Banjo: a phone menu or hold queue, which doesn't wait for anyone.
   --verbose              Show the app's info-level logs.
   -h, --help             Show this.
 
@@ -49,12 +53,15 @@ on Banjo; Ctrl+C does the same.`;
 
 const DEFAULT_BOOKING_GOAL = 'Book a full grooming appointment for my dog, Banjo, a golden retriever.';
 const DEFAULT_QUESTIONS = ['What time do you close on Saturdays?', 'How much is a full groom for a golden retriever?'];
+const OWNER_ANSWERS = { accept: 'accepted', decline: 'declined', 'no-answer': 'no_answer' } as const;
 
 const CATEGORIES = ['salon', 'medical', 'restaurant', 'home_services', 'other'] as const;
 type Category = (typeof CATEGORIES)[number];
 
 /** How long Banjo must stay quiet before a --script run says its next line. */
 const SCRIPT_TURN_QUIET_MS = 1500;
+/** How long after the line before it a ~ line (a recording: menu, hold queue) plays. */
+const SCRIPT_RECORDING_GAP_MS = 3000;
 /** After the last scripted line: how long to wait for Banjo to end the call before hanging up on it. */
 const SCRIPT_END_QUIET_MS = 15_000;
 
@@ -69,6 +76,8 @@ async function main(): Promise<void> {
       duration: { type: 'string', default: '60' },
       'window-days': { type: 'string', default: '3' },
       transfer: { type: 'boolean', default: false },
+      warm: { type: 'boolean', default: false },
+      owner: { type: 'string', default: 'accept' },
       script: { type: 'string' },
       verbose: { type: 'boolean', default: false },
       help: { type: 'boolean', short: 'h', default: false },
@@ -92,7 +101,10 @@ async function main(): Promise<void> {
   // .env first, then the sim's own values over it: config reads process.env at
   // import, and dotenv never overwrites what is already set.
   dotenv.config({ path: process.env.DOTENV_CONFIG_PATH, quiet: true });
-  Object.assign(process.env, simEnv(process.env, { transfer: values.transfer, verbose: values.verbose }));
+  const owner = OWNER_ANSWERS[values.owner as keyof typeof OWNER_ANSWERS];
+  if (!owner) fail(`--owner must be accept, decline or no-answer (got "${values.owner}").`);
+  const transfer = values.transfer || values.warm;
+  Object.assign(process.env, simEnv(process.env, { transfer, warm: values.warm, verbose: values.verbose }));
   if (!process.env.OPENAI_API_KEY) fail('OPENAI_API_KEY is not set. Add it to .env or the environment: the sim talks to OpenAI Realtime.');
 
   await ensureSimDatabase(process.env.DATABASE_URL!);
@@ -128,6 +140,7 @@ async function main(): Promise<void> {
     durationMinutes,
     windowDays,
     createVoiceAI: () => new OpenAIRealtimeProvider({ textOnly: true }),
+    owner,
     print,
   });
   process.on('SIGINT', () => call.telephony.calleeHangsUp());
@@ -171,15 +184,24 @@ function runScript(
   let next = 0;
   let banjoSpoke = false;
   let timer: NodeJS.Timeout | undefined;
+  const isRecording = (line: string) => line.startsWith('~');
   const say = () => {
-    const line = lines[next++]!;
+    const raw = lines[next++]!;
+    const line = isRecording(raw) ? raw.slice(1).trim() : raw;
     print(`You: ${line}`);
     banjoSpoke = false;
     voice.sendUserText(line);
   };
   const schedule = () => {
     clearTimeout(timer);
-    if (next < lines.length) {
+    if (next < lines.length && isRecording(lines[next]!)) {
+      // A recording plays on regardless of Banjo, on its own clock.
+      timer = setTimeout(() => {
+        if (over) return;
+        say();
+        schedule();
+      }, SCRIPT_RECORDING_GAP_MS);
+    } else if (next < lines.length) {
       timer = setTimeout(() => banjoSpoke && say(), SCRIPT_TURN_QUIET_MS);
     } else {
       timer = setTimeout(() => {
@@ -188,9 +210,16 @@ function runScript(
       }, SCRIPT_END_QUIET_MS);
     }
   };
+  let over = false;
   voice.on('event', (event) => {
     if (event.type === 'transcript' && event.role === 'assistant') banjoSpoke = true;
-    schedule();
+    if (!over) schedule();
+  });
+  // Nothing more to say once the line is dead, whoever hung up.
+  telephony.on('event', (event) => {
+    if (event.type !== 'ended') return;
+    over = true;
+    clearTimeout(timer);
   });
   // The callee speaks first on an outbound call.
   say();

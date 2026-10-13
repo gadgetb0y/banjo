@@ -679,3 +679,252 @@ describe('TwilioProvider status callback (#79)', () => {
     expect(events).toEqual([]);
   });
 });
+
+describe('TwilioProvider warm transfer (#149)', () => {
+  const OWNER = '+15557654321';
+  const BRIEF = "Pam at Claudia's needs you about the vaccination records.";
+
+  /** A provider with one live call, and fakes for creating the owner's call and updating either leg. */
+  function setup(callId: string, opts: { create?: ReturnType<typeof vi.fn> } = {}) {
+    const provider = new TwilioProvider();
+    provider.registerInboundCall(callId, '+15555550100');
+    const create = opts.create ?? vi.fn(async () => ({ sid: 'CA-owner' }));
+    const updates = new Map<string, ReturnType<typeof vi.fn>>();
+    const recordingUpdate = vi.fn(async () => ({}));
+    const recordings = Object.assign(vi.fn(() => ({ update: recordingUpdate })), { create: vi.fn(async () => ({ sid: 'RE-live' })) });
+    const calls = Object.assign(
+      vi.fn((sid: string) => {
+        if (!updates.has(sid)) updates.set(sid, vi.fn(async () => ({})));
+        return { update: updates.get(sid)!, recordings };
+      }),
+      { create },
+    );
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    Object.defineProperty((provider as any).client, 'calls', { value: calls, configurable: true });
+    const update = (sid: string) => updates.get(sid) ?? vi.fn();
+    return { provider, create, update, recordingUpdate };
+  }
+
+  const loopIn = (provider: TwilioProvider, callId: string, timeoutMs = 60_000) =>
+    provider.loopInOwner(callId, { to: OWNER, brief: BRIEF, timeoutMs });
+
+  it('calls the owner on a second line with the brief and a press-1 prompt, without touching the live call', async () => {
+    const { provider, create, update } = setup('CA-w1');
+    void loopIn(provider, 'CA-w1');
+    await vi.waitFor(() => expect(create).toHaveBeenCalled());
+
+    const args = (create.mock.calls[0] as unknown as [Record<string, unknown>])[0];
+    expect(args.to).toBe(OWNER);
+    expect(args.statusCallback).toMatch(/\/telephony\/twilio\/loop-in-status\?callId=CA-w1$/);
+    expect(args.statusCallbackEvent).toEqual(['completed']);
+    const twiml = args.twiml as string;
+    expect(twiml).toMatch(/<Gather[^>]*action="https:\/\/[^"]+\/telephony\/twilio\/loop-in-result\?callId=CA-w1"/);
+    expect(twiml).toContain(`<Say>${BRIEF}</Say>`);
+    expect(twiml).toContain('Press 1 to talk to them now');
+    expect(twiml).toMatch(/<Hangup\/><\/Response>$/);
+    expect(update('CA-w1')).not.toHaveBeenCalled();
+    expect(provider.isAnyCallActive()).toBe(true);
+  });
+
+  it('accept: stops the recording, moves the call into a conference the owner joins, and lets the call go', async () => {
+    const { provider, update, recordingUpdate } = setup('CA-w2');
+    await provider.startRecording('CA-w2');
+    const result = loopIn(provider, 'CA-w2');
+    await vi.waitFor(() => expect(provider['loopIns'].get('CA-w2')?.ownerCallSid).toBe('CA-owner'));
+
+    const ownerTwiml = await provider.acceptLoopIn('CA-w2', '1');
+
+    await expect(result).resolves.toBe('accepted');
+    expect(recordingUpdate).toHaveBeenCalledWith({ status: 'stopped' });
+    const theirs = (update('CA-w2').mock.calls[0] as unknown as [{ twiml: string }])[0].twiml;
+    expect(theirs).toMatch(/<Conference[^>]*endConferenceOnExit="true"[^>]*>banjo-CA-w2<\/Conference>/);
+    expect(ownerTwiml).toMatch(/<Conference[^>]*endConferenceOnExit="true"[^>]*>banjo-CA-w2<\/Conference>/);
+    expect(recordingUpdate.mock.invocationCallOrder[0]).toBeLessThan(update('CA-w2').mock.invocationCallOrder[0]!);
+    // Forgotten, so CallSession's teardown hang-up can't end the bridged call.
+    expect(provider.isAnyCallActive()).toBe(false);
+    await provider.hangUp('CA-w2');
+    expect(update('CA-w2')).toHaveBeenCalledTimes(1);
+    expect(update('CA-owner')).not.toHaveBeenCalled();
+  });
+
+  it('decline: any other key hangs up the owner and leaves the call with Banjo', async () => {
+    const { provider, update } = setup('CA-w3');
+    const result = loopIn(provider, 'CA-w3');
+    await vi.waitFor(() => expect(provider['loopIns'].get('CA-w3')?.ownerCallSid).toBe('CA-owner'));
+
+    const ownerTwiml = await provider.acceptLoopIn('CA-w3', '2');
+
+    await expect(result).resolves.toBe('declined');
+    expect(ownerTwiml).toMatch(/<Hangup\/><\/Response>$/);
+    expect(ownerTwiml).not.toContain('Conference');
+    expect(update('CA-w3')).not.toHaveBeenCalled();
+    expect(provider.isAnyCallActive()).toBe(true);
+  });
+
+  it("no answer: the owner's leg ending without a key press (busy, unanswered, their voicemail) leaves the call with Banjo", async () => {
+    const { provider } = setup('CA-w4');
+    const result = loopIn(provider, 'CA-w4');
+    await vi.waitFor(() => expect(provider['loopIns'].get('CA-w4')?.ownerCallSid).toBe('CA-owner'));
+
+    provider.handleLoopInStatus('CA-w4', 'completed');
+
+    await expect(result).resolves.toBe('no_answer');
+    expect(provider.isAnyCallActive()).toBe(true);
+  });
+
+  it("gives up after timeoutMs and hangs up the owner's line", async () => {
+    vi.useFakeTimers();
+    try {
+      const { provider, update } = setup('CA-w5');
+      const result = loopIn(provider, 'CA-w5', 1_000);
+      await vi.advanceTimersByTimeAsync(0);
+      await vi.advanceTimersByTimeAsync(1_000);
+
+      await expect(result).resolves.toBe('no_answer');
+      expect(update('CA-owner')).toHaveBeenCalledWith({ status: 'completed' });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("stops ringing the owner when the other party hangs up first", async () => {
+    const { provider, update } = setup('CA-w6');
+    const result = loopIn(provider, 'CA-w6');
+    await vi.waitFor(() => expect(provider['loopIns'].get('CA-w6')?.ownerCallSid).toBe('CA-owner'));
+
+    await provider.hangUp('CA-w6');
+
+    await expect(result).resolves.toBe('no_answer');
+    expect(update('CA-owner')).toHaveBeenCalledWith({ status: 'completed' });
+  });
+
+  it('a 1 that comes after the wait is over gets an apology, not a bridge', async () => {
+    const { provider, update } = setup('CA-w7');
+    const result = loopIn(provider, 'CA-w7');
+    await vi.waitFor(() => expect(provider['loopIns'].get('CA-w7')?.ownerCallSid).toBe('CA-owner'));
+    provider.handleLoopInStatus('CA-w7', 'no-answer');
+    await result;
+
+    const ownerTwiml = await provider.acceptLoopIn('CA-w7', '1');
+    expect(ownerTwiml).toContain('already ended');
+    expect(update('CA-w7')).not.toHaveBeenCalled();
+  });
+
+  it('keeps the call with Banjo when the bridge redirect fails', async () => {
+    const { provider, update } = setup('CA-w8');
+    const result = loopIn(provider, 'CA-w8');
+    await vi.waitFor(() => expect(provider['loopIns'].get('CA-w8')?.ownerCallSid).toBe('CA-owner'));
+    // Calling update() for an unseen sid creates its fake; make the live call's reject.
+    provider['client'].calls('CA-w8');
+    update('CA-w8').mockRejectedValueOnce(new Error('twilio 500'));
+
+    const ownerTwiml = await provider.acceptLoopIn('CA-w8', '1');
+
+    await expect(result).resolves.toBe('no_answer');
+    expect(ownerTwiml).toContain("couldn't connect you");
+    expect(provider.isAnyCallActive()).toBe(true);
+  });
+
+  it("throws, and leaves nothing pending, when the owner's call can't be placed", async () => {
+    const { provider } = setup('CA-w9', { create: vi.fn(async () => { throw new Error('twilio 400'); }) });
+    await expect(loopIn(provider, 'CA-w9')).rejects.toThrow('twilio 400');
+    expect(provider['loopIns'].has('CA-w9')).toBe(false);
+  });
+
+  it('refuses a call it has no Twilio id for', async () => {
+    await expect(loopIn(new TwilioProvider(), 'nope')).rejects.toThrow();
+  });
+
+  it('escapes the brief, so words from the call can never become TwiML', () => {
+    const twiml = new TwilioProvider().buildLoopInTwiml('CA-x', 'Hi</Say><Dial>+15550000000</Dial><Say>');
+    expect(twiml).not.toContain('<Dial>');
+    expect(twiml).toContain('&lt;Dial&gt;');
+  });
+
+  it("never logs the owner's number or the brief", async () => {
+    const { provider } = setup('CA-w10');
+    fakeLog.info.mockClear();
+    const result = loopIn(provider, 'CA-w10');
+    await vi.waitFor(() => expect(provider['loopIns'].get('CA-w10')?.ownerCallSid).toBe('CA-owner'));
+    await provider.acceptLoopIn('CA-w10', '2');
+    await result;
+    const logged = JSON.stringify(fakeLog.info.mock.calls);
+    expect(logged).not.toContain(OWNER);
+    expect(logged).not.toContain('vaccination');
+  });
+});
+
+describe('TwilioProvider.stopRecording (#151)', () => {
+  /** A live call whose Twilio recordings are `listed`; each recording's update is the shared `update` spy, called with its sid. */
+  function withRecordings(callId: string, listed: { sid: string; status: string }[] | Error) {
+    const provider = new TwilioProvider();
+    provider.registerInboundCall(callId, '+15555550100');
+    const update = vi.fn(async (_sid: string, _params: unknown) => ({}));
+    const list = vi.fn(async () => {
+      if (listed instanceof Error) throw listed;
+      return listed;
+    });
+    const recordings = Object.assign(
+      vi.fn((sid: string) => ({ update: (params: unknown) => update(sid, params) })),
+      { list, create: vi.fn(async () => ({ sid: 'RE-live' })) },
+    );
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    Object.defineProperty((provider as any).client, 'calls', { value: vi.fn(() => ({ recordings })), configurable: true });
+    return { provider, update, list };
+  }
+
+  it("stops every running or paused recording Twilio reports, including one Banjo never got the SID of", async () => {
+    const { provider, update } = withRecordings('CA-r1', [
+      { sid: 'RE-known', status: 'in-progress' },
+      { sid: 'RE-lost-response', status: 'in-progress' },
+      { sid: 'RE-paused', status: 'paused' },
+      { sid: 'RE-old', status: 'completed' },
+    ]);
+    await provider.stopRecording('CA-r1');
+    expect(update.mock.calls).toEqual([
+      ['RE-known', { status: 'stopped' }],
+      ['RE-lost-response', { status: 'stopped' }],
+      ['RE-paused', { status: 'stopped' }],
+    ]);
+  });
+
+  it('has nothing to stop when nothing is running', async () => {
+    const { provider, update } = withRecordings('CA-r2', []);
+    await expect(provider.stopRecording('CA-r2')).resolves.toBeUndefined();
+    expect(update).not.toHaveBeenCalled();
+  });
+
+  it("fails closed: throws when Twilio can't be asked, or refuses the stop, or the call is unknown", async () => {
+    await expect(withRecordings('CA-r3', new Error('twilio 500')).provider.stopRecording('CA-r3')).rejects.toThrow('twilio 500');
+    const { provider, update } = withRecordings('CA-r4', [{ sid: 'RE-1', status: 'in-progress' }]);
+    update.mockRejectedValueOnce(new Error('cannot stop'));
+    await expect(provider.stopRecording('CA-r4')).rejects.toThrow('cannot stop');
+    await expect(new TwilioProvider().stopRecording('nope')).rejects.toThrow();
+  });
+
+  it("stops the recording this process started even when Twilio's list doesn't show it yet", async () => {
+    const { provider, update } = withRecordings('CA-r5', []);
+    await provider.startRecording('CA-r5'); // RE-live
+    await provider.stopRecording('CA-r5');
+    expect(update.mock.calls).toEqual([['RE-live', { status: 'stopped' }]]);
+  });
+
+  it('fails closed after a start that failed once sent: an empty list is not proof nothing is recording', async () => {
+    const { provider } = withRecordings('CA-r6', []);
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const recordings = (provider as any).client.calls('CA-r6').recordings;
+    recordings.create.mockRejectedValueOnce(new Error('socket hang up'));
+    await expect(provider.startRecording('CA-r6')).rejects.toThrow('socket hang up');
+    await expect(provider.stopRecording('CA-r6')).rejects.toThrow(/no stop can be confirmed/);
+  });
+
+  it('after an uncertain start, stops what Twilio does list and still refuses to confirm', async () => {
+    const { provider, update } = withRecordings('CA-r7', [{ sid: 'RE-other', status: 'in-progress' }]);
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (provider as any).client.calls('CA-r7').recordings.create.mockRejectedValueOnce(new Error('timeout'));
+    await expect(provider.startRecording('CA-r7')).rejects.toThrow();
+    // The listed one may not be the one that start made, which may not be listed yet.
+    await expect(provider.stopRecording('CA-r7')).rejects.toThrow(/no stop can be confirmed/);
+    expect(update.mock.calls).toEqual([['RE-other', { status: 'stopped' }]]);
+  });
+});

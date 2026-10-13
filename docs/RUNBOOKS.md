@@ -330,6 +330,23 @@ cd ~/banjo && git pull && docker compose pull && docker compose up -d
 
 Pin a release with `BANJO_VERSION` in `.env` if you don't want `latest`.
 
+## Marking a contact as family or a friend
+
+A contact's `relationshipTier` (`family`, `friend`, or none) decides who may ask Banjo about you: family and friends get answers from your owner profile, anyone else hears only what the call needs (#163). On the inbound line, it also lets Banjo greet a caller by name.
+
+It's set only from places you control, never by an MCP tool. Agents read call transcripts and summaries, which are untrusted, so one that could set a tier could be talked into widening who hears your profile.
+
+- **Google Contacts:** put the person in a group named "Family" or "Friends", or add a family relation (spouse, child, mother, sibling, relative…) to their contact. Banjo copies it the first time it saves them as a contact. It only fills in a missing tier and never changes one already set.
+- **Directly**, for a contact Banjo already has. Find their id with `find_contact`, then:
+
+  ```bash
+  # Docker: run in the directory with docker-compose.yml
+  docker compose exec -T postgres psql -U banjo -d banjo \
+    -c "update contacts set relationship_tier = 'family', updated_at = now() where id = '<contact id>' returning display_name, relationship_tier"
+  ```
+
+  Use `'friend'` for a friend, or `null` to clear it. Takes effect on the next call, with no restart.
+
 ## Cutting a release
 
 A release is a `vX.Y.Z` tag on `main`. The tag builds and publishes the multi-arch image

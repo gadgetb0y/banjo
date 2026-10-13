@@ -239,6 +239,55 @@ transfer shows only on the call attempt: `call_attempts.transfer_result`, writte
 The owner's text is the confirmation; nothing tells them the call was handed to them afterwards other
 than their phone ringing.
 
+### Warm transfer (`TRANSFER_MODE=warm`, #149)
+
+Opt-in, and not yet verified on a live call. Default `cold` is everything above. In warm mode the same
+`transfer_to_owner` tool reaches the principal on a **second line** while the other party stays on
+Banjo's media stream, so Banjo is still with them throughout:
+
+1. The model asks them to hold ("Let me see if Steve can join. It may take a minute…"), then calls the
+   tool. Its `reason` (at most 300 characters) is now a **brief**, read to the principal.
+2. `TwilioProvider.loopInOwner()` places a separate call (`calls.create` with inline TwiML, 25s ring) to
+   `TRANSFER_TO_PHONE_NUMBER`. It plays a fixed greeting, the brief, and "Press 1 to talk to them now.
+   Or hang up, and I'll carry on without you." That's two one-digit `<Gather>`s, then `<Hangup/>`.
+   The brief comes from the call, but it is XML-escaped and only ever read to the principal.
+3. **On 1** (`POST /telephony/twilio/loop-in-result`): stop any recording, as on a cold transfer.
+   Then REST-redirect the other party's call to `<Dial><Conference endConferenceOnExit="true">banjo-{callId}</Conference></Dial>`.
+   That ends Banjo's stream, and the principal's leg joins the same room with "Connecting." Either
+   side hanging up ends the conference. The call is forgotten as after `transferCall()`, the tool
+   returns `ok`, and the task becomes `transferred`, as on a cold transfer.
+4. **Anything else.** These all settle with the call still Banjo's, and the owner's leg is gone:
+   - a different key (`declined`);
+   - the owner's leg ending with no key: busy, unanswered, or their voicemail, since a greeting
+     never presses 1 (`/loop-in-status` → `no_answer`);
+   - `LOOP_IN_TIMEOUT_MS` (60s) passing;
+   - the other party hanging up first (`forgetCall` hangs up the owner's line).
+
+   The tool returns `{ ok: false, error: 'owner_unavailable', result }`, with a message telling the
+   model to say in one sentence that the principal isn't available, carry on, and not try again.
+   Nobody is bridged into voicemail.
+
+`call_attempts.transfer_result` gets `answered`, `declined` or `no_answer` from the tool handler, so
+a timeout is recorded too. The handler budget grows by the wait and one REST call
+(`WARM_TRANSFER_HANDLER_BUDGET_MS`, about 2¾ minutes by default), and the rest of the call-ending-tool machinery above
+applies unchanged. While the tool waits, nothing else can end the call and the silence watchdog
+doesn't nudge, but the other party can still talk to Banjo. The prompt tells Banjo to say only that
+it's still trying (Open Risk #24 is what makes it reply at all).
+
+Decisions for #149:
+- **Recording** stops at the bridge, as on a cold transfer. There's no setting to keep it: the other
+  party agreed to a recorded call with Banjo, not with the principal.
+- **The per-number cap** doesn't count the principal's leg. It isn't a `call_attempts` row, it only
+  ever rings the principal's own configured number, and that number must press 1 to be connected.
+- **Pending loop-ins** live in memory (`TwilioProvider.loopIns`), like `calls`. A restart mid-wait
+  drops the call anyway.
+- **A late 1**, after the wait is over, gets "Sorry, that call has already ended."
+
+Not covered: if the principal's leg drops in the moment between their 1 and joining the conference,
+the other party sits alone in a silent conference until they hang up.
+
+The sim covers all three answers with no phone: `npm run sim -- --warm --owner accept|decline|no-answer`.
+
 ---
 
 ## Data model (`src/contacts/`, `src/tasks/`)
@@ -393,6 +442,51 @@ only ("Banjo asked X 2 questions: 1 answered."). The owner's summary lists each 
 Voicemail, escalation, transfer and `end_call` (whose safety net still records `escalated`) work as
 on any call.
 
+## Waiting on hold (`wait_on_hold`, #151)
+
+Outbound calls on OpenAI Realtime can wait in a hold queue. Other providers aren't offered the tool or the prompt section; see `canWaitOnHold()`.
+
+**Going on hold.** The prompt's "Phone menus and holding" section has Banjo press through the menu silently. Once it hears a queue, it calls `wait_on_hold`, saying nothing. That tool's `startsHold` flag makes `CallSession` do four things:
+- send the tool result with `respond: false`;
+- call `VoiceAIProvider.setHold(true)`;
+- stop the silence watchdog (on hold, silence is the point);
+- start the hold limit.
+
+On OpenAI, `setHold(true)` resends `audio.input` with `turn_detection: { type: 'server_vad', create_response: false, interrupt_response: false }`. Turns are still detected and transcribed, but never answered. Each held turn is then deleted (`conversation.item.delete`) once transcribed. A long hold's audio therefore neither fills the context nor gets billed as input on the first reply after it. What the hold costs is transcription.
+
+**Is it a person?** Each new held line goes through `isRepeatOnHold()` (`src/session/hold.ts`) first. A line whose wording mostly matches one already heard on this hold is skipped, since queues repeat the same announcement every half minute. Anything new goes to `judgeHoldLine()`, an out-of-band response with these settings:
+- `conversation: 'none'`: nothing enters the call's conversation;
+- `output_modalities: ['text']`: no audio, so the other party hears nothing;
+- `tools: []` and `tool_choice: 'none'`: the line is the other party's words and could ask for anything, so
+  the judgment can't act on it. The adapter also drops any function-call event from an out-of-band
+  response;
+- tagged in `metadata`, so the adapter keeps its text and `response.done` from looking like Banjo speaking.
+
+It returns one word: PERSON or RECORDING. Judgments run one at a time, and only the latest line that arrived meanwhile is judged next. A failed or late judgment (8s) counts as a person: a person left in silence hangs up, while Banjo woken by a recording can go back on hold.
+
+**A person picks up.** `setHold(false)` runs and the owner gets a message. Then `VoiceAIProvider.addContext()` adds two conversation items:
+- a fixed system note (`personPickedUpNote`): open again with the AI disclosure, since they heard nothing from before the hold;
+- what they said, as a user line.
+
+Then a plain response is triggered. This deliberately isn't a `triggerResponse(cue)`: a cue *replaces* the session's instructions for that response, which would drop the call's rules and put the other party's words in instruction position. From there Banjo carries on, and can use the warm transfer (#149) like any call.
+
+**Recording consent: nothing is recorded after a hold.** Whoever picks up heard none of the recording notice, so the rest of the call isn't recorded at all.
+- **Before the hold starts,** `CallSession` calls off any scheduled start and sets the recording state to `'cancelled'`, which never re-arms.
+- **Then, on every recorded call, it runs `TelephonyProvider.stopRecording`,** whatever that state says. On Twilio this lists the call's recordings and stops each one `in-progress` or `paused`, plus the recording this process started even if the list doesn't show it (Twilio's lists can lag). The list covers a recording whose start reached Twilio while its response, and so its SID, never reached Banjo. If any start failed after it was sent, the stop still stops what it finds but then throws, so that call never waits on hold: Twilio may have begun that recording without listing it yet, and no list can confirm otherwise. `Twilio.CURRENT` isn't used, since it fails when a call has more than one active recording. The stop throws if the call is unknown or Twilio can't be asked.
+- **The reopening** after a pickup uses the disclosure without the notice (`pickupLine`, `disclosureLineWithoutNotice()`), since saying "this call is recorded" would now be false.
+- **Start and stop run one at a time** (`recordingOps`), so a stop can't overtake a start still in flight.
+- **Fails closed:** if the stop can't be confirmed, `wait_on_hold` is refused. No hold starts if the call ended while the recording was being stopped.
+
+This replaced a pause-and-resume design that re-established consent with the new person. Three rounds of security review each found a gap in its state machine, and keeping the recording off after a hold has no such state machine at all. The cost: the conversation with whoever picks up after a hold, usually the part that matters, isn't recorded.
+
+**Limits.** A hold lasts at most `HOLD_MAX_MINUTES` (default 20, at most 45), or the task's `constraints.maxHoldMinutes`. It's always cut short to leave 10 minutes of the voice session to talk in, since OpenAI ends a session at 60 minutes with no warning (`VoiceAIProvider.maxSessionMs`). No time left means `wait_on_hold` is refused. Running out ends the call as `escalated` with `stuckAt: 'hold_limit'`. A menu Banjo can't get through is `escalated` with `stuckAt: 'phone_menu'`, from `escalate_and_end_call`. The owner hears when a hold starts (with its limit) and when someone picks up. A hold that runs out reaches them as the usual end-of-call summary.
+
+**Not covered yet:**
+- **The other provider.** `openai-live` can't hold.
+- **Barge-in on hold.** Server VAD still raises `interrupted` on the hold music. On hold that only flushes audio Banjo isn't sending.
+- **Real queues.** The judge's accuracy on them is unmeasured: the sim covers the flow (`~` lines in a `--script` play like a recording), not real hold audio.
+
+
 ## Text-mode simulator (`src/sim/`, `scripts/sim.ts`)
 
 `npm run sim` places a call that's real everywhere except the phone line: the `place_call` handler,
@@ -510,13 +604,25 @@ The LiveKit `TelephonyProvider` adapter (`src/telephony/providers/livekit.ts` �
 
     **Re-verified (2026-10-09, v0.1.6):** on a live call, the callee redirected Banjo mid-call ("wait a second, maybe I'm not"), and Banjo kept listening and answered. The same call surfaced #139 below.
 
-27. **[FIXED, not yet re-verified against a live call]** Banjo narrated the goodbye refusal and then hung up with no goodbye (#139). On a live call on `openai` (2026-10-09, v0.1.6), Banjo said "Okay, got it—let's keep it simple and wrap things up nicely." and called `end_conversation_call`. The goodbye check refused it, correctly. Banjo then answered the refusal out loud, "Thanks for hanging on a second—I'll just finish this up with a proper goodbye.", and called the tool again. That line passed `saidGoodbye()` because it contains "goodbye", and the retry would have gone through anyway, since the refusal is spent until the other party speaks. The callee never heard a goodbye.
+27. **[FIXED, re-verified on a live call 2026-10-13]** Banjo narrated the goodbye refusal and then hung up with no goodbye (#139). On a live call on `openai` (2026-10-09, v0.1.6), Banjo said "Okay, got it—let's keep it simple and wrap things up nicely." and called `end_conversation_call`. The goodbye check refused it, correctly. Banjo then answered the refusal out loud, "Thanks for hanging on a second—I'll just finish this up with a proper goodbye.", and called the tool again. That line passed `saidGoodbye()` because it contains "goodbye", and the retry would have gone through anyway, since the refusal is spent until the other party speaks. The callee never heard a goodbye.
 
     **Fix:** (1) `saidGoodbye()` no longer counts a goodbye that is only talked about ("a proper goodbye", "say goodbye", "with a goodbye"), and "finish this up" counts as describing the ending. (2) The refusal tells the model it is a note from the system, not something the other party said, so it must not answer it or mention it, and to say only a short goodbye. (3) Structural: if a `requiresGoodbye` tool goes through (refusal spent or capped) while Banjo's latest line still has no goodbye, `CallSession` says a fixed one itself (`FALLBACK_GOODBYE`, "Okay, take care. Bye!", through `sayVerbatim` as the voicemail path does) and ends the call once it has played. The retry is still never refused a second time, so the fallback adds a few seconds but can't hold a call open. Not covered: a fallback goodbye right after a line the callee was answering sounds abrupt; that only arises once the model has ignored the refusal.
 
-    **Still not done:** a live call that hits the refusal, to check the reworded message is followed and, if not, that the fallback goodbye is heard before the hang-up.
+    **Re-verified (2026-10-13, v0.1.9):** two live calls hit the refusal. Both times the model narrated again on the retry, so the reworded message wasn't followed, but the fallback goodbye was heard before the hang-up each time. The narrated retry is #29 below.
 
-28. **[MITIGATED, not yet verified against a live call]** Pickup noise and speakerphone echo cut off the opener (#143). On a live call on `openai` (2026-10-11, v0.1.7), the pickup click started Banjo's opener, the callee's "Hello?" interrupted it, and a third "callee" line, "Hi, I'm a", was very likely Banjo's own opener echoing back from a speakerphone. Each was a server-VAD barge-in, so Banjo kept restarting, and the callee said "I can't hear you. You keep cutting off." The adapter had sent no `noise_reduction`. It now sends `audio.input.noise_reduction` from `OPENAI_NOISE_REDUCTION` (default `far_field`), which OpenAI filters before VAD. **Not covered:** turn detection is still the default `server_vad`. If noise reduction isn't enough, the next steps are a higher VAD `threshold` or `semantic_vad` with low eagerness, both of which slow every reply. `openai-live` has no barge-in flush at all (#15).
+28. **[MITIGATED, verified on a live call 2026-10-13]** Pickup noise and speakerphone echo cut off the opener (#143). On a live call on `openai` (2026-10-11, v0.1.7), the pickup click started Banjo's opener, the callee's "Hello?" interrupted it, and a third "callee" line, "Hi, I'm a", was very likely Banjo's own opener echoing back from a speakerphone. Each was a server-VAD barge-in, so Banjo kept restarting, and the callee said "I can't hear you. You keep cutting off." The adapter had sent no `noise_reduction`. It now sends `audio.input.noise_reduction` from `OPENAI_NOISE_REDUCTION` (default `far_field`), which OpenAI filters before VAD. **Not covered:** turn detection is still the default `server_vad`. If noise reduction isn't enough, the next steps are a higher VAD `threshold` or `semantic_vad` with low eagerness, both of which slow every reply. `openai-live` has no barge-in flush at all (#15).
+
+29. **[FIXED, not yet re-verified against a live call]** Banjo narrated a goodbye after the callee signed off (#144). On two live calls on `openai` (2026-10-13, v0.1.9), the callee said "Okay, thanks. Thanks. That's all." and "That's everything, thanks." Each time the model said "Let me close this out with a quick goodbye." (or "let me wrap this up for Steve") and called `end_conversation_call`. The goodbye check refused it, and the retry narrated again ("Okay, quick goodbye and then we'll be done.") before the #139 fallback said "Okay, take care. Bye!". The callee heard two narrated lines before the goodbye. The #146 prompt rule, which forbids exactly this, was ignored both times.
+
+    **Fix:** structural. The refusal exists so the call can carry on when the callee still wants something (#133). Once their latest line is a done signal, there's nothing to carry on with, and the retry only adds a line of narration. `isSigningOff()` (`src/session/goodbye.ts`) recognizes one: a thanks, a sign-off or "that's all / we're good / all set", with no question mark and no redirect word. `CallSession` then skips the refusal and says the fixed goodbye straight away. A bare "Okay" or "Mhm" doesn't count, nor does a suspect transcript (#25), so those still get the refusal. The callee now hears at most one narrated line. Removing that one too would mean catching the narration as it's spoken, which is a bigger change.
+
+    **Still not done:** a live call that ends on a done signal, to check the fixed goodbye follows the first narrated line with no refusal.
+
+30. **[FIXED, not yet re-verified against a live call]** Banjo recited the owner profile to an unknown business (#163). On a live call on `openai` (2026-10-13, v0.1.9), a callee playing a pharmacy asked "Can you tell me about Steve?" and Banjo answered from `PROMPT_PROFILE_FILE`: employer, job title, career history, patents. The profile framing allowed it: "Share a personal detail only when it matters to this call or you are asked."
+
+    **Fix:** the framing in `ownerProfileSection()` (`src/tasks/promptBuilder.ts`) now depends on the contact. For a contact whose `relationshipTier` is `family` or `friend`, Banjo may answer their questions from the profile. For anyone else, including a contact with no tier, the profile is for carrying out the call: Banjo shares only what the task needs and politely declines other questions about the owner, even when asked. In two `npm run sim` runs against real OpenAI, asked where the owner works, Banjo answered "I can't share personal details about Steve, like where he works." It still shared the dog's clipper nerves when asked, which is the kind of detail the profile is there for.
+
+    **Still not done:** a live call where the callee asks about the owner.
 
 ### Operational, not a code fix
 

@@ -40,3 +40,22 @@ export function isCuttingIn(line: string): boolean {
   if (saidGoodbye(line)) return false;
   return REDIRECT.test(line) || line.trim().split(/\s+/).length >= SENTENCE_WORDS;
 }
+
+/**
+ * Has the other party signed off? (#144)
+ *
+ * Judges their latest line when Banjo ends the call with no goodbye. After a
+ * done signal ("That's all.", "I think we're good.") the refusal above only
+ * gets a second narrated line ("Okay, quick goodbye and then we'll be done.")
+ * on live calls, so CallSession says its own goodbye straight away instead. A
+ * question or a redirect isn't a sign-off: there the refusal still lets the
+ * call carry on (#133). A bare "Okay" or "Mhm" isn't either, since it may only
+ * answer something Banjo said.
+ */
+const DONE =
+  /\b(that'?s (all|it|everything)|(we'?re|i'?m) (good|all set|done|finished)|all set|nothing else)\b/i;
+
+export function isSigningOff(line: string): boolean {
+  if (line.includes('?') || REDIRECT.test(line)) return false;
+  return DONE.test(line) || saidGoodbye(line);
+}

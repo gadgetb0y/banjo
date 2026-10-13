@@ -39,13 +39,15 @@ export interface TaskConstraints {
   dateWindows?: TimeWindow[]; // e.g. "next week after 3pm"
   durationMinutes?: number; // default applied per task type if omitted
   notes?: string; // any other free-text guidance Steve gave
+  maxHoldMinutes?: number; // the longest to wait on hold on this call (#151); HOLD_MAX_MINUTES if omitted
 }
 
 export type TaskOutcome =
   | { kind: 'confirmed'; start: string; durationMinutes: number; details?: string }
   | { kind: 'voicemail_left'; message: string }
   | { kind: 'negotiation_failed'; reason: string }
-  | { kind: 'escalated'; reason: string }
+  // stuckAt (#151): where an errand got stuck, when it's somewhere an agent may want to handle differently.
+  | { kind: 'escalated'; reason: string; stuckAt?: 'phone_menu' | 'hold_limit' }
   | { kind: 'failed'; reason: string }
   | { kind: 'conversation_completed'; summary: string }
   | { kind: 'transferred'; reason: string }
@@ -85,8 +87,12 @@ export const tasks = pgTable('tasks', {
   updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
 });
 
-/** How a transfer_to_owner dial ended, from Twilio's <Dial action> callback (#7). */
-export type TransferResult = 'answered' | 'no_answer' | 'busy' | 'failed';
+/**
+ * How a transfer_to_owner dial ended (#7): from Twilio's <Dial action> callback
+ * for a cold transfer, or the owner's own leg for a warm one (#149), where
+ * 'declined' means they answered and pressed something other than 1.
+ */
+export type TransferResult = 'answered' | 'no_answer' | 'busy' | 'failed' | 'declined';
 
 export const callAttempts = pgTable('call_attempts', {
   id: uuid('id').primaryKey().defaultRandom(),

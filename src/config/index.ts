@@ -331,11 +331,20 @@ const envSchema = z
       .enum(['true', 'false'])
       .default('false')
       .transform((v) => v === 'true'),
+    // The longest an outbound call waits on hold for a person (#151). Also cut
+    // short to leave the voice session (OpenAI: 60 minutes) ten minutes to talk
+    // in. place_call's constraints.maxHoldMinutes can lower it for one call.
+    HOLD_MAX_MINUTES: z.coerce.number().int().min(1).max(45).default(20),
+    // How transfer_to_owner reaches the principal (#149). 'cold' redirects the
+    // call to ring them, and Banjo is off the call either way. 'warm' calls
+    // them on a second line and reads them Banjo's brief: they press 1 to be
+    // bridged in, and anything else leaves Banjo on the call to carry on.
+    TRANSFER_MODE: z.enum(['cold', 'warm']).default('cold'),
     // Where a transfer rings. Fixed here, never chosen by the model, so a
     // callee can't talk Banjo into bridging them to an arbitrary number.
     TRANSFER_TO_PHONE_NUMBER: e164,
-    // Said to the other party when the transfer isn't answered (declined,
-    // busy, no answer), before hanging up.
+    // Said to the other party when a cold transfer isn't answered (declined,
+    // busy, no answer), before hanging up. A warm one never hangs up on them.
     TRANSFER_FALLBACK_MESSAGE: z
       .string()
       .min(1)

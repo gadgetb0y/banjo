@@ -24,6 +24,12 @@ vi.mock('../../src/tasks/service.js', () => ({
 const { saveTranscriptTurn } = vi.hoisted(() => ({ saveTranscriptTurn: vi.fn(async () => {}) }));
 vi.mock('../../src/transcripts/service.js', () => ({ saveTranscriptTurn }));
 
+const { sendOwnerMessage } = vi.hoisted(() => ({ sendOwnerMessage: vi.fn(async () => {}) }));
+vi.mock('../../src/notifications/owner.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../../src/notifications/owner.js')>()),
+  sendOwnerMessage,
+}));
+
 const { buildOutboundCallSessionOptions } = await import('../../src/tasks/callSessionAdapter.js');
 
 // Minimal fakes mirroring tests/session/callSession.test.ts's style — only
@@ -356,5 +362,41 @@ describe('clearing the live-call registration when a call really ends', () => {
     const options = optionsForLiveTask();
     await options.onFailure('voice ai died');
     expect(getLiveCall('task-1')).toBeUndefined();
+  });
+});
+
+describe('waiting on hold (#151)', () => {
+  const build = (task: Partial<Task> = {}) =>
+    buildOutboundCallSessionOptions({
+      task: { ...fakeTask, mode: 'booking', constraints: {}, ...task } as Task,
+      callAttempt: fakeCallAttempt,
+      contact: { ...fakeContact, displayName: 'Main Street Pharmacy' } as Contact,
+      telephony: fakeTelephony,
+      calendar: fakeCalendar,
+      systemPrompt: 'irrelevant for this test',
+    });
+
+  it('offers wait_on_hold on OpenAI Realtime, the provider that can hold', () => {
+    expect(build().tools.some((t) => t.name === 'wait_on_hold')).toBe(true);
+  });
+
+  it("uses the task's own hold limit when it sets one", () => {
+    expect(build().maxHoldMs).toBeUndefined();
+    expect(build({ constraints: { maxHoldMinutes: 30 } }).maxHoldMs).toBe(30 * 60_000);
+  });
+
+  it('tells the owner when a hold starts and when someone picks up', async () => {
+    const options = build();
+    await options.onHoldChange!({ kind: 'started', maxMs: 20 * 60_000 });
+    await options.onHoldChange!({ kind: 'person', waitedMs: 7 * 60_000 + 10_000 });
+    expect(sendOwnerMessage).toHaveBeenNthCalledWith(1, 'Banjo is on hold with Main Street Pharmacy and will wait up to 20 minutes.');
+    expect(sendOwnerMessage).toHaveBeenNthCalledWith(2, 'Someone picked up at Main Street Pharmacy after 7 minutes on hold. Banjo is talking to them now.');
+  });
+
+  it("records a hold that ran out as escalated, stuck at the hold limit", async () => {
+    await build().onHoldLimit!(20 * 60_000);
+    expect(transitionTask).toHaveBeenCalledWith('task-1', 'escalated', {
+      outcome: { kind: 'escalated', reason: 'Waited on hold for 20 minutes and nobody picked up, so Banjo hung up.', stuckAt: 'hold_limit' },
+    });
   });
 });

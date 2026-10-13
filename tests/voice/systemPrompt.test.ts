@@ -332,3 +332,45 @@ describe('voicemail (#71)', () => {
     }
   });
 });
+
+describe('warm transfer guidance (#149)', () => {
+  it('says Banjo is trying to reach the principal, may come back, and must not promise them', async () => {
+    const { config } = await import('../../src/config/index.js');
+    try {
+      config.TRANSFER_ENABLED = true;
+      config.TRANSFER_MODE = 'warm';
+      for (const direction of ['outbound', 'inbound'] as const) {
+        const prompt = buildBaseSystemPromptGuidance(direction);
+        expect(prompt).toContain('Bringing in Alex:');
+        expect(prompt).not.toContain('Transferring to Alex:');
+        expect(prompt).toContain('It may take a minute, so please hold.');
+        expect(prompt).toContain("Never say Alex is coming before the result says so.");
+        expect(prompt).toContain(direction === 'outbound' ? 'escalate_and_end_call' : 'flag_for_owner_and_end_call');
+        const frontend = buildFrontendSystemPromptGuidance(direction);
+        expect(frontend).toContain("Reaching Alex is also your backend's job");
+        expect(frontend).not.toMatch(/delegate the transfer/i);
+      }
+    } finally {
+      config.TRANSFER_ENABLED = false;
+      config.TRANSFER_MODE = 'cold';
+    }
+  });
+});
+
+describe('phone menu and hold guidance (#151)', () => {
+  it('is in outbound prompts on OpenAI Realtime, and never in inbound ones', () => {
+    expect(buildBaseSystemPromptGuidance('outbound')).toContain('Phone menus and holding:');
+    expect(buildBaseSystemPromptGuidance('outbound')).toContain('use wait_on_hold, saying nothing');
+    expect(buildBaseSystemPromptGuidance('inbound')).not.toContain('wait_on_hold');
+  });
+
+  it('is left out where the voice provider cannot hold', async () => {
+    const { config } = await import('../../src/config/index.js');
+    try {
+      config.VOICE_AI_PROVIDER = 'openai-live';
+      expect(buildBaseSystemPromptGuidance('outbound')).not.toContain('wait_on_hold');
+    } finally {
+      config.VOICE_AI_PROVIDER = 'openai';
+    }
+  });
+});

@@ -6,7 +6,7 @@ import { childLogger } from '../../lib/logger.js';
 import { pcm16ToMuLaw } from '../audio/codec.js';
 import type { AudioChunk } from '../../voice/types.js';
 import type { TransferResult } from '../../tasks/schema.js';
-import type { TelephonyEvent, TelephonyEventListener, TelephonyProvider } from './types.js';
+import type { LoopInResult, TelephonyEvent, TelephonyEventListener, TelephonyProvider } from './types.js';
 
 const logger = childLogger({ component: 'telephony:twilio' });
 
@@ -56,6 +56,9 @@ interface TwilioCallState {
   providerCallId: string | null;
   toNumber: string;
   recordingSid?: string; // set by startRecording, so transferCall can stop it (#7)
+  // A start that failed after it was sent (#151): Twilio may still have begun
+  // recording, and not list it yet. stopRecording then can't confirm a stop.
+  recordingUncertain?: boolean;
 }
 
 function sleep(ms: number): Promise<void> {
@@ -91,6 +94,26 @@ const TRANSFER_SCREEN_PROMPT = 'Your AI assistant is transferring a call to you.
 const TRANSFER_SCREEN_TIMEOUT_S = 5;
 /** How long an accepted screen waits for its transfer callback (which comes when the bridged call ends) before it's swept: Twilio's default <Dial> timeLimit, 4 hours. */
 const ACCEPTED_TRANSFER_TTL_MS = 4 * 60 * 60_000;
+
+/** How long the owner's line rings on a warm transfer (#149) before Twilio gives up on it. */
+const LOOP_IN_RING_TIMEOUT_S = 25;
+/** Seconds each "press 1" prompt on the owner's leg waits for a key (#149). */
+const LOOP_IN_KEY_TIMEOUT_S = 6;
+/** Said to the owner first on a warm transfer (#149), ahead of Banjo's brief. */
+const LOOP_IN_GREETING = 'Hi, this is your AI assistant, on a call for you.';
+const LOOP_IN_PROMPT = "Press 1 to talk to them now. Or hang up, and I'll carry on without you.";
+
+/**
+ * A warm transfer in progress (#149), keyed by the call it belongs to.
+ * `bridging` is set once the owner presses 1: from then on, nothing but the
+ * bridge itself may settle it or hang up their leg.
+ */
+interface PendingLoopIn {
+  ownerCallSid?: string;
+  bridging: boolean;
+  timer?: NodeJS.Timeout;
+  settle: (result: LoopInResult) => void;
+}
 
 /**
  * The final CallStatus values handleStatusCallback acts on, and the reason each
@@ -130,6 +153,8 @@ export class TwilioProvider implements TelephonyProvider {
    * ACCEPTED_TRANSFER_TTL_MS.
    */
   private readonly acceptedTransfers = new Map<string, number>();
+  /** Warm transfers waiting on the owner (#149). Per process, like `calls`. */
+  private readonly loopIns = new Map<string, PendingLoopIn>();
   /** Calls forgotten recently, so a repeat hangUp() isn't mistaken for an unknown call. Capped: oldest dropped first. */
   private readonly recentlyEnded = new Set<string>();
   private readonly inboundRegistrationTimers = new Map<string, NodeJS.Timeout>();
@@ -588,6 +613,10 @@ export class TwilioProvider implements TelephonyProvider {
   /** The only way a call leaves `calls` — remembered in recentlyEnded (see hangUp). */
   private forgetCall(callId: string): void {
     this.calls.delete(callId);
+    // The other party hung up while Banjo was reaching the owner (#149): stop
+    // ringing them for a call that's gone. A bridge in progress forgets the
+    // call itself and is left alone.
+    if (!this.loopIns.get(callId)?.bridging) this.finishLoopIn(callId, 'no_answer', { hangUpOwner: true });
     this.recentlyEnded.add(callId);
     if (this.recentlyEnded.size > RECENTLY_ENDED_LIMIT) {
       const oldest = this.recentlyEnded.values().next().value;
@@ -711,6 +740,145 @@ export class TwilioProvider implements TelephonyProvider {
   }
 
   /**
+   * Warm transfer (#149). The other party stays on Banjo's media stream, so
+   * Banjo is still with them, while a second call rings the owner and reads
+   * them the brief (buildLoopInTwiml). Their key press arrives through
+   * acceptLoopIn. Pressing 1 bridges both legs into a two-person conference,
+   * and anything else settles this promise with the call still Banjo's. So
+   * do the second call's end (handleLoopInStatus), the other party hanging
+   * up (forgetCall), and `timeoutMs` passing.
+   */
+  async loopInOwner(callId: string, opts: { to: string; brief: string; timeoutMs: number }): Promise<LoopInResult> {
+    if (!this.calls.get(callId)?.providerCallId) throw new Error(`loopInOwner: no live Twilio call for ${callId}`);
+    if (this.loopIns.has(callId)) throw new Error(`loopInOwner: already reaching the owner for ${callId}`);
+    let settle!: (result: LoopInResult) => void;
+    const result = new Promise<LoopInResult>((resolve) => (settle = resolve));
+    const pending: PendingLoopIn = { bridging: false, settle };
+    this.loopIns.set(callId, pending);
+    try {
+      const ownerCall = await this.client.calls.create({
+        to: opts.to,
+        from: config.TWILIO_PHONE_NUMBER as string,
+        twiml: this.buildLoopInTwiml(callId, opts.brief),
+        timeout: LOOP_IN_RING_TIMEOUT_S,
+        statusCallback: `https://${config.PUBLIC_HOSTNAME}/telephony/twilio/loop-in-status?callId=${encodeURIComponent(callId)}`,
+        statusCallbackMethod: 'POST',
+        statusCallbackEvent: ['completed'],
+      });
+      pending.ownerCallSid = ownerCall.sid;
+    } catch (err) {
+      this.loopIns.delete(callId);
+      throw err;
+    }
+    // Settled already: the other party hung up while the owner's call was being placed.
+    if (this.loopIns.get(callId) !== pending) {
+      if (pending.ownerCallSid) this.hangUpOwnerLeg(callId, pending.ownerCallSid);
+      return result;
+    }
+    // No owner number or brief in the log: both are the principal's.
+    logger.info({ callId, ownerCallSid: pending.ownerCallSid }, 'warm transfer: calling the owner on a second line');
+    pending.timer = setTimeout(() => {
+      if (!pending.bridging) this.finishLoopIn(callId, 'no_answer', { hangUpOwner: true });
+    }, opts.timeoutMs);
+    return result;
+  }
+
+  /**
+   * The owner's leg (#149): the brief, then "press 1", asked twice. Silence,
+   * which is what their voicemail gives, ends in a hang-up, and the call is
+   * still Banjo's. The brief is Banjo's words about the call, read only to
+   * the owner.
+   */
+  buildLoopInTwiml(callId: string, brief: string): string {
+    const response = new twilioLib.twiml.VoiceResponse();
+    const action = `https://${config.PUBLIC_HOSTNAME}/telephony/twilio/loop-in-result?callId=${encodeURIComponent(callId)}`;
+    const first = response.gather({ numDigits: 1, timeout: LOOP_IN_KEY_TIMEOUT_S, action });
+    first.say(LOOP_IN_GREETING);
+    first.say(brief);
+    first.say(LOOP_IN_PROMPT);
+    response.gather({ numDigits: 1, timeout: LOOP_IN_KEY_TIMEOUT_S, action }).say(LOOP_IN_PROMPT);
+    response.hangup();
+    return response.toString();
+  }
+
+  /**
+   * The owner's key press on a warm transfer (#149), returning the TwiML for
+   * their leg. On 1, the other party's call is redirected into a conference
+   * and Banjo's stream with it, and the owner joins it. Either one leaving
+   * ends it for both. A recording stops first, as on a cold transfer. Any
+   * other key, or a 1 that comes too late, hangs up the owner's leg.
+   */
+  async acceptLoopIn(callId: string, digits: string): Promise<string> {
+    const response = new twilioLib.twiml.VoiceResponse();
+    const pending = this.loopIns.get(callId);
+    if (!pending || pending.bridging) {
+      response.say('Sorry, that call has already ended.');
+      response.hangup();
+      return response.toString();
+    }
+    if (digits !== '1') {
+      this.finishLoopIn(callId, 'declined', { hangUpOwner: false });
+      response.say("Okay, I'll carry on without you.");
+      response.hangup();
+      return response.toString();
+    }
+    pending.bridging = true;
+    const state = this.calls.get(callId);
+    const room = `banjo-${callId}`;
+    try {
+      if (!state?.providerCallId) throw new Error('the call has ended');
+      const call = this.client.calls(state.providerCallId);
+      if (state.recordingSid) {
+        await call
+          .recordings(state.recordingSid)
+          .update({ status: 'stopped' })
+          .catch((err: unknown) => logger.warn({ err, callId }, 'could not stop the recording before the warm transfer — bridging anyway'));
+      }
+      const theirs = new twilioLib.twiml.VoiceResponse();
+      theirs.dial().conference({ beep: 'false', endConferenceOnExit: true, waitUrl: '' }, room);
+      await call.update({ twiml: theirs.toString() });
+    } catch (err) {
+      logger.warn({ err, callId }, 'warm transfer: the owner accepted, but bridging failed — the call is still Banjo\'s');
+      this.finishLoopIn(callId, 'no_answer', { hangUpOwner: false });
+      response.say("Sorry, I couldn't connect you. I'll carry on without you.");
+      response.hangup();
+      return response.toString();
+    }
+    logger.info({ callId }, 'warm transfer: the owner accepted — bridging');
+    // As after transferCall: the stream's 'stop' will follow, and CallSession's teardown hangUp() must not end the bridged call.
+    this.clearInboundRegistrationTimeout(callId);
+    this.forgetCall(callId);
+    this.finishLoopIn(callId, 'accepted', { hangUpOwner: false });
+    response.say('Connecting.');
+    response.dial().conference({ beep: 'false', endConferenceOnExit: true, waitUrl: '' }, room);
+    return response.toString();
+  }
+
+  /** The owner's leg ended (#149). Settles a warm transfer still waiting on them: busy, no answer, or they hung up without pressing a key. */
+  handleLoopInStatus(callId: string, callStatus: string): void {
+    const pending = this.loopIns.get(callId);
+    if (!pending || pending.bridging) return;
+    logger.info({ callId, callStatus }, 'warm transfer: the owner\'s line ended without accepting');
+    this.finishLoopIn(callId, 'no_answer', { hangUpOwner: false });
+  }
+
+  private finishLoopIn(callId: string, result: LoopInResult, opts: { hangUpOwner: boolean }): void {
+    const pending = this.loopIns.get(callId);
+    if (!pending) return;
+    this.loopIns.delete(callId);
+    clearTimeout(pending.timer);
+    if (opts.hangUpOwner && pending.ownerCallSid) this.hangUpOwnerLeg(callId, pending.ownerCallSid);
+    pending.settle(result);
+  }
+
+  private hangUpOwnerLeg(callId: string, ownerCallSid: string): void {
+    this.client
+      .calls(ownerCallSid)
+      .update({ status: 'completed' })
+      .catch((err: unknown) => logger.warn({ err, callId }, "warm transfer: could not hang up the owner's line"));
+  }
+
+  /**
    * Two-track recording (callee and Banjo on separate channels) on the live
    * call, via the in-progress-call Recordings API — the method the demo
    * recordings used, starting ~0.13s after it's asked. Called by CallSession
@@ -719,11 +887,44 @@ export class TwilioProvider implements TelephonyProvider {
   async startRecording(callId: string): Promise<{ recordingId: string }> {
     const providerCallId = this.calls.get(callId)?.providerCallId;
     if (!providerCallId) throw new Error(`startRecording: no live Twilio call for ${callId}`);
-    const recording = await this.client.calls(providerCallId).recordings.create({ recordingChannels: 'dual', recordingTrack: 'both' });
+    let recording: { sid: string };
+    try {
+      recording = await this.client.calls(providerCallId).recordings.create({ recordingChannels: 'dual', recordingTrack: 'both' });
+    } catch (err) {
+      const failed = this.calls.get(callId);
+      if (failed) failed.recordingUncertain = true;
+      throw err;
+    }
     const state = this.calls.get(callId);
     if (state) state.recordingSid = recording.sid;
     logger.info({ callId, recordingId: recording.sid }, 'call recording started');
     return { recordingId: recording.sid };
+  }
+
+  /**
+   * Stops every recording on the call for good (#151). It stops what Twilio
+   * lists as running or paused, plus the recording this process started even
+   * if the list doesn't show it (Twilio's lists can lag). Fails closed: throws
+   * for a call it can't find, if Twilio can't be asked, or whenever a start
+   * failed after it was sent: Twilio may have begun that recording without
+   * listing it yet, so no list can confirm the stop. It still stops what it
+   * finds first.
+   */
+  async stopRecording(callId: string): Promise<void> {
+    const state = this.calls.get(callId);
+    if (!state?.providerCallId) throw new Error(`stopRecording: no live Twilio call for ${callId}`);
+    const call = this.client.calls(state.providerCallId);
+    const listed = await call.recordings.list();
+    const toStop = new Set(listed.filter((r) => r.status === 'in-progress' || r.status === 'paused').map((r) => r.sid));
+    const known = state.recordingSid;
+    if (known && !listed.some((r) => r.sid === known)) toStop.add(known);
+    for (const sid of toStop) {
+      await call.recordings(sid).update({ status: 'stopped' });
+      logger.info({ callId, recordingId: sid }, 'call recording stopped');
+    }
+    if (state.recordingUncertain) {
+      throw new Error(`stopRecording: a recording start on ${callId} failed after it was sent, so no stop can be confirmed`);
+    }
   }
 
   /** Deletes a recording from Twilio. Already gone (404) counts as deleted, so retention can't get stuck on one. */

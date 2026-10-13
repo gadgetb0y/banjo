@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { SimTelephonyProvider } from '../../src/sim/simTelephony.js';
 import type { TelephonyEvent } from '../../src/telephony/providers/types.js';
 
@@ -37,5 +37,32 @@ describe('SimTelephonyProvider', () => {
     await telephony.hangUp('call-1');
     expect(lines).toEqual(['[You hung up]']);
     expect(events.filter((e) => e.type === 'ended')).toEqual([{ callId: 'call-1', type: 'ended', reason: 'callee hung up' }]);
+  });
+});
+
+describe('SimTelephonyProvider warm transfer (#149)', () => {
+  it.each([
+    ['accepted', 1, 'joined the call'],
+    ['declined', 0, 'declined'],
+    ['no_answer', 0, "didn't answer"],
+  ] as const)('owner %s: reports the brief, then answers as set up', async (owner, endedEvents, reported) => {
+    const lines: string[] = [];
+    const telephony = new SimTelephonyProvider((line) => lines.push(line), owner);
+    const events: TelephonyEvent[] = [];
+    telephony.on('event', (event) => events.push(event));
+    await telephony.originateCall({ to: '+12025550142', callId: 'call-1' });
+
+    vi.useFakeTimers();
+    try {
+      const result = telephony.loopInOwner('call-1', { to: '+12025550199', brief: 'Pam needs you.' });
+      await vi.advanceTimersByTimeAsync(5_000);
+      await expect(result).resolves.toBe(owner);
+    } finally {
+      vi.useRealTimers();
+    }
+
+    expect(lines[0]).toContain('They hear: "Pam needs you."');
+    expect(lines[1]).toContain(reported);
+    expect(events.filter((e) => e.type === 'ended')).toHaveLength(endedEvents);
   });
 });

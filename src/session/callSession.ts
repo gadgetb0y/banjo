@@ -10,7 +10,8 @@ import { createAudioPlaybackTracker, type AudioPlaybackTracker } from './audioPl
 import { negotiateAudioFormats, resolveAudioPipeline, type AudioPipeline } from './audioPipeline.js';
 import type { CallContext } from './types.js';
 import { checkDisclosure, type DisclosureResult } from './disclosure.js';
-import { isCuttingIn, saidGoodbye } from './goodbye.js';
+import { isCuttingIn, isSigningOff, saidGoodbye } from './goodbye.js';
+import { holdBudgetMs, isRepeatOnHold, personPickedUpNote } from './hold.js';
 import { classifyTranscript } from './transcriptQuality.js';
 
 export type CallSessionState = 'connecting' | 'active' | 'tool-pending' | 'ending' | 'ended' | 'error';
@@ -107,6 +108,13 @@ export function openingLineCue(openingLine: string): string {
 // handleToolCall) — also that tool's budget when the call ends around it.
 const TOOL_PENDING_WATCHDOG_MS = 15_000;
 
+/** Voice-session time kept back from a hold (#151), to talk in once a person picks up. */
+const HOLD_SESSION_RESERVE_MS = 10 * 60_000;
+/** What a hold can last when the session's options don't say: HOLD_MAX_MINUTES. */
+const DEFAULT_MAX_HOLD_MS = config.HOLD_MAX_MINUTES * 60_000;
+/** Lines kept as context for a hold judgment: enough to show what repeats. */
+const HOLD_CONTEXT_LINES = 6;
+
 // Beyond a running tool's own budget, how long end()/fail() keep waiting for
 // it (see waitForInFlightToolHandlers) — covers its DB write after its
 // bounded work returns.
@@ -181,6 +189,29 @@ export interface CallSessionOptions<TCtx = CallContext> {
    * awaited by the call.
    */
   onTranscript(turn: TranscriptTurn): Promise<void>;
+  /**
+   * What Banjo opens with to a person who picks up after a hold (#151): the AI
+   * disclosure with no recording notice, since nothing is recorded after a
+   * hold. Without one, Banjo is told to say it's an AI in its own words.
+   */
+  pickupLine?: string;
+  /** How long this call may wait on hold (#151). Defaults to HOLD_MAX_MINUTES; always cut short to fit the voice session. */
+  maxHoldMs?: number;
+  /** A hold started (with how long it may last) or ended because a person picked up (#151). Must not throw into the call. */
+  onHoldChange?(change: { kind: 'started'; maxMs: number } | { kind: 'person'; waitedMs: number }): Promise<void>;
+  /** The hold ran out with no person (#151): record it. The call then ends. */
+  onHoldLimit?(waitedMs: number): Promise<void>;
+}
+
+/** A hold in progress (#151). */
+interface Hold {
+  startedAt: number;
+  timer: ReturnType<typeof setTimeout>;
+  /** Every new line heard on this hold, judged or not. */
+  heard: string[];
+  /** A judgment is out: lines arriving meanwhile wait, and only the latest is judged next. */
+  judging: boolean;
+  nextLine?: string;
 }
 
 export interface TranscriptTurn {
@@ -209,6 +240,8 @@ export class CallSession<TCtx = CallContext> {
   /** Who spoke the latest transcribed line, and Banjo's latest line — what the goodbye check (#102) judges. */
   private lastSpeaker: 'user' | 'assistant' | undefined;
   private lastAssistantLine = '';
+  /** Their latest line that isn't suspect (#25) — whether they signed off (#144). */
+  private lastUserLine = '';
   /**
    * A call-ending tool is refused (no goodbye #102, or the other party cutting
    * in #133) at most once until the other party speaks again: a refusal can
@@ -231,6 +264,12 @@ export class CallSession<TCtx = CallContext> {
    * match any later line that merely says "recorded".
    */
   private recordingState: 'idle' | 'awaiting_turn_end' | 'scheduled' | 'cancelled' = 'idle';
+  /**
+   * Starting and stopping the recording, one at a time (#151): a stop sent
+   * while a start is still in flight could land first, and the recording
+   * would then run on through the hold.
+   */
+  private recordingOps: Promise<unknown> = Promise.resolve();
   private recordingTimer: ReturnType<typeof setTimeout> | null = null;
   /** When the recording notice itself is estimated to finish playing — a barge-in before then may have flushed it (#71). */
   private recordingNoticePlayedAt = 0;
@@ -271,6 +310,10 @@ export class CallSession<TCtx = CallContext> {
    * Banjo's) goes back to normal.
    */
   private callEndingToolCallId: string | null = null;
+  /** Waiting on hold (#151), or null. While set, the silence watchdog stays off and the model is never prompted. */
+  private hold: Hold | null = null;
+  /** When the voice session connected: a hold must end in time to leave the session room to talk (#151). */
+  private voiceConnectedAt: number | undefined;
 
   constructor(private readonly opts: CallSessionOptions<TCtx>) {
     this.voiceAI = createVoiceAIProvider();
@@ -310,6 +353,8 @@ export class CallSession<TCtx = CallContext> {
       await this.fail('voice_ai_connect_failed', err);
       return;
     }
+
+    this.voiceConnectedAt = Date.now();
 
     // The call can end while the voice AI is still connecting — a call that
     // fails at once, reported by Twilio's status callback (#79). end() has
@@ -423,6 +468,7 @@ export class CallSession<TCtx = CallContext> {
           // ends; any other line of theirs means the call carried on, so the
           // ending checks apply afresh.
           if (event.role === 'user' && quality === 'ok') {
+            this.lastUserLine = event.text;
             if (this.callEndingToolCallId !== null) this.calleeSpokeDuringEnd = event.text;
             else this.endRefused = false;
           }
@@ -437,6 +483,10 @@ export class CallSession<TCtx = CallContext> {
             );
           }
           if (quality === 'suspect') break;
+          if (event.role === 'user' && this.hold) {
+            this.considerHoldLine(event.text);
+            break;
+          }
         }
         // A finalized USER turn is exactly the moment the model is expected
         // to start responding (via OpenAI's server-side VAD auto-response,
@@ -520,7 +570,7 @@ export class CallSession<TCtx = CallContext> {
    * turn and stays fixed until something clears it.
    */
   private armSilenceWatchdogIfNeeded(): void {
-    if (this.silenceWatchdog || this.callEndingToolCallId !== null) return;
+    if (this.silenceWatchdog || this.callEndingToolCallId !== null || this.hold) return;
     this.silenceNudgeSent = false;
     this.silenceWatchdog = setTimeout(() => this.handleSilenceWatchdogFired(), SILENCE_WATCHDOG_MS);
   }
@@ -533,6 +583,8 @@ export class CallSession<TCtx = CallContext> {
 
   private handleSilenceWatchdogFired(): void {
     this.silenceWatchdog = null;
+    // On hold, silence is the point (#151).
+    if (this.hold) return;
     // Nothing to nudge while a call-ending tool runs (see callEndingToolCallId).
     if (this.callEndingToolCallId !== null) return;
     if (!this.silenceNudgeSent) {
@@ -585,11 +637,17 @@ export class CallSession<TCtx = CallContext> {
     const delay = Math.max(0, turnPlayedAt - Date.now()) + RECORDING_START_MARGIN_MS;
     this.recordingTimer = setTimeout(() => {
       this.recordingTimer = null;
-      telephony
-        .startRecording!(callId)
+      void this.runRecordingOp(() => telephony.startRecording!(callId))
         .then(({ recordingId }) => this.opts.onStatusChange({ kind: 'recording_started', recordingId }))
         .catch((err) => logger.error({ err, callId }, 'failed to start call recording — the call continues unrecorded'));
     }, delay);
+  }
+
+  /** Runs a recording start or stop after any still in flight (see recordingOps). */
+  private runRecordingOp<T>(op: () => Promise<T>): Promise<T> {
+    const result = this.recordingOps.then(op);
+    this.recordingOps = result.catch(() => {});
+    return result;
   }
 
   private cancelPendingRecording(): void {
@@ -729,8 +787,16 @@ export class CallSession<TCtx = CallContext> {
       // Judged only when Banjo's line for this turn has been transcribed
       // (openai-live finalizes transcripts late), and refused once until the
       // other party speaks again, so a missed match can delay a hang-up but
-      // never block it.
-      if (tool.requiresGoodbye && this.canRefuseEnd() && this.lastSpeaker === 'assistant' && !saidGoodbye(this.lastAssistantLine)) {
+      // never block it. Not once they've signed off (#144): there the retry
+      // only narrated again on live calls, so the fixed goodbye below is said
+      // straight away.
+      if (
+        tool.requiresGoodbye &&
+        this.canRefuseEnd() &&
+        this.lastSpeaker === 'assistant' &&
+        !saidGoodbye(this.lastAssistantLine) &&
+        !isSigningOff(this.lastUserLine)
+      ) {
         this.endRefused = true;
         this.endRefusals++;
         logger.warn({ callId: this.opts.callId, toolCallId, name }, 'Refusing a call-ending tool once: no goodbye was said');
@@ -754,9 +820,10 @@ export class CallSession<TCtx = CallContext> {
         );
         return;
       }
-      // #139: past the refusal above (already spent, or capped), the model can
-      // still end on a line with no goodbye. Say one for it rather than refuse
-      // again, so the other party hears a goodbye and the call still ends.
+      // #139: past the refusal above (already spent, capped, or skipped
+      // because they signed off, #144), the model can still end on a line with
+      // no goodbye. Say one for it rather than refuse again, so the other
+      // party hears a goodbye and the call still ends.
       if (tool.requiresGoodbye && this.lastSpeaker === 'assistant' && !saidGoodbye(this.lastAssistantLine)) {
         logger.warn({ callId: this.opts.callId, toolCallId, name }, 'Saying a fixed goodbye before ending the call: none was said');
         this.armToolPendingWatchdog(toolCallId, name, VERBATIM_TOOL_PENDING_BUDGET_MS);
@@ -782,8 +849,36 @@ export class CallSession<TCtx = CallContext> {
       // reflects that speech's audio too — audioPlaybackTracker already
       // recorded it via the normal audio_chunk path (handleVoiceAIEvent),
       // regardless of why the model was speaking.
+      if (tool.startsHold) {
+        const refusal = this.holdRefusal();
+        if (refusal) {
+          this.voiceAI.sendToolResult(toolCallId, refusal, true);
+          return;
+        }
+      }
       const ctx = await this.opts.buildToolContext(this.audioPlaybackTracker.estimatedDoneAt(), verbatimDelivery);
       const result = await tool.handler(parsed.data, ctx);
+      if (tool.startsHold && (result as { ok?: unknown })?.ok === true) {
+        const stopped = await this.endRecordingForHold();
+        // The call ended while the recording was being stopped: nothing to hold.
+        if (this.isEnding()) return;
+        if (!stopped) {
+          this.voiceAI.sendToolResult(
+            toolCallId,
+            {
+              ok: false,
+              error: 'hold_unavailable',
+              message: 'Waiting on hold is not possible on this call right now. Escalate, saying you could not wait on hold.',
+            },
+            true,
+          );
+          return;
+        }
+        // No reply to the result: Banjo has nothing to say to a hold queue.
+        this.voiceAI.sendToolResult(toolCallId, result, false, { respond: false });
+        this.startHold();
+        return;
+      }
       this.voiceAI.sendToolResult(toolCallId, result, false);
     } catch (err) {
       logger.error({ err, toolCallId, name }, 'Tool handler threw');
@@ -799,6 +894,140 @@ export class CallSession<TCtx = CallContext> {
    * resolves, or after timeoutMs if neither does — a missing/late signal shouldn't hang a
    * hang-up tool forever. See handleToolCall's endsCall branch.
    */
+  /** Why this call can't wait on hold right now (#151), as a tool result, or undefined if it can. */
+  private holdRefusal(): Record<string, unknown> | undefined {
+    if (this.hold) return { ok: false, error: 'already_on_hold', message: 'You are already waiting on hold. Say nothing.' };
+    if (!this.voiceAI.setHold || !this.voiceAI.judgeHoldLine || !this.voiceAI.addContext) {
+      return { ok: false, error: 'hold_unsupported', message: 'Waiting on hold is not available on this call. Escalate instead.' };
+    }
+    if (this.holdBudget() <= 0) {
+      return {
+        ok: false,
+        error: 'hold_unavailable',
+        message: 'There is not enough time left on this call to wait on hold. Escalate, saying you could not wait on hold any longer.',
+      };
+    }
+    return undefined;
+  }
+
+  private holdBudget(): number {
+    return holdBudgetMs({
+      maxHoldMs: this.opts.maxHoldMs ?? DEFAULT_MAX_HOLD_MS,
+      now: Date.now(),
+      sessionStartedAt: this.voiceConnectedAt,
+      maxSessionMs: this.voiceAI.maxSessionMs,
+      reserveMs: HOLD_SESSION_RESERVE_MS,
+    });
+  }
+
+  /** On hold (#151): the model stops replying, the silence watchdog stops, and a limit starts running. */
+  private startHold(): void {
+    const maxMs = this.holdBudget();
+    this.clearSilenceWatchdog();
+    this.voiceAI.setHold?.(true);
+    this.hold = { startedAt: Date.now(), timer: setTimeout(() => void this.holdLimitReached(), maxMs), heard: [], judging: false };
+    logger.info({ callId: this.opts.callId, maxMs }, 'waiting on hold');
+    void this.opts.onHoldChange?.({ kind: 'started', maxMs }).catch((err: unknown) => logger.warn({ err, callId: this.opts.callId }, 'onHoldChange failed'));
+  }
+
+  /**
+   * Consent on hold (#151, #8): nothing is recorded after a hold, for the rest
+   * of the call. Whoever picks up heard none of the notice, and keeping the
+   * recording off is simpler and safer than re-establishing consent with them.
+   * A recording not yet started is called off, and every recording on the
+   * call is stopped. 'cancelled' never re-arms. Fails closed: false if the
+   * stop can't be confirmed, and then there is no hold.
+   */
+  private async endRecordingForHold(): Promise<boolean> {
+    const { telephony, callId } = this.opts;
+    // Called off before anything else, so nothing new can start meanwhile.
+    this.cancelPendingRecording();
+    this.recordingState = 'cancelled';
+    // A call that can't be recorded has nothing to stop. Any other is stopped
+    // whatever recordingState says, so no slip in that state can leave a
+    // recording running through the hold.
+    if (!this.opts.recordCalls || !telephony.startRecording) return true;
+    if (!telephony.stopRecording) {
+      logger.error({ callId }, 'cannot stop the recording for a hold — not waiting on hold');
+      return false;
+    }
+    try {
+      await this.runRecordingOp(() => telephony.stopRecording!(callId));
+      logger.info({ callId }, 'recording stopped for the hold — the rest of this call is not recorded');
+      return true;
+    } catch (err) {
+      logger.error({ err, callId }, 'could not stop the recording for a hold — not waiting on hold');
+      return false;
+    }
+  }
+
+  /** Ends the hold without a word to anyone: the call ending, or the start of leaving it. */
+  private stopHold(): Hold | null {
+    const hold = this.hold;
+    if (!hold) return null;
+    clearTimeout(hold.timer);
+    this.hold = null;
+    this.voiceAI.setHold?.(false);
+    return hold;
+  }
+
+  /** A new line on hold (#151): skipped if it repeats one already heard, otherwise judged, one judgment at a time. */
+  private considerHoldLine(line: string): void {
+    const hold = this.hold;
+    if (!hold) return;
+    if (isRepeatOnHold(line, hold.heard)) return;
+    if (hold.judging) {
+      hold.nextLine = line;
+      return;
+    }
+    void this.judgeHoldLine(hold, line);
+  }
+
+  private async judgeHoldLine(hold: Hold, line: string): Promise<void> {
+    hold.judging = true;
+    const earlier = hold.heard.slice(-HOLD_CONTEXT_LINES);
+    hold.heard.push(line);
+    const verdict = await this.voiceAI.judgeHoldLine!(line, earlier);
+    hold.judging = false;
+    // The hold ended while this was out: the call ended, or its limit ran out.
+    if (this.hold !== hold) return;
+    logger.info({ callId: this.opts.callId, verdict }, 'judged a line heard on hold');
+    if (verdict === 'person') {
+      this.personPickedUp(line);
+      return;
+    }
+    const next = hold.nextLine;
+    hold.nextLine = undefined;
+    if (next !== undefined) this.considerHoldLine(next);
+  }
+
+  /** A person picked up (#151): off hold, and Banjo opens to them, disclosure first. */
+  private personPickedUp(line: string): void {
+    const hold = this.stopHold();
+    if (!hold) return;
+    const waitedMs = Date.now() - hold.startedAt;
+    logger.info({ callId: this.opts.callId, waitedMs }, 'a person picked up after the hold');
+    void this.opts.onHoldChange?.({ kind: 'person', waitedMs }).catch((err: unknown) => logger.warn({ err, callId: this.opts.callId }, 'onHoldChange failed'));
+    // Their words as a user line and a fixed note, not a cue: a cue replaces
+    // the session's instructions for the reply, and would put what they said
+    // in instruction position.
+    this.voiceAI.addContext!([
+      { role: 'system', text: personPickedUpNote(this.opts.pickupLine) },
+      { role: 'user', text: line },
+    ]);
+    this.triggerVoiceAIResponse();
+  }
+
+  /** The hold ran out with nobody picking up (#151): recorded by the caller of this session, then the call ends. */
+  private async holdLimitReached(): Promise<void> {
+    const hold = this.stopHold();
+    if (!hold) return;
+    const waitedMs = Date.now() - hold.startedAt;
+    logger.warn({ callId: this.opts.callId, waitedMs }, 'hold limit reached with no person — ending the call');
+    await this.opts.onHoldLimit?.(waitedMs).catch((err: unknown) => logger.error({ err, callId: this.opts.callId }, 'could not record the hold limit'));
+    await this.end('hold_limit');
+  }
+
   private canRefuseEnd(): boolean {
     return !this.endRefused && this.endRefusals < MAX_END_REFUSALS;
   }
@@ -923,6 +1152,7 @@ export class CallSession<TCtx = CallContext> {
   private async fail(reason: string, err: unknown): Promise<void> {
     if (this.state === 'ended' || this.state === 'error' || this.state === 'ending') return;
     this.clearSilenceWatchdog();
+    this.stopHold();
     this.cancelPendingRecording();
     this.cutOffVerbatimDelivery();
     logger.error({ err, reason, callId: this.opts.callId }, 'Call session error');
@@ -1002,6 +1232,7 @@ export class CallSession<TCtx = CallContext> {
   private async end(reason: string): Promise<void> {
     if (this.state === 'ended' || this.state === 'error' || this.state === 'ending') return;
     this.clearSilenceWatchdog();
+    this.stopHold();
     this.cancelPendingRecording();
     this.setState('ending');
     this.cutOffVerbatimDelivery();

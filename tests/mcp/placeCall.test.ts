@@ -36,6 +36,13 @@ describe('mcp: place_call schema', () => {
     expect(placeCallInputSchema.safeParse({ ...base, questions: [] }).success).toBe(false);
   });
 
+  it('accepts a per-call hold limit of 1 to 45 minutes (#151)', () => {
+    const base = { contactId: CONTACT_ID, taskDescription: 'Ask about my refill' };
+    expect(placeCallInputSchema.safeParse({ ...base, constraints: { maxHoldMinutes: 30 } }).success).toBe(true);
+    expect(placeCallInputSchema.safeParse({ ...base, constraints: { maxHoldMinutes: 0 } }).success).toBe(false);
+    expect(placeCallInputSchema.safeParse({ ...base, constraints: { maxHoldMinutes: 46 } }).success).toBe(false);
+  });
+
   it('rejects an invalid mode value', () => {
     const result = placeCallInputSchema.safeParse({
       contactId: CONTACT_ID,

@@ -186,6 +186,38 @@ describe("the owner's profile: customizable, below the fixed rules", () => {
     expect(buildCallSystemPrompt(bookingTask, contact, [], profile)).toMatch(/do not volunteer/i);
   });
 
+  describe('who may hear it (#163)', () => {
+    // Live call (2026-10-13): a "pharmacy" asked "Can you tell me about
+    // Steve?" and Banjo recited the profile: employer, job title, patents.
+    const pharmacy = { displayName: 'Main Street Pharmacy', notes: null, relationshipTier: null } as Contact;
+    const family = { displayName: 'Jessica', notes: null, relationshipTier: 'family' } as Contact;
+    const friend = { displayName: 'Sam', notes: null, relationshipTier: 'friend' } as Contact;
+
+    it('tells the model to use it only for the task with anyone not family or a friend, and to decline other questions', () => {
+      for (const prompt of [
+        buildCallSystemPrompt(bookingTask, pharmacy, [], profile),
+        buildCallFrontendPrompt(bookingTask, pharmacy, profile),
+      ]) {
+        expect(prompt).toMatch(/only what this call needs/i);
+        expect(prompt).toMatch(/even if they ask/i);
+        expect(prompt).not.toMatch(/or you are asked/i);
+      }
+    });
+
+    it('still lets family and friends ask about the owner', () => {
+      for (const contact of [family, friend]) {
+        const prompt = buildCallSystemPrompt(bookingTask, contact, [], profile);
+        expect(prompt).toMatch(/you may answer their questions/i);
+        expect(prompt).not.toMatch(/even if they ask/i);
+        expect(buildCallFrontendPrompt(bookingTask, contact, profile)).toMatch(/you may answer their questions/i);
+      }
+    });
+
+    it('treats a contact with no tier as not family', () => {
+      expect(buildCallSystemPrompt(bookingTask, contact, [], profile)).toMatch(/even if they ask/i);
+    });
+  });
+
   it('reaches the voice layer too, since that is the part answering questions', () => {
     expect(buildCallFrontendPrompt(bookingTask, contact, profile)).toContain('nervous with clippers');
   });
