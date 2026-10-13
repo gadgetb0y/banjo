@@ -38,13 +38,15 @@ export interface TaskConstraints {
   dateWindows?: TimeWindow[]; // e.g. "next week after 3pm"
   durationMinutes?: number; // default applied per task type if omitted
   notes?: string; // any other free-text guidance Steve gave
+  maxHoldMinutes?: number; // the longest to wait on hold on this call (#151); HOLD_MAX_MINUTES if omitted
 }
 
 export type TaskOutcome =
   | { kind: 'confirmed'; start: string; durationMinutes: number; details?: string }
   | { kind: 'voicemail_left'; message: string }
   | { kind: 'negotiation_failed'; reason: string }
-  | { kind: 'escalated'; reason: string }
+  // stuckAt (#151): where an errand got stuck, when it's somewhere an agent may want to handle differently.
+  | { kind: 'escalated'; reason: string; stuckAt?: 'phone_menu' | 'hold_limit' }
   | { kind: 'failed'; reason: string }
   | { kind: 'conversation_completed'; summary: string }
   | { kind: 'transferred'; reason: string };

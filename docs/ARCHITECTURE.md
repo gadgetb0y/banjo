@@ -417,7 +417,35 @@ Exposed over **HTTP/SSE (remote MCP)**, since Banjo runs as a persistent AWS ser
 
 ---
 
-## Text-mode simulator (`src/sim/`, `scripts/sim.ts`)
+## Waiting on hold (`wait_on_hold`, #151)
+
+Outbound calls on OpenAI Realtime can wait in a hold queue. Other providers aren't offered the tool or the prompt section; see `canWaitOnHold()`.
+
+**Going on hold.** The prompt's "Phone menus and holding" section has Banjo press through the menu silently. Once it hears a queue, it calls `wait_on_hold`, saying nothing. That tool's `startsHold` flag makes `CallSession` do four things:
+- send the tool result with `respond: false`;
+- call `VoiceAIProvider.setHold(true)`;
+- stop the silence watchdog (on hold, silence is the point);
+- start the hold limit.
+
+On OpenAI, `setHold(true)` resends `audio.input` with `turn_detection: { type: 'server_vad', create_response: false, interrupt_response: false }`. Turns are still detected and transcribed, but never answered. Each held turn is then deleted (`conversation.item.delete`) once transcribed. A long hold's audio therefore neither fills the context nor gets billed as input on the first reply after it. What the hold costs is transcription.
+
+**Is it a person?** Each new held line goes through `isRepeatOnHold()` (`src/session/hold.ts`) first. A line whose wording mostly matches one already heard on this hold is skipped, since queues repeat the same announcement every half minute. Anything new goes to `judgeHoldLine()`, an out-of-band response with these settings:
+- `conversation: 'none'`: nothing enters the call's conversation;
+- `output_modalities: ['text']`: no audio, so the other party hears nothing;
+- tagged in `metadata`, so the adapter keeps its text and `response.done` from looking like Banjo speaking.
+
+It returns one word: PERSON or RECORDING. Judgments run one at a time, and only the latest line that arrived meanwhile is judged next. A failed or late judgment (8s) counts as a person: a person left in silence hangs up, while Banjo woken by a recording can go back on hold.
+
+**A person picks up.** `setHold(false)`, the owner gets a message, and Banjo is cued (`personPickedUpCue`) with what they said. They haven't heard anything from before the hold, so Banjo opens again with the AI disclosure, then carries on. From there it can use the warm transfer (#149) like any call.
+
+**Limits.** A hold lasts at most `HOLD_MAX_MINUTES` (default 20, at most 45), or the task's `constraints.maxHoldMinutes`. It's always cut short to leave 10 minutes of the voice session to talk in, since OpenAI ends a session at 60 minutes with no warning (`VoiceAIProvider.maxSessionMs`). No time left means `wait_on_hold` is refused. Running out ends the call as `escalated` with `stuckAt: 'hold_limit'`. A menu Banjo can't get through is `escalated` with `stuckAt: 'phone_menu'`, from `escalate_and_end_call`. The owner hears when a hold starts (with its limit) and when someone picks up. A hold that runs out reaches them as the usual end-of-call summary.
+
+**Not covered yet:**
+- **The other provider.** `openai-live` can't hold.
+- **Barge-in on hold.** Server VAD still raises `interrupted` on the hold music. On hold that only flushes audio Banjo isn't sending.
+- **Real queues.** The judge's accuracy on them is unmeasured: the sim covers the flow (`~` lines in a `--script` play like a recording), not real hold audio.
+
+
 
 `npm run sim` places a call that's real everywhere except the phone line: the `place_call` handler,
 the orchestrator, the outbound `CallSession` adapter, the system prompt, every tool, and the rows in

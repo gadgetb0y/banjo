@@ -331,6 +331,10 @@ const envSchema = z
       .enum(['true', 'false'])
       .default('false')
       .transform((v) => v === 'true'),
+    // The longest an outbound call waits on hold for a person (#151). Also cut
+    // short to leave the voice session (OpenAI: 60 minutes) ten minutes to talk
+    // in. place_call's constraints.maxHoldMinutes can lower it for one call.
+    HOLD_MAX_MINUTES: z.coerce.number().int().min(1).max(45).default(20),
     // How transfer_to_owner reaches the principal (#149). 'cold' redirects the
     // call to ring them, and Banjo is off the call either way. 'warm' calls
     // them on a second line and reads them Banjo's brief: they press 1 to be

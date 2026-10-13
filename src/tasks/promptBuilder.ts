@@ -144,7 +144,7 @@ report_negotiation_failed with a short reason.
 If you get stuck — a confusing phone menu, a hostile or nonsensical response, or you genuinely cannot proceed —
 call escalate_and_end_call with a short reason rather than guessing or looping indefinitely.
 If you're navigating a phone menu, use press_digits to select the relevant option; if you've tried a couple of
-options and still can't find a relevant one, escalate rather than keep guessing.${conversationModeGuidance(task)}${ownerProfileSection(ownerProfile)}
+options and still can't find a relevant one, escalate (stuckAt "phone_menu") rather than keep guessing.${conversationModeGuidance(task)}${ownerProfileSection(ownerProfile)}
 `.trim();
 }
 

@@ -73,6 +73,13 @@ export interface VoiceTool<TInput = unknown, TCtx = CallContext> {
    * verbatimMessage, which has its own larger budget.
    */
   handlerBudgetMs?: number;
+  /**
+   * wait_on_hold (#151): once the handler succeeds, CallSession puts the call
+   * on hold (VoiceAIProvider.setHold) and sends the result without prompting a
+   * reply, so Banjo says nothing to the queue. Offered only where the voice
+   * provider can hold.
+   */
+  startsHold?: boolean;
 }
 
 export function defineVoiceTool<TInput, TCtx = CallContext>(spec: VoiceTool<TInput, TCtx>): VoiceTool<TInput, TCtx> {

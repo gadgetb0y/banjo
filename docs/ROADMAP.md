@@ -328,7 +328,8 @@ refusal path, and fails closed: if the check errors, no call is placed.
 - **Wait on hold** ([#151]): get through the phone tree with `press_digits`, detect hold music
   or silence without hanging up, and loop in the principal when a human answers. Needs a
   hold-aware silence watchdog (today's would end the call), hold music kept from triggering server
-  VAD, and an upper time limit. This is the feature people would share.
+  VAD, and an upper time limit. This is the feature people would share. **Built** as `wait_on_hold`
+  (OpenAI Realtime only) with `HOLD_MAX_MINUTES`; still needs a real call through a 5-minute-plus hold.
 
 ### 4.8 Easier self-hosting and more vendors
 

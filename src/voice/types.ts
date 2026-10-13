@@ -159,6 +159,24 @@ export interface VoiceAIProvider {
    * CallSession checks the provider's own final transcript instead (#71).
    */
   verbatimDeliveryReport?(): VerbatimDeliveryReport | undefined;
+  /**
+   * Waiting on hold (#151). While on, the model never replies on its own: it
+   * hears nothing it would answer, and what was heard is dropped from the
+   * conversation so a long hold doesn't fill its context. Transcripts of the
+   * other side keep coming. Optional, with judgeHoldLine: a provider without
+   * both can't wait on hold, and the tool isn't offered.
+   */
+  setHold?(onHold: boolean): void;
+  /**
+   * Whether `line`, heard on hold, is a live person picking up rather than a
+   * recording, hold message or menu (#151). Judged outside the conversation,
+   * with no audio: the other party never hears it. `earlier` is what was
+   * heard on hold before it. Resolves 'person' if the judgment fails: a person
+   * left in silence would hang up, while a wrongly woken Banjo can go back on hold.
+   */
+  judgeHoldLine?(line: string, earlier: string[]): Promise<'person' | 'recording'>;
+  /** The longest a session can last (OpenAI Realtime: 60 minutes). Undefined: no known limit. Caps a hold (#151). */
+  readonly maxSessionMs?: number;
   disconnect(): Promise<void>;
   on(event: 'event', listener: VoiceAIEventListener): void;
   off(event: 'event', listener: VoiceAIEventListener): void;
