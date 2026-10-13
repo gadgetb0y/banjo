@@ -469,7 +469,9 @@ summary is built before the channel is known, so it fits the smaller of the two.
 clips any body to 1600 as a backstop.
 Voicemail, escalation, transfer and a hold limit work as on any call and keep their own status and
 outcome; the answers saved before them show in `get_task_status`'s `collectedAnswers` (ask tasks
-only, each question paired with its saved answer). `end_call` with no outcome recorded first
+only, each question paired with its saved answer). The owner's summary lists them after that outcome's own
+line (`withSavedAnswers()`, fitted to the same limit), and the webhook text adds a count only ("It
+saved 1 of 3 answers first."). `end_call` with no outcome recorded first
 records the call `answered` from the saved answers, rather than `escalated`.
 
 **One definition per mode.** `src/tasks/modes.ts` holds what differs by mode: `books` (calendar

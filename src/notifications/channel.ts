@@ -42,6 +42,28 @@ export function needsAttention(outcome: TaskOutcome): boolean {
 }
 
 /**
+ * For an ask call that ended some other way (escalated, transferred, a
+ * voicemail, a hold limit): the answers record_answer saved before it did,
+ * after that outcome's own summary (#148 review). Fitted to what's left of
+ * `maxChars`; with too little room, only the count.
+ */
+export function withSavedAnswers(summary: string, contact: Contact, saved: TaskAnswer[], maxChars = OWNER_SUMMARY_MAX_CHARS): string {
+  const answered = saved.filter((a) => a.answered).length;
+  if (answered === 0) return summary;
+  const room = maxChars - summary.length - '\n\n'.length;
+  const header = `Answers saved before that (${answered} of ${saved.length}):`;
+  const outcome = { kind: 'answered' as const, answers: saved };
+  // buildAskSummary opens with its own count line, which the header replaces;
+  // fitted so the section is `room` long at most once that swap is made.
+  const ownHeader = buildAskSummary(contact.displayName, outcome, Infinity).split('\n')[0]!;
+  const lines = buildAskSummary(contact.displayName, outcome, room - header.length + ownHeader.length).split('\n').slice(1);
+  const section = [header, ...lines].join('\n');
+  if (lines.length > 0 && section.length <= room) return `${summary}\n\n${section}`;
+  const countOnly = `${answered} of ${saved.length} answers were saved first: get_task_status has them.`;
+  return countOnly.length <= room ? `${summary}\n\n${countOnly}` : summary;
+}
+
+/**
  * Builds Steve's outcome summary for a terminal phone-path task. The
  * online-booking path (handled by the schedule-appointment skill) relays its
  * outcome directly in the conversation instead — this is only used for

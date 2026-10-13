@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { Contact } from '../../src/contacts/schema.js';
 import type { TaskAnswer } from '../../src/tasks/schema.js';
-import { buildOutcomeSummary, OWNER_SUMMARY_MAX_CHARS, withDisclosureNote } from '../../src/notifications/channel.js';
+import { buildOutcomeSummary, OWNER_SUMMARY_MAX_CHARS, withDisclosureNote, withSavedAnswers } from '../../src/notifications/channel.js';
 import { PUSHOVER_MAX_MESSAGE_CHARS, SMS_MAX_CHARS } from '../../src/notifications/limits.js';
 
 const contact = { displayName: 'Alex' } as Contact;
@@ -143,5 +143,31 @@ describe('buildOutcomeSummary', () => {
   it('summarizes a transfer (#7)', () => {
     const summary = buildOutcomeSummary({ displayName: "Luigi's" } as Contact, { kind: 'transferred', reason: 'they need a card number' });
     expect(summary).toBe("Transferred Luigi's to you — they need a card number.");
+  });
+});
+
+describe('withSavedAnswers (#148 review)', () => {
+  const luigi = { displayName: "Luigi's" } as Contact;
+  const long = (n: number) => `${'word '.repeat(60)}${n}`;
+
+  it('stays within the limit after a long outcome, keeping the numbering', () => {
+    const escalated = buildOutcomeSummary(luigi, { kind: 'escalated', reason: 'x'.repeat(500) });
+    const saved: TaskAnswer[] = [1, 2, 3, 4, 5].map((n) =>
+      n % 2 ? { question: long(n), answered: true, answer: long(n) } : { question: long(n), answered: false },
+    );
+    const out = withSavedAnswers(escalated, luigi, saved);
+    expect(out.length).toBeLessThanOrEqual(OWNER_SUMMARY_MAX_CHARS);
+    expect(out.startsWith(escalated)).toBe(true);
+    expect(out).toMatch(/3 of 5/);
+  });
+
+  it('stays within the limit as room runs out, and adds nothing when there is none', () => {
+    const saved: TaskAnswer[] = [{ question: 'q'.repeat(300), answered: true, answer: 'a'.repeat(300) }];
+    for (const used of [OWNER_SUMMARY_MAX_CHARS - 200, OWNER_SUMMARY_MAX_CHARS - 70, OWNER_SUMMARY_MAX_CHARS - 20]) {
+      const out = withSavedAnswers('y'.repeat(used), luigi, saved);
+      expect(out.length).toBeLessThanOrEqual(OWNER_SUMMARY_MAX_CHARS);
+      expect(out.startsWith('y'.repeat(used))).toBe(true);
+    }
+    expect(withSavedAnswers('y'.repeat(OWNER_SUMMARY_MAX_CHARS), luigi, saved)).toBe('y'.repeat(OWNER_SUMMARY_MAX_CHARS));
   });
 });

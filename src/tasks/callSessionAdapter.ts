@@ -5,7 +5,7 @@ import type { CallSessionOptions } from '../session/callSession.js';
 import type { CallContext } from '../session/types.js';
 import { config, disclosureLine, disclosureLineWithoutNotice } from '../config/index.js';
 import { logger } from '../lib/logger.js';
-import { buildOutcomeSummary, withDisclosureNote } from '../notifications/channel.js';
+import { buildOutcomeSummary, withDisclosureNote, withSavedAnswers } from '../notifications/channel.js';
 import type { DisclosureResult } from '../session/disclosure.js';
 import { createNotificationChannel, sendOwnerMessage } from '../notifications/owner.js';
 import { buildWebhookText, sendTaskWebhook } from '../notifications/webhook.js';
@@ -24,6 +24,7 @@ import { modeRules } from './modes.js';
 import type { VoiceTool } from '../voice/tools/defineVoiceTool.js';
 import { unregisterLiveCall } from './liveCalls.js';
 import { getTask, isTerminalStatus, transitionTask, updateCallAttempt } from './service.js';
+import { collectedAnswersFor } from './answers.js';
 import type { CallAttempt, Task } from './schema.js';
 import { saveTranscriptTurn } from '../transcripts/service.js';
 
@@ -45,8 +46,11 @@ export async function notifyTaskOutcome(taskId: string, disclosure?: DisclosureR
   if (!current || !current.outcome || !isTerminalStatus(current.status)) return;
   const contact = await getContact(current.contactId);
   if (!contact) return;
-  const summary = withDisclosureNote(buildOutcomeSummary(contact, current.outcome), disclosure);
   const outcome = current.outcome;
+  // An ask call that ended some other way keeps its own outcome; the answers
+  // it saved before that go with it (#148 review).
+  const saved = current.mode === 'ask' && outcome.kind !== 'answered' ? collectedAnswersFor(current) : [];
+  const summary = withDisclosureNote(withSavedAnswers(buildOutcomeSummary(contact, outcome), contact, saved), disclosure);
   // Built inside the async function, not as an argument: an exception while
   // building the event then rejects this promise, which allSettled holds,
   // instead of throwing before allSettled runs and skipping the owner's
@@ -59,7 +63,7 @@ export async function notifyTaskOutcome(taskId: string, disclosure?: DisclosureR
       status: current.status,
       outcome,
       contact: { id: contact.id, name: contact.displayName },
-      text: buildWebhookText(contact, outcome, disclosure),
+      text: buildWebhookText(contact, outcome, disclosure, saved),
       finishedAt: current.updatedAt.toISOString(),
     });
   };
