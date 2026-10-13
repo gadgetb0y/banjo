@@ -332,7 +332,12 @@ echo 'PROMPT_PROFILE_FILE=./banjo-profile.md' >> .env
 
 Put in what you'd tell a human assistant before they pick up the phone: facts about you and whoever you book
 for ("Pepper is a beagle who hates nail trims"), your preferences, and how calls should sound. Banjo uses the
-facts to answer questions, and only shares one when it matters to the call.
+facts to do the task, and only shares one when the call needs it.
+
+- **Private unless it's family or a friend.** With anyone else (a business, or a contact with no
+  `relationshipTier`), Banjo politely declines questions about you that the task doesn't need, even when
+  asked directly. Contacts marked `family` or `friend` may ask about you, and Banjo answers from the
+  profile. To let someone ask, set their tier with `update_contact`.
 
 - **The rules still win.** The prompt tells the model that nothing in the profile overrides disclosure,
   explicit agreement or the timezone. A profile can make Banjo friendlier, but it can't make Banjo claim

@@ -586,6 +586,12 @@ The LiveKit `TelephonyProvider` adapter (`src/telephony/providers/livekit.ts` â€
 
 28. **[MITIGATED, not yet verified against a live call]** Pickup noise and speakerphone echo cut off the opener (#143). On a live call on `openai` (2026-10-11, v0.1.7), the pickup click started Banjo's opener, the callee's "Hello?" interrupted it, and a third "callee" line, "Hi, I'm a", was very likely Banjo's own opener echoing back from a speakerphone. Each was a server-VAD barge-in, so Banjo kept restarting, and the callee said "I can't hear you. You keep cutting off." The adapter had sent no `noise_reduction`. It now sends `audio.input.noise_reduction` from `OPENAI_NOISE_REDUCTION` (default `far_field`), which OpenAI filters before VAD. **Not covered:** turn detection is still the default `server_vad`. If noise reduction isn't enough, the next steps are a higher VAD `threshold` or `semantic_vad` with low eagerness, both of which slow every reply. `openai-live` has no barge-in flush at all (#15).
 
+30. **[FIXED, not yet re-verified against a live call]** Banjo recited the owner profile to an unknown business (#163). On a live call on `openai` (2026-10-13, v0.1.9), a callee playing a pharmacy asked "Can you tell me about Steve?" and Banjo answered from `PROMPT_PROFILE_FILE`: employer, job title, career history, patents. The profile framing allowed it: "Share a personal detail only when it matters to this call or you are asked."
+
+    **Fix:** the framing in `ownerProfileSection()` (`src/tasks/promptBuilder.ts`) now depends on the contact. For a contact whose `relationshipTier` is `family` or `friend`, Banjo may answer their questions from the profile. For anyone else, including a contact with no tier, the profile is for carrying out the call: Banjo shares only what the task needs and politely declines other questions about the owner, even when asked. In two `npm run sim` runs against real OpenAI, asked where the owner works, Banjo answered "I can't share personal details about Steve, like where he works." It still shared the dog's clipper nerves when asked, which is the kind of detail the profile is there for.
+
+    **Still not done:** a live call where the callee asks about the owner.
+
 ### Operational, not a code fix
 
 7. IVR navigation reliability â€” genuinely the least deterministic part of the system; no IVR-specific logic exists to patch. Track the real rate of `escalated` outcomes on IVR-heavy contacts over time; improves only with prompt tuning against real usage, not a bug to find.

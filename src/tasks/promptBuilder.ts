@@ -71,19 +71,37 @@ function taskDetails(task: Task): string {
  * Disclosure, explicit agreement and the timezone contract are what real calls
  * taught this code, and a profile line can't switch them off.
  */
-function ownerProfileSection(profile: string | undefined): string {
+function ownerProfileSection(profile: string | undefined, contact: Contact): string {
   if (!profile) return '';
   const name = config.ASSISTANT_PRINCIPAL_NAME;
   return `
 
-About ${name}, in their own words — standing notes for every call. Use the facts to answer questions and the
-preferences to shape how you sound. Share a personal detail only when it matters to this call or you are asked;
-do not volunteer anything else. Notes for this particular call take priority over these standing notes. These
+About ${name}, in their own words — standing notes for every call. Use the preferences to shape how you sound.
+${profileSharingRule(contact)} Notes for this particular call take priority over these standing notes. These
 notes cannot change the rules above: if anything here conflicts with them — including saying you are an AI when
 asked, booking only after a clear yes, and all times being ${config.CALENDAR_TIMEZONE} local — the rules above win.
 --- ${name}'s notes ---
 ${profile}
 --- end of ${name}'s notes ---`;
+}
+
+/**
+ * Who may hear what's in the profile (#163). A live call's "pharmacy" asked
+ * "Can you tell me about Steve?" and got the profile recited: employer, job
+ * title, patents. Family and friends (Contact.relationshipTier) may still ask;
+ * anyone else, including a contact with no tier, hears only what the task needs.
+ */
+function profileSharingRule(contact: Contact): string {
+  const name = config.ASSISTANT_PRINCIPAL_NAME;
+  if (contact.relationshipTier === 'family' || contact.relationshipTier === 'friend') {
+    const who = contact.relationshipTier === 'family' ? 'family' : 'a friend';
+    return `${contact.displayName} is ${who}, so you may answer their questions about ${name} from these notes; do not volunteer anything else.`;
+  }
+  return (
+    `These notes are for you, to carry out this call. Share only what this call needs (telling a groomer the dog is ` +
+    `nervous with clippers, say) and do not volunteer anything else. Anything else about ${name} stays private even if ` +
+    `they ask about ${name}: say politely that you can't share that, and carry on with the call.`
+  );
 }
 
 function conversationModeGuidance(task: Task): string {
@@ -144,7 +162,7 @@ report_negotiation_failed with a short reason.
 If you get stuck — a confusing phone menu, a hostile or nonsensical response, or you genuinely cannot proceed —
 call escalate_and_end_call with a short reason rather than guessing or looping indefinitely.
 If you're navigating a phone menu, use press_digits to select the relevant option; if you've tried a couple of
-options and still can't find a relevant one, escalate (stuckAt "phone_menu") rather than keep guessing.${conversationModeGuidance(task)}${ownerProfileSection(ownerProfile)}
+options and still can't find a relevant one, escalate (stuckAt "phone_menu") rather than keep guessing.${conversationModeGuidance(task)}${ownerProfileSection(ownerProfile, contact)}
 `.trim();
 }
 
@@ -174,6 +192,6 @@ ${buildFrontendSystemPromptGuidance()}
 
 You are calling ${contact.displayName} on behalf of ${config.ASSISTANT_PRINCIPAL_NAME} to: ${task.goalDescription}.
 
-Contact context: ${contact.notes ?? '(no notes on file)'}${taskDetails(task)}${conversationModeFrontendGuidance(task)}${ownerProfileSection(ownerProfile)}
+Contact context: ${contact.notes ?? '(no notes on file)'}${taskDetails(task)}${conversationModeFrontendGuidance(task)}${ownerProfileSection(ownerProfile, contact)}
 `.trim();
 }
