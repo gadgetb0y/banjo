@@ -6,7 +6,7 @@ import { formatInZone, formatSpokenInZone, zonedTimeToUtcIso } from '../../lib/t
 import { TimeoutError, withTimeout } from '../../lib/withTimeout.js';
 import { sendOwnerMessage } from '../../notifications/owner.js';
 import type { CallContext } from '../../session/types.js';
-import { answersFor, collectedAnswer, collectedReports } from '../../tasks/answers.js';
+import { answersFor, collectedAnswer, finalAnswers } from '../../tasks/answers.js';
 import type { ReportedAnswer } from '../../tasks/schema.js';
 import { modeRules } from '../../tasks/modes.js';
 import { isTerminalStatus, saveCollectedAnswer, transitionTask } from '../../tasks/service.js';
@@ -587,6 +587,10 @@ export { answersFor };
  * (tasks/modes.ts). Returns an ordinary result, so the call carries on
  * through the normal tool-result flow.
  */
+const RECORD_ANSWER_NEXT =
+  "Saved. Don't mention it, and don't repeat what you just said. If you already asked your next question, wait " +
+  'for their answer. Otherwise ask your next question, or, if none are left, wrap up the call.';
+
 export const recordAnswerTool: VoiceTool<ReportedAnswer> = defineVoiceTool({
   name: 'record_answer',
   description:
@@ -610,7 +614,10 @@ export const recordAnswerTool: VoiceTool<ReportedAnswer> = defineVoiceTool({
         };
       }
       await saveCollectedAnswer(ctx.task.id, collectedAnswer(input));
-      return { ok: true as const };
+      // The result gets a reply like any tool's. Said here, so the model
+      // neither repeats a line it spoke with this call nor stalls after a
+      // silent one (#148 review).
+      return { ok: true as const, next: RECORD_ANSWER_NEXT };
     });
   },
 });
@@ -624,8 +631,8 @@ export const reportAnswersAndEndCallTool: VoiceTool<{
     'Use this to end the call once you have asked every question on your list and they have answered what they ' +
     "can. Record one entry per question, by its number: what they said, in a short plain sentence, or answered: " +
     "false if they didn't know, wouldn't say, or you never got to it. Record only what they actually told you on " +
-    'this call. Never fill a gap with a guess. Answers you saved with record_answer are kept, and an entry here ' +
-    'for the same question replaces it. This is the normal, successful end of this call, even if some ' +
+    'this call. Never fill a gap with a guess. Answers you saved with record_answer are kept: an answer here for ' +
+    'the same question replaces it, and answered: false here never erases one. This is the normal, successful end of this call, even if some ' +
     'questions went unanswered.' +
     BEFORE_ENDING,
   schema: z.object({
@@ -646,15 +653,14 @@ export const reportAnswersAndEndCallTool: VoiceTool<{
   handler: async (input, ctx) => {
     return runToolSafely('report_answers_and_end_call', async () => {
       const summary = input.summary?.trim();
-      // What record_answer saved during the call, then this call's report:
-      // answersFor lets the later report for a number win, so the final
-      // report overrides a saved answer, and a question it leaves out keeps
-      // the saved one. ctx.task is re-fetched for each tool call, so it has
-      // every answer saved before this one.
+      // What record_answer saved during the call, with this report's answers
+      // on top (finalAnswers): an answer here replaces a saved one, and
+      // neither an omission nor answered: false erases it. ctx.task is
+      // re-fetched for each tool call, so it has every answer saved before this one.
       await transitionTask(ctx.task.id, 'answered', {
         outcome: {
           kind: 'answered',
-          answers: answersFor(ctx.task.questions ?? [], [...collectedReports(ctx.task), ...input.answers]),
+          answers: finalAnswers(ctx.task, input.answers),
           ...(summary ? { summary } : {}),
         },
       });

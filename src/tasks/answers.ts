@@ -39,3 +39,15 @@ export function collectedReports(task: Pick<Task, 'collectedAnswers'>): Collecte
 export function collectedAnswersFor(task: Pick<Task, 'questions' | 'collectedAnswers'>): TaskAnswer[] {
   return answersFor(task.questions ?? [], collectedReports(task));
 }
+
+/**
+ * What report_answers_and_end_call records: the answers saved during the call,
+ * each replaced by an answer the closing report gives for the same question.
+ * A closing "not answered" never erases a saved answer (#148 review): a lazy
+ * report marking everything unanswered would otherwise throw away what
+ * record_answer kept.
+ */
+export function finalAnswers(task: Pick<Task, 'questions' | 'collectedAnswers'>, reported: ReportedAnswer[]): TaskAnswer[] {
+  const answeredAtTheEnd = reported.filter((r) => collectedAnswer(r).answered);
+  return answersFor(task.questions ?? [], [...collectedReports(task), ...answeredAtTheEnd]);
+}

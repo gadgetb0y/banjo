@@ -140,6 +140,18 @@ describe('report_answers_and_end_call (#148)', () => {
     });
   });
 
+  it("doesn't let a final 'not answered' erase an answer saved during the call (#148 review)", async () => {
+    // A lazy closing report (answered: false for everything) would otherwise
+    // throw away answers record_answer already saved.
+    await reportAnswersAndEndCallTool.handler(
+      { answers: [1, 2, 3].map((question) => ({ question, answered: false })) },
+      ctx(vi.fn(async () => {}), { collectedAnswers: { '1': { question: 1, answered: true, answer: '6pm.' } } }),
+    );
+    expect((transitionTask.mock.calls[0] as unknown[])[2]).toMatchObject({
+      outcome: { answers: [{ question: QUESTIONS[0], answered: true, answer: '6pm.' }, { answered: false }, { answered: false }] },
+    });
+  });
+
   it('tells the model to record only what was said', () => {
     expect(reportAnswersAndEndCallTool.description).toContain('Record only what they actually told you on this call');
   });
@@ -163,6 +175,11 @@ describe('record_answer (#148 review)', () => {
     expect(saveCollectedAnswer).toHaveBeenCalledWith('task-1', { question: 2, answered: true, answer: 'Yes, until noon.' });
     expect(transitionTask).not.toHaveBeenCalled();
     expect(hangUp).not.toHaveBeenCalled();
+  });
+
+  it('tells the model what to do next, so it neither repeats itself nor stalls (#148 review)', async () => {
+    const result = await recordAnswerTool.handler({ question: 1, answered: true, answer: '6pm.' }, ctx(vi.fn()));
+    expect(result).toMatchObject({ ok: true, next: expect.stringMatching(/already asked your next question, wait/) });
   });
 
   it('saves an unanswered question, and an answered one with no text, as not answered', async () => {
