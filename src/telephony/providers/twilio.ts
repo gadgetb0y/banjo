@@ -892,15 +892,22 @@ export class TwilioProvider implements TelephonyProvider {
   }
 
   /**
-   * Stops the call's recording for good (#151). A start that failed, or never
-   * happened, leaves no recordingSid, and there's nothing to stop.
+   * Stops every recording on the call for good (#151), asking Twilio which
+   * are running rather than trusting recordingSid: a start whose response
+   * was lost or timed out can be recording with no SID known here. Fails
+   * closed: throws for a call it can't find, or if Twilio can't be asked, so
+   * the caller never treats an unconfirmed stop as done.
    */
   async stopRecording(callId: string): Promise<void> {
     const state = this.calls.get(callId);
-    if (!state?.recordingSid) return;
-    if (!state.providerCallId) throw new Error(`stopRecording: no live Twilio call for ${callId}`);
-    await this.client.calls(state.providerCallId).recordings(state.recordingSid).update({ status: 'stopped' });
-    logger.info({ callId, recordingId: state.recordingSid }, 'call recording stopped');
+    if (!state?.providerCallId) throw new Error(`stopRecording: no live Twilio call for ${callId}`);
+    const call = this.client.calls(state.providerCallId);
+    const recordings = await call.recordings.list();
+    for (const recording of recordings) {
+      if (recording.status !== 'in-progress' && recording.status !== 'paused') continue;
+      await call.recordings(recording.sid).update({ status: 'stopped' });
+      logger.info({ callId, recordingId: recording.sid }, 'call recording stopped');
+    }
   }
 
   /** Deletes a recording from Twilio. Already gone (404) counts as deleted, so retention can't get stuck on one. */

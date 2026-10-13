@@ -855,36 +855,50 @@ describe('TwilioProvider warm transfer (#149)', () => {
 });
 
 describe('TwilioProvider.stopRecording (#151)', () => {
-  function withRecording(callId: string, update: ReturnType<typeof vi.fn>) {
+  /** A live call whose Twilio recordings are `listed`; each recording's update is the shared `update` spy, called with its sid. */
+  function withRecordings(callId: string, listed: { sid: string; status: string }[] | Error) {
     const provider = new TwilioProvider();
     provider.registerInboundCall(callId, '+15555550100');
-    const recordings = Object.assign(vi.fn(() => ({ update })), { create: vi.fn(async () => ({ sid: 'RE-live' })) });
+    const update = vi.fn(async (_sid: string, _params: unknown) => ({}));
+    const list = vi.fn(async () => {
+      if (listed instanceof Error) throw listed;
+      return listed;
+    });
+    const recordings = Object.assign(
+      vi.fn((sid: string) => ({ update: (params: unknown) => update(sid, params) })),
+      { list, create: vi.fn(async () => ({ sid: 'RE-live' })) },
+    );
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     Object.defineProperty((provider as any).client, 'calls', { value: vi.fn(() => ({ recordings })), configurable: true });
-    return provider;
+    return { provider, update, list };
   }
 
-  it('stops the running recording for good', async () => {
-    const update = vi.fn(async () => ({}));
-    const provider = withRecording('CA-r1', update);
-    await provider.startRecording('CA-r1');
+  it("stops every running or paused recording Twilio reports, including one Banjo never got the SID of", async () => {
+    const { provider, update } = withRecordings('CA-r1', [
+      { sid: 'RE-known', status: 'in-progress' },
+      { sid: 'RE-lost-response', status: 'in-progress' },
+      { sid: 'RE-paused', status: 'paused' },
+      { sid: 'RE-old', status: 'completed' },
+    ]);
     await provider.stopRecording('CA-r1');
-    expect(update).toHaveBeenCalledWith({ status: 'stopped' });
+    expect(update.mock.calls).toEqual([
+      ['RE-known', { status: 'stopped' }],
+      ['RE-lost-response', { status: 'stopped' }],
+      ['RE-paused', { status: 'stopped' }],
+    ]);
   });
 
-  it('has nothing to stop on a call that was never recorded', async () => {
-    const update = vi.fn(async () => ({}));
-    const provider = withRecording('CA-r2', update);
+  it('has nothing to stop when nothing is running', async () => {
+    const { provider, update } = withRecordings('CA-r2', []);
     await expect(provider.stopRecording('CA-r2')).resolves.toBeUndefined();
     expect(update).not.toHaveBeenCalled();
   });
 
-  it('throws when Twilio refuses, so the hold is refused', async () => {
-    const update = vi.fn(async () => {
-      throw new Error('twilio 500');
-    });
-    const provider = withRecording('CA-r3', update);
-    await provider.startRecording('CA-r3');
-    await expect(provider.stopRecording('CA-r3')).rejects.toThrow('twilio 500');
+  it("fails closed: throws when Twilio can't be asked, or refuses the stop, or the call is unknown", async () => {
+    await expect(withRecordings('CA-r3', new Error('twilio 500')).provider.stopRecording('CA-r3')).rejects.toThrow('twilio 500');
+    const { provider, update } = withRecordings('CA-r4', [{ sid: 'RE-1', status: 'in-progress' }]);
+    update.mockRejectedValueOnce(new Error('cannot stop'));
+    await expect(provider.stopRecording('CA-r4')).rejects.toThrow('cannot stop');
+    await expect(new TwilioProvider().stopRecording('nope')).rejects.toThrow();
   });
 });

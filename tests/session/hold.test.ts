@@ -280,11 +280,12 @@ describe('recording consent on hold: nothing is recorded after a hold (#151, #8)
     expect(s.telephony.startRecording).toHaveBeenCalledTimes(1);
   });
 
-  it('calls off a recording only scheduled when the hold began, for good', async () => {
+  it('calls off a recording only scheduled when the hold began, for good, and still stops anything running', async () => {
     const s = await recordedCall({}, false);
     await holdThenNoticeAgain();
     expect(s.telephony.startRecording).not.toHaveBeenCalled();
-    expect(s.telephony.stopRecording).not.toHaveBeenCalled();
+    // Stopped regardless of what Banjo thinks is running.
+    expect(s.telephony.stopRecording).toHaveBeenCalledTimes(1);
   });
 
   it('a call put on hold before any notice is never recorded either', async () => {
@@ -295,6 +296,16 @@ describe('recording consent on hold: nothing is recorded after a hold (#151, #8)
     s.emitTelephony({ callId: 'call-1', type: 'connected', meta: { callId: 'call-1', providerCallId: 'CA-1', toNumber: '+15555550100' } });
     await holdThenNoticeAgain();
     expect(s.telephony.startRecording).not.toHaveBeenCalled();
+    expect(s.telephony.stopRecording).toHaveBeenCalledTimes(1);
+  });
+
+  it('an unrecorded call has nothing to stop, and holds as usual', async () => {
+    const s = setup();
+    Object.assign(s.telephony, { stopRecording: vi.fn(async () => {}) });
+    await new CallSession(s.options).start();
+    voice({ type: 'tool_call', call: { id: 'hold-1', name: 'wait_on_hold', arguments: {} } });
+    await vi.waitFor(() => expect(fakeVoiceAI.setHold).toHaveBeenCalledWith(true));
+    expect(s.telephony.stopRecording).not.toHaveBeenCalled();
   });
 
   it('a stop waits for a start still in flight, so it stops the recording that start made', async () => {

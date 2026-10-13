@@ -922,29 +922,25 @@ export class CallSession<TCtx = CallContext> {
    * Consent on hold (#151, #8): nothing is recorded after a hold, for the rest
    * of the call. Whoever picks up heard none of the notice, and keeping the
    * recording off is simpler and safer than re-establishing consent with them.
-   * A recording not yet started is called off; a running one is stopped.
-   * 'cancelled' never re-arms. Fails closed: false if a running recording
-   * can't be stopped, and then there is no hold.
+   * A recording not yet started is called off, and every recording on the
+   * call is stopped. 'cancelled' never re-arms. Fails closed: false if the
+   * stop can't be confirmed, and then there is no hold.
    */
   private async endRecordingForHold(): Promise<boolean> {
     const { telephony, callId } = this.opts;
-    if (this.recordingState !== 'scheduled') {
-      this.recordingState = 'cancelled';
-      return true;
-    }
-    if (this.recordingTimer) {
-      // Scheduled, not started.
-      this.cancelPendingRecording();
-      this.recordingState = 'cancelled';
-      return true;
-    }
+    // Called off before anything else, so nothing new can start meanwhile.
+    this.cancelPendingRecording();
+    this.recordingState = 'cancelled';
+    // A call that can't be recorded has nothing to stop. Any other is stopped
+    // whatever recordingState says, so no slip in that state can leave a
+    // recording running through the hold.
+    if (!this.opts.recordCalls || !telephony.startRecording) return true;
     if (!telephony.stopRecording) {
       logger.error({ callId }, 'cannot stop the recording for a hold — not waiting on hold');
       return false;
     }
     try {
       await this.runRecordingOp(() => telephony.stopRecording!(callId));
-      this.recordingState = 'cancelled';
       logger.info({ callId }, 'recording stopped for the hold — the rest of this call is not recorded');
       return true;
     } catch (err) {

@@ -66,10 +66,10 @@ export interface TelephonyProvider {
   startRecording?(callId: string): Promise<{ recordingId: string }>;
 
   /**
-   * Stop the call's recording for good (#151: nothing is recorded after a
-   * hold). A call with no recording counts as stopped. Throws if a running
-   * recording couldn't be stopped. Optional: without it, a recorded call
-   * can't wait on hold.
+   * Stop every recording on the call for good (#151: nothing is recorded
+   * after a hold), including one started without its ID ever reaching Banjo.
+   * A call with none running counts as stopped. Throws if that can't be
+   * confirmed. Optional: without it, a recorded call can't wait on hold.
    */
   stopRecording?(callId: string): Promise<void>;
 

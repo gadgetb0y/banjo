@@ -446,10 +446,11 @@ It returns one word: PERSON or RECORDING. Judgments run one at a time, and only 
 Then a plain response is triggered. This deliberately isn't a `triggerResponse(cue)`: a cue *replaces* the session's instructions for that response, which would drop the call's rules and put the other party's words in instruction position. From there Banjo carries on, and can use the warm transfer (#149) like any call.
 
 **Recording consent: nothing is recorded after a hold.** Whoever picks up heard none of the recording notice, so the rest of the call isn't recorded at all.
-- **Before the hold starts,** `CallSession` stops a running recording for good (`TelephonyProvider.stopRecording`, Twilio `status: 'stopped'`), or calls off one only scheduled. Either way the recording state becomes `'cancelled'`, which never re-arms.
+- **Before the hold starts,** `CallSession` calls off any scheduled start and sets the recording state to `'cancelled'`, which never re-arms.
+- **Then, on every recorded call, it runs `TelephonyProvider.stopRecording`,** whatever that state says. On Twilio this lists the call's recordings and stops each one `in-progress` or `paused`. That covers a recording whose start reached Twilio while its response, and so its SID, never reached Banjo. `Twilio.CURRENT` isn't used, since it fails when a call has more than one active recording. The stop throws if the call is unknown or Twilio can't be asked.
 - **The reopening** after a pickup uses the disclosure without the notice (`pickupLine`, `disclosureLineWithoutNotice()`), since saying "this call is recorded" would now be false.
 - **Start and stop run one at a time** (`recordingOps`), so a stop can't overtake a start still in flight.
-- **Fails closed:** if a running recording can't be stopped, `wait_on_hold` is refused. No hold starts if the call ended while the recording was being stopped.
+- **Fails closed:** if the stop can't be confirmed, `wait_on_hold` is refused. No hold starts if the call ended while the recording was being stopped.
 
 This replaced a pause-and-resume design that re-established consent with the new person. Three rounds of security review each found a gap in its state machine, and keeping the recording off after a hold has no such state machine at all. The cost: the conversation with whoever picks up after a hold, usually the part that matters, isn't recorded.
 
