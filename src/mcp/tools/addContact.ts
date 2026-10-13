@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import { addContact, getContactByPhoneNumber, isContactsUniqueViolation } from '../../contacts/service.js';
-import { contactCategoryEnum, relationshipTierEnum } from '../../contacts/schema.js';
+import { contactCategoryEnum } from '../../contacts/schema.js';
 import type { Contact } from '../../contacts/schema.js';
 
 export const addContactInputSchema = z.object({
@@ -19,14 +19,6 @@ export const addContactInputSchema = z.object({
     .url()
     .optional()
     .describe('Online booking URL, if this contact supports booking online as an alternative to a phone call.'),
-  relationshipTier: z
-    .enum(relationshipTierEnum.enumValues)
-    .optional()
-    .describe(
-      "Set only if this contact is the owner's family or a friend. " +
-      'Family and friends may ask Banjo about the owner on a call, from the owner profile; anyone else hears only what the ' +
-      'call needs (#163). Also used to greet a recognized caller on the inbound line.',
-    ),
 });
 
 export type AddContactResult =

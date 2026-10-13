@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import { updateContact } from '../../contacts/service.js';
-import { preferredChannelEnum, relationshipTierEnum } from '../../contacts/schema.js';
+import { preferredChannelEnum } from '../../contacts/schema.js';
 import type { Contact } from '../../contacts/schema.js';
 
 export const updateContactInputSchema = z.object({
@@ -11,15 +11,6 @@ export const updateContactInputSchema = z.object({
     .describe("How the assistant's owner prefers this contact be reached going forward — set this once they state a preference so future tasks don't have to ask again."),
   bookingUrl: z.string().url().optional().describe('Online booking URL for this contact.'),
   notes: z.string().optional().describe('Free-text notes to store on this contact (overwrites existing notes).'),
-  relationshipTier: z
-    .enum(relationshipTierEnum.enumValues)
-    .nullable()
-    .optional()
-    .describe(
-      'Whether this contact is the owner\'s family or a friend; null clears it. ' +
-      'Family and friends may ask Banjo about the owner on a call, from the owner profile; anyone else hears only what the ' +
-      'call needs (#163). Also used to greet a recognized caller on the inbound line.',
-    ),
 });
 
 export async function updateContactHandler(input: z.infer<typeof updateContactInputSchema>): Promise<Contact> {
