@@ -27,7 +27,7 @@ const ALL_CONFIG_KEYS = [
   'GOOGLE_CONTACTS_SYNC_INTERVAL_HOURS', 'CONTACTS_SYNC_INTERVAL_HOURS',
   'GOOGLE_OAUTH_CLIENT_ID', 'GOOGLE_OAUTH_CLIENT_SECRET', 'GOOGLE_OAUTH_REFRESH_TOKEN', 'GOOGLE_CALENDAR_ID',
   'NOTIFICATION_CHANNEL', 'NOTIFY_TO_PHONE_NUMBER', 'NOTIFY_FROM_PHONE_NUMBER', 'PUSHOVER_APP_TOKEN', 'PUSHOVER_USER_KEY', 'PUSHOVER_DEVICE',
-  'TASK_WEBHOOK_URL', 'TASK_WEBHOOK_SECRET', 'TASK_WEBHOOK_TOKEN',
+  'TASK_WEBHOOK_URL', 'TASK_WEBHOOK_SECRET', 'TASK_WEBHOOK_TOKEN', 'OUTCOME_SUMMARY_VIA',
   'MCP_API_KEY', 'TOOL_TIMEOUT_MS', 'LOG_TRANSCRIPTS',
   'INBOUND_BOOKING_ENABLED', 'BUSINESS_HOURS_DAYS', 'BUSINESS_HOURS_START', 'BUSINESS_HOURS_END',
   'INBOUND_DEFAULT_DURATION_MINUTES', 'INBOUND_MAX_LOOKAHEAD_DAYS', 'ASSISTANT_PRINCIPAL_NAME', 'DISCLOSURE_LINE', 'RECORD_CALLS', 'RECORDING_RETENTION_DAYS',
@@ -178,6 +178,22 @@ describe('config: env schema', () => {
       const { config } = await import('../src/config/index.js');
       expect(config.TASK_WEBHOOK_URL).toBe(allowed);
     }
+  });
+
+  it('OUTCOME_SUMMARY_VIA defaults to notification', async () => {
+    setEnv({});
+    const { config } = await import('../src/config/index.js');
+    expect(config.OUTCOME_SUMMARY_VIA).toBe('notification');
+  });
+
+  it('OUTCOME_SUMMARY_VIA=webhook needs TASK_WEBHOOK_URL', async () => {
+    setEnv({ OUTCOME_SUMMARY_VIA: 'webhook' });
+    await expect(import('../src/config/index.js')).rejects.toThrow(/TASK_WEBHOOK_URL is required when OUTCOME_SUMMARY_VIA=webhook/);
+
+    vi.resetModules();
+    setEnv({ OUTCOME_SUMMARY_VIA: 'webhook', TASK_WEBHOOK_URL: 'http://hermes:8644/webhooks/banjo', TASK_WEBHOOK_SECRET: 'x'.repeat(32) });
+    const { config } = await import('../src/config/index.js');
+    expect(config.OUTCOME_SUMMARY_VIA).toBe('webhook');
   });
 
   it('defaults CALENDAR_PROVIDER to google, with no CalDAV vars required', async () => {
