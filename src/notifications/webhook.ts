@@ -134,11 +134,13 @@ async function attempt(url: string, body: string, event: TaskFinishedEvent): Pro
  * throws: like a notification, a webhook problem must not reach the call.
  * Retries once after RETRY_DELAY_MS on a network error or 5xx; a 4xx means
  * the receiver is misconfigured (wrong secret, unknown route) and is logged,
- * not retried. Logs only the task and status, never the body.
+ * not retried. Logs only the task and status, never the body. Resolves true
+ * once the receiver accepted it (a 2xx), so a caller relying on the webhook
+ * (OUTCOME_SUMMARY_VIA=webhook) knows to fall back when it wasn't.
  */
-export async function sendTaskWebhook(event: TaskFinishedEvent): Promise<void> {
+export async function sendTaskWebhook(event: TaskFinishedEvent): Promise<boolean> {
   const url = config.TASK_WEBHOOK_URL;
-  if (!url) return;
+  if (!url) return false;
   const body = JSON.stringify(event);
   let result = await attempt(url, body, event);
   if (!result.ok && result.retryable) {
@@ -146,4 +148,5 @@ export async function sendTaskWebhook(event: TaskFinishedEvent): Promise<void> {
     result = await attempt(url, body, event);
   }
   if (!result.ok) logger.error({ taskId: event.taskId, ...result.detail }, 'Failed to send task webhook');
+  return result.ok;
 }

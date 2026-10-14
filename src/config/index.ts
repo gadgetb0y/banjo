@@ -226,6 +226,12 @@ const envSchema = z
     // Same 32-char floor as MCP_API_KEY: it's what lets the receiver trust the event.
     TASK_WEBHOOK_SECRET: optionalSetting(z.string().min(32, 'TASK_WEBHOOK_SECRET must be at least 32 characters')),
     TASK_WEBHOOK_TOKEN: optionalSetting(z.string()),
+    // Who tells the owner a call's outcome. `webhook`: the agent behind
+    // TASK_WEBHOOK_URL does (e.g. Hermes over iMessage), so the end-of-call
+    // summary skips NOTIFICATION_CHANNEL unless the webhook isn't delivered.
+    // One-off owner messages (hold, inbound bookings, flagged calls) still go
+    // through NOTIFICATION_CHANNEL either way: the webhook doesn't carry them.
+    OUTCOME_SUMMARY_VIA: z.enum(['notification', 'webhook']).default('notification'),
 
     // 32-char floor (not just non-empty): the MCP endpoint is internet-reachable,
     // so a short key is brute-forceable. RUNBOOKS.md recommends `openssl rand -hex 32`.
@@ -390,6 +396,10 @@ const envSchema = z
   .refine((v) => v.NOTIFICATION_CHANNEL !== 'pushover' || !!(v.PUSHOVER_APP_TOKEN && v.PUSHOVER_USER_KEY), {
     message: 'PUSHOVER_APP_TOKEN and PUSHOVER_USER_KEY are required when NOTIFICATION_CHANNEL=pushover',
     path: ['PUSHOVER_APP_TOKEN'],
+  })
+  .refine((v) => v.OUTCOME_SUMMARY_VIA !== 'webhook' || !!v.TASK_WEBHOOK_URL, {
+    message: 'TASK_WEBHOOK_URL is required when OUTCOME_SUMMARY_VIA=webhook',
+    path: ['TASK_WEBHOOK_URL'],
   })
   .refine((v) => !v.TASK_WEBHOOK_URL || !!v.TASK_WEBHOOK_SECRET, {
     message: 'TASK_WEBHOOK_SECRET is required when TASK_WEBHOOK_URL is set',
