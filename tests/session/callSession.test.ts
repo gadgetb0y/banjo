@@ -2277,16 +2277,23 @@ describe('CallSession: a call-ending tool needs a spoken goodbye first (#102)', 
       expect(handler).toHaveBeenCalledTimes(1);
     });
 
-    it("doesn't when the other party spoke last", async () => {
-      const { handler, callTool } = await startWithEndTool();
-      say('user', 'Mhm.');
-      say('assistant', "Okay, let's close this out.");
-      await endTurnAndSettle(callTool('call-1'));
-      say('user', 'Bye now!');
-      await endTurnAndSettle(callTool('call-2'));
+    it("doesn't when the other party spoke last, on a provider that transcribes Banjo late", async () => {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (fakeVoiceAI as any).transcriptsLate = true;
+      try {
+        const { handler, callTool } = await startWithEndTool();
+        say('user', 'Mhm.');
+        say('assistant', "Okay, let's close this out.");
+        await endTurnAndSettle(callTool('call-1'));
+        say('user', 'Bye now!');
+        await endTurnAndSettle(callTool('call-2'));
 
-      expect(handler).toHaveBeenCalledTimes(1);
-      expect(fakeVoiceAI.sayVerbatim).not.toHaveBeenCalled();
+        expect(handler).toHaveBeenCalledTimes(1);
+        expect(fakeVoiceAI.sayVerbatim).not.toHaveBeenCalled();
+      } finally {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        delete (fakeVoiceAI as any).transcriptsLate;
+      }
     });
 
     it('tells the model the refusal is not something the other party said', async () => {
@@ -2361,12 +2368,83 @@ describe('CallSession: a call-ending tool needs a spoken goodbye first (#102)', 
   it("doesn't refuse when Banjo's line for this turn hasn't been transcribed yet", async () => {
     // openai-live finalizes transcripts after a 1.2s idle, which can be after
     // the tool call: the latest line is then still the other party's.
-    const { handler, callTool } = await startWithEndTool();
-    say('assistant', 'Anything else?');
-    say('user', 'No, that is all.');
-    await endTurnAndSettle(callTool('call-1'));
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (fakeVoiceAI as any).transcriptsLate = true;
+    try {
+      const { handler, callTool } = await startWithEndTool();
+      say('assistant', 'Anything else?');
+      say('user', 'No, that is all.');
+      await endTurnAndSettle(callTool('call-1'));
 
-    expect(handler).toHaveBeenCalledTimes(1);
+      expect(handler).toHaveBeenCalledTimes(1);
+      expect(fakeVoiceAI.sayVerbatim).not.toHaveBeenCalled();
+    } finally {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      delete (fakeVoiceAI as any).transcriptsLate;
+    }
+  });
+
+  describe('Banjo ends the call without a word since their line (#167)', () => {
+    // Sim ask call: to "I think that's unknown for now. You wanna call back?"
+    // the model called report_answers_and_end_call without speaking. Both
+    // checks above judge a line Banjo said, so the call dropped silently.
+    it('refuses once, asking it to reply first, then lets a reply with a goodbye through', async () => {
+      const { handler, callTool } = await startWithEndTool();
+      say('assistant', 'Is there anyone else who might know?');
+      say('user', "I think that's unknown for now. You wanna call back?");
+      await endTurnAndSettle(callTool('call-1'));
+
+      expect(handler).not.toHaveBeenCalled();
+      expect(fakeVoiceAI.sendToolResult).toHaveBeenLastCalledWith('call-1', expect.objectContaining({ ok: false, error: 'no_reply' }), true);
+      const [, result] = vi.mocked(fakeVoiceAI.sendToolResult).mock.lastCall!;
+      expect((result as { message: string }).message).toMatch(/if they asked you something, answer it/i);
+
+      say('assistant', "I'll pass that on to Steve. Thanks so much for your help—bye!");
+      await endTurnAndSettle(callTool('call-2'));
+      expect(handler).toHaveBeenCalledTimes(1);
+      expect(fakeVoiceAI.sayVerbatim).not.toHaveBeenCalled();
+    });
+
+    it('says the fixed goodbye if the retry is silent too', async () => {
+      const { handler, callTool } = await startWithEndTool();
+      say('user', 'You wanna call back?');
+      await endTurnAndSettle(callTool('call-1'));
+      await endTurnThenFallbackGoodbye(callTool('call-2'));
+
+      expect(handler).toHaveBeenCalledTimes(1);
+    });
+
+    it('says the fixed goodbye straight away when they had signed off (#144)', async () => {
+      const { handler, callTool } = await startWithEndTool();
+      say('user', 'Okay, bye.');
+      await endTurnThenFallbackGoodbye(callTool('call-1'));
+
+      expect(handler).toHaveBeenCalledTimes(1);
+      expect(fakeVoiceAI.sendToolResult).not.toHaveBeenCalledWith('call-1', expect.objectContaining({ ok: false }), true);
+    });
+
+    it("doesn't count what they say while Banjo is ending the call: its goodbye came first", async () => {
+      const { handler, callTool } = await startWithEndTool();
+      say('user', 'Okay.');
+      const pending = callTool('call-1');
+      say('assistant', 'Great — take care, bye!');
+      say('user', 'Bye!');
+      await endTurnAndSettle(pending);
+
+      expect(handler).toHaveBeenCalledTimes(1);
+      expect(fakeVoiceAI.sayVerbatim).not.toHaveBeenCalled();
+    });
+
+    it("ignores a suspect line from them (#25): Banjo's goodbye still stands", async () => {
+      const { handler, callTool } = await startWithEndTool();
+      say('user', 'Okay, thanks.');
+      say('assistant', 'You too — take care, bye!');
+      say('user', 'Ви...');
+      await endTurnAndSettle(callTool('call-1'));
+
+      expect(handler).toHaveBeenCalledTimes(1);
+      expect(fakeVoiceAI.sayVerbatim).not.toHaveBeenCalled();
+    });
   });
 
   describe('the other party cuts in while Banjo is ending the call (#133)', () => {
@@ -2437,7 +2515,8 @@ describe('CallSession: a call-ending tool needs a spoken goodbye first (#102)', 
       say('user', 'And another thing about the bill.');
       const last = callTool('call-4');
       say('user', 'Wait, hold on, one more thing.');
-      await endTurnAndSettle(last);
+      // Banjo said nothing since their line, so it gets the fixed goodbye (#167).
+      await endTurnThenFallbackGoodbye(last);
 
       expect(handler).toHaveBeenCalledTimes(1);
     });

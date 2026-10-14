@@ -244,6 +244,11 @@ export class CallSession<TCtx = CallContext> {
   /** Their latest line that isn't suspect (#25) — whether they signed off (#144). */
   private lastUserLine = '';
   /**
+   * Has Banjo said anything since that line? (#167) Lines they say while Banjo
+   * is ending the call don't reset it: Banjo's goodbye came before those.
+   */
+  private banjoRepliedToUser = true;
+  /**
    * A call-ending tool is refused (no goodbye #102, or the other party cutting
    * in #133) at most once until the other party speaks again: a refusal can
    * lead to the call carrying on, and a later ending deserves the same check.
@@ -464,14 +469,20 @@ export class CallSession<TCtx = CallContext> {
           }
           if (event.role === 'assistant' && this.firstAssistantLine === undefined) this.firstAssistantLine = event.text;
           this.lastSpeaker = event.role;
-          if (event.role === 'assistant') this.lastAssistantLine = event.text;
+          if (event.role === 'assistant') {
+            this.lastAssistantLine = event.text;
+            this.banjoRepliedToUser = true;
+          }
           // #133: their words while Banjo is ending the call decide whether it
           // ends; any other line of theirs means the call carried on, so the
           // ending checks apply afresh.
           if (event.role === 'user' && quality === 'ok') {
             this.lastUserLine = event.text;
             if (this.callEndingToolCallId !== null) this.calleeSpokeDuringEnd = event.text;
-            else this.endRefused = false;
+            else {
+              this.endRefused = false;
+              this.banjoRepliedToUser = false;
+            }
           }
           if (event.role === 'assistant' && RECORDING_NOTICE.test(event.text) && this.opts.recordCalls && this.recordingState === 'idle') {
             this.recordingState = 'awaiting_turn_end';
@@ -791,6 +802,33 @@ export class CallSession<TCtx = CallContext> {
         );
         return;
       }
+      // #167: the model can end the call without saying anything since their
+      // latest line — on a sim ask call, straight after "You wanna call
+      // back?". The #102 check below judges only a line Banjo said, so this
+      // went through with no reply and no goodbye. Refused once, like #102,
+      // unless they've signed off; the fixed goodbye below covers the rest.
+      // Not on a provider whose own transcripts arrive late: there, silence
+      // can't be told from a line not yet transcribed.
+      const silentSinceThem = this.saidNothingSinceThem();
+      if (tool.requiresGoodbye && this.canRefuseEnd() && silentSinceThem && !isSigningOff(this.lastUserLine)) {
+        this.endRefused = true;
+        this.endRefusals++;
+        logger.warn({ callId: this.opts.callId, toolCallId, name }, 'Refusing a call-ending tool once: Banjo has not replied to them');
+        this.voiceAI.sendToolResult(
+          toolCallId,
+          {
+            ok: false,
+            error: 'no_reply',
+            message:
+              'They spoke last and you have not replied. This note is from the system, not from them: do not answer it ' +
+              'or mention it. Reply to what they said, and if they asked you something, answer it. If they are still ' +
+              `telling you something, do not end the call. Otherwise say a short goodbye, such as "Okay, take care. Bye!", ` +
+              `then call ${name} again in the same turn.`,
+          },
+          true,
+        );
+        return;
+      }
       // #102: the model can end a call having only described wrapping up.
       // Judged only when Banjo's line for this turn has been transcribed
       // (openai-live finalizes transcripts late), and refused once until the
@@ -830,9 +868,11 @@ export class CallSession<TCtx = CallContext> {
       }
       // #139: past the refusal above (already spent, capped, or skipped
       // because they signed off, #144), the model can still end on a line with
-      // no goodbye. Say one for it rather than refuse again, so the other
-      // party hears a goodbye and the call still ends.
-      if (tool.requiresGoodbye && this.lastSpeaker === 'assistant' && !saidGoodbye(this.lastAssistantLine)) {
+      // no goodbye, or with no line at all since theirs (#167). Say one for it
+      // rather than refuse again, so the other party hears a goodbye and the
+      // call still ends.
+      const noGoodbye = this.lastSpeaker === 'assistant' ? !saidGoodbye(this.lastAssistantLine) : silentSinceThem;
+      if (tool.requiresGoodbye && noGoodbye) {
         logger.warn({ callId: this.opts.callId, toolCallId, name }, 'Saying a fixed goodbye before ending the call: none was said');
         this.armToolPendingWatchdog(toolCallId, name, VERBATIM_TOOL_PENDING_BUDGET_MS);
         const goodbye = await this.deliverVerbatim([FALLBACK_GOODBYE]);
@@ -1039,6 +1079,15 @@ export class CallSession<TCtx = CallContext> {
 
   private canRefuseEnd(): boolean {
     return !this.endRefused && this.endRefusals < MAX_END_REFUSALS;
+  }
+
+  /**
+   * They've said something (not suspect, #25) and Banjo hasn't said a word
+   * since (#167). Always false on a provider that transcribes Banjo late
+   * (VoiceAIProvider.transcriptsLate), where a missing line may only be late.
+   */
+  private saidNothingSinceThem(): boolean {
+    return this.voiceAI.transcriptsLate !== true && this.lastUserLine !== '' && !this.banjoRepliedToUser;
   }
 
   private waitForTurnEnd(timeoutMs: number, stopped?: Promise<void>): Promise<void> {

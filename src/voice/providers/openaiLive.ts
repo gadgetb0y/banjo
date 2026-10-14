@@ -192,6 +192,8 @@ export class OpenAILiveProvider implements VoiceAIProvider {
   readonly name = 'openai-live';
   /** No interruption event exists on this wire (open risk #15). */
   readonly emitsInterruptions = false;
+  /** Transcripts finalize after an idle, which can be after the turn's tool call. */
+  readonly transcriptsLate = true;
 
   private ws: WebSocket | undefined;
   /** The socket disconnect() is closing: if it hasn't opened yet, `ws` reports the close as an error, which isn't one (#100). */

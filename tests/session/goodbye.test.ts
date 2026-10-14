@@ -31,8 +31,23 @@ describe('saidGoodbye (#102)', () => {
     "Thanks for hanging on a second—I'll just finish this up with a proper goodbye.",
     'Let me just say goodbye properly.',
     'I wanted to end with a real goodbye.',
+    // #167, live ask call 2026-10-14: the retry after a refusal thanked them
+    // and talked about a goodbye, and passed on the "thanks".
+    "Okay, thanks for that—I'll close with a quick goodbye now.",
+    'Thanks so much, I just need to say a proper goodbye.',
+    // #167, sim: a closing line with thanks but no sign-off.
+    "Thanks, that's helpful. I just have what I need for today.",
+    "Great, thanks. That's all I needed.",
+    "Thanks, I've got everything I need.",
   ])('rejects a line with no goodbye: %s', (line) => {
     expect(saidGoodbye(line)).toBe(false);
+  });
+
+  it('gives the same answer when asked twice (no state carried between calls)', () => {
+    const line = "Okay, thanks for that—I'll close with a quick goodbye now.";
+    expect(saidGoodbye(line)).toBe(saidGoodbye(line));
+    expect(saidGoodbye('Thanks again for your help!')).toBe(true);
+    expect(saidGoodbye('Thanks again for your help!')).toBe(true);
   });
 });
 

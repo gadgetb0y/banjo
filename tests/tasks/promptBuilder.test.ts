@@ -295,6 +295,30 @@ describe("buildCallSystemPrompt: mode 'ask' (#148)", () => {
     expect(prompt).not.toContain('report_answers_and_end_call');
   });
 
+  // #167: conduct gaps seen in sim runs and on the first live ask call.
+  describe('conduct (#167)', () => {
+    const both = () => [buildCallSystemPrompt(askTask, contact, []), buildCallFrontendPrompt(askTask, contact)].map((p) => p.replace(/\s+/g, ' '));
+
+    it('gives no reason for the call beyond a question or two: "before booking" was made up', () => {
+      for (const prompt of both()) {
+        expect(prompt).toMatch(/a quick question or two/i);
+        expect(prompt).toMatch(/never give a reason you were not given/i);
+      }
+    });
+
+    it('saves an answer only after they reply to the read-back, never in the same turn', () => {
+      const prompt = buildCallSystemPrompt(askTask, contact, []);
+      expect(prompt).toMatch(/never in the same turn as your read-back/i);
+    });
+
+    it('answers a question of theirs before ending, including "will you call back?"', () => {
+      for (const prompt of both()) {
+        expect(prompt).toMatch(/if they ask you something, answer it before you end the call/i);
+        expect(prompt).toMatch(/pass it on to/i);
+      }
+    });
+  });
+
   it('gives the voice layer the questions too, without the tool names', () => {
     const prompt = buildCallFrontendPrompt(askTask, contact);
     expect(prompt).toContain('1. When do you close on Saturday?');
@@ -415,7 +439,7 @@ describe("buildCallSystemPrompt: mode 'ask' (#148)", () => {
   it('tells the voice layer to delegate saving each confirmed answer, silently, without naming the tool', () => {
     const prompt = buildCallFrontendPrompt(askTask, contact).replace(/\s+/g, ' ');
     expect(prompt).toContain(
-      "Once they confirm your read-back of an answer, or that they don't know, delegate saving that answer to your backend right away, without saying anything about it, and carry on.",
+      "Once they reply to your read-back and confirm it, or say they don't know, delegate saving that answer to your backend right away, without saying anything about it, and carry on.",
     );
     expect(prompt).not.toContain('record_answer');
     // Booking and conversation voice layers are not told to save answers.

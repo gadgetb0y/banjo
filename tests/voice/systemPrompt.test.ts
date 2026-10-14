@@ -423,6 +423,11 @@ describe("purpose 'ask' (#148 review, finding 3)", () => {
       expect(prompt).toMatch(/no filler/i);
     });
 
+    // #167: "One moment." before a read-back, and before the closing tool.
+    it(`${build.name}: no filler before a read-back or before ending the call`, () => {
+      expect(build('outbound', ask)).toMatch(/no filler[^\n]*before a read-back[^\n]*before ending the call/i);
+    });
+
     it(`${build.name}: a hedged answer is said back as hedged, not firmed up`, () => {
       expect(build('outbound', ask)).toMatch(/hedged answer[^\n]*say it back as they said it/i);
     });
