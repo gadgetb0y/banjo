@@ -45,10 +45,10 @@ const sent = (call = 0) => fetchMock.mock.calls[call]![1];
 const header = (name: string, call = 0) => new Headers(sent(call).headers).get(name);
 
 describe('sendTaskWebhook', () => {
-  it('posts the event as JSON to TASK_WEBHOOK_URL', async () => {
+  it('posts the event as JSON to TASK_WEBHOOK_URL, and reports it delivered', async () => {
     fetchMock.mockResolvedValueOnce(new Response(null, { status: 200 }));
 
-    await webhook.sendTaskWebhook(event);
+    await expect(webhook.sendTaskWebhook(event)).resolves.toBe(true);
 
     expect(fetchMock.mock.calls[0]![0]).toBe(URL_);
     expect(sent().method).toBe('POST');
@@ -85,7 +85,7 @@ describe('sendTaskWebhook', () => {
 
     const done = webhook.sendTaskWebhook(event);
     await vi.advanceTimersByTimeAsync(webhook.RETRY_DELAY_MS);
-    await expect(done).resolves.toBeUndefined();
+    await expect(done).resolves.toBe(false);
 
     expect(fetchMock).toHaveBeenCalledTimes(2);
     expect(error).toHaveBeenCalledWith(expect.objectContaining({ taskId: 'task-1', status: 503 }), 'Failed to send task webhook');
@@ -97,7 +97,7 @@ describe('sendTaskWebhook', () => {
 
     const done = webhook.sendTaskWebhook(event);
     await vi.advanceTimersByTimeAsync(webhook.RETRY_DELAY_MS);
-    await expect(done).resolves.toBeUndefined();
+    await expect(done).resolves.toBe(true);
 
     expect(fetchMock).toHaveBeenCalledTimes(2);
   });
@@ -106,7 +106,7 @@ describe('sendTaskWebhook', () => {
     const error = vi.spyOn(logger, 'error');
     fetchMock.mockResolvedValueOnce(new Response(null, { status: 401 }));
 
-    await webhook.sendTaskWebhook(event);
+    await expect(webhook.sendTaskWebhook(event)).resolves.toBe(false);
 
     expect(fetchMock).toHaveBeenCalledTimes(1);
     expect(error).toHaveBeenCalledWith(expect.objectContaining({ taskId: 'task-1', status: 401 }), 'Failed to send task webhook');
@@ -114,12 +114,12 @@ describe('sendTaskWebhook', () => {
 });
 
 describe('sendTaskWebhook with no TASK_WEBHOOK_URL', () => {
-  it('sends nothing', async () => {
+  it('sends nothing, and reports nothing delivered', async () => {
     process.env.TASK_WEBHOOK_URL = '';
     vi.resetModules();
     const unconfigured = await import('../../src/notifications/webhook.js');
 
-    await unconfigured.sendTaskWebhook(event);
+    await expect(unconfigured.sendTaskWebhook(event)).resolves.toBe(false);
 
     expect(fetchMock).not.toHaveBeenCalled();
   });

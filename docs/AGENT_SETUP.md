@@ -126,6 +126,28 @@ Then set Banjo's `TASK_WEBHOOK_URL` to `http(s)://<hermes-host>:8644/webhooks/ba
 If Banjo already notifies you when a call ends (`NOTIFICATION_CHANNEL`), leave `deliver: "log"`,
 or you'll be told about every call twice.
 
+To have Hermes tell you instead, set Banjo's `OUTCOME_SUMMARY_VIA=webhook` and give the route a
+`deliver` target. Banjo then skips its own end-of-call summary, and sends it after all only if the
+webhook isn't delivered (Hermes down, a wrong secret). Hermes answers 202 once it has accepted the
+event, before its agent has run, so a later failure to send the message isn't seen by Banjo. Hold,
+inbound-booking and flagged-call alerts still come through `NOTIFICATION_CHANNEL`. The agent turn
+that writes the message reads the call's outcome, so limit it to read-only tools:
+
+```yaml
+        banjo:
+          secret: "${BANJO_WEBHOOK_SECRET}"
+          prompt: |
+            Banjo finished a phone task ({taskId}, status {status}): {text}
+            Read it with get_task_status and tell the owner what happened in a few short lines.
+          toolsets: ["banjo_readonly"]   # an MCP server limited to Banjo's read tools
+          deliver: "telegram"            # or photon (iMessage), discord, …
+          mirror_to_session: true        # so a reply in that chat has the context
+```
+
+`mirror_to_session` puts the message, which is written from what was said on the call, into a chat
+where the agent may be able to place calls. Keep a confirm-before-calling rule in that agent's
+instructions; Banjo's per-number call cap applies either way.
+
 ### Running Hermes next to Banjo
 
 On an always-on host (see RUNBOOKS, "Running Banjo on an always-on Linux host"), Hermes can go in

@@ -38,8 +38,10 @@ import { saveTranscriptTurn } from '../transcripts/service.js';
  * here rather than from transitionTask: an outcome is usually settled
  * mid-call, and this runs only once the call has ended, so the agent that
  * hears back can read a complete transcript. Sent alongside the owner's
- * notification, never instead of it: allSettled, so neither can stop the
- * other.
+ * notification (allSettled, so neither can stop the other), unless
+ * OUTCOME_SUMMARY_VIA=webhook: then the agent behind the webhook tells the
+ * owner, and the owner's notification goes out only if the webhook wasn't
+ * delivered, so the owner hears about each call once.
  */
 export async function notifyTaskOutcome(taskId: string, disclosure?: DisclosureResult): Promise<void> {
   const current = await getTask(taskId);
@@ -55,9 +57,9 @@ export async function notifyTaskOutcome(taskId: string, disclosure?: DisclosureR
   // building the event then rejects this promise, which allSettled holds,
   // instead of throwing before allSettled runs and skipping the owner's
   // notification with it (caught in CI, 2026-10-05).
-  const sendWebhook = async () => {
-    if (!config.TASK_WEBHOOK_URL) return;
-    await sendTaskWebhook({
+  const sendWebhook = async (): Promise<boolean> => {
+    if (!config.TASK_WEBHOOK_URL) return false;
+    return sendTaskWebhook({
       event: 'task.finished',
       taskId: current.id,
       status: current.status,
@@ -67,10 +69,19 @@ export async function notifyTaskOutcome(taskId: string, disclosure?: DisclosureR
       finishedAt: current.updatedAt.toISOString(),
     });
   };
-  const [notified, webhook] = await Promise.allSettled([
-    createNotificationChannel().notify(current.id, outcome, summary),
-    sendWebhook(),
-  ]);
+  const notifyOwner = () => createNotificationChannel().notify(current.id, outcome, summary);
+  if (config.OUTCOME_SUMMARY_VIA === 'webhook') {
+    const delivered = await sendWebhook().catch((err: unknown) => {
+      logger.error({ err, taskId }, 'Failed to send task webhook');
+      return false;
+    });
+    if (!delivered) {
+      logger.warn({ taskId }, 'Task webhook not delivered; sending the outcome summary to the owner instead');
+      await notifyOwner();
+    }
+    return;
+  }
+  const [notified, webhook] = await Promise.allSettled([notifyOwner(), sendWebhook()]);
   if (webhook.status === 'rejected') logger.error({ err: webhook.reason, taskId }, 'Failed to send task webhook');
   if (notified.status === 'rejected') throw notified.reason;
 }

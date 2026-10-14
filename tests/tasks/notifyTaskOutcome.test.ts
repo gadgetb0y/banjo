@@ -155,3 +155,53 @@ describe('notifyTaskOutcome', () => {
     });
   });
 });
+
+describe('notifyTaskOutcome with OUTCOME_SUMMARY_VIA=webhook', () => {
+  // The agent behind the webhook tells the owner (e.g. Hermes over iMessage),
+  // so the owner's channel would be a second copy of the same news. It stays
+  // the fallback: a summary that can't be handed over still reaches the owner.
+  let viaWebhook: typeof notifyTaskOutcome;
+
+  beforeEach(async () => {
+    process.env.OUTCOME_SUMMARY_VIA = 'webhook';
+    vi.resetModules();
+    ({ notifyTaskOutcome: viaWebhook } = await import('../../src/tasks/callSessionAdapter.js'));
+    delete process.env.OUTCOME_SUMMARY_VIA;
+  });
+
+  it("sends only the webhook when it's delivered", async () => {
+    sendTaskWebhook.mockResolvedValueOnce(true as never);
+
+    await viaWebhook('task-1');
+
+    expect(sendTaskWebhook).toHaveBeenCalledTimes(1);
+    expect(notify).not.toHaveBeenCalled();
+  });
+
+  it("falls back to the owner's notification when the webhook isn't delivered", async () => {
+    sendTaskWebhook.mockResolvedValueOnce(false as never);
+
+    await viaWebhook('task-1');
+
+    expect(notify).toHaveBeenCalledTimes(1);
+    const [, , summary] = notify.mock.calls[0]! as unknown as [string, unknown, string];
+    expect(summary).toMatch(/^Booked with Luigi's/);
+  });
+
+  it('falls back when the webhook rejects', async () => {
+    sendTaskWebhook.mockRejectedValueOnce(new Error('should never throw, but if it did'));
+
+    await expect(viaWebhook('task-1')).resolves.toBeUndefined();
+
+    expect(notify).toHaveBeenCalledTimes(1);
+  });
+
+  it("falls back when the webhook event can't be built", async () => {
+    getTask.mockResolvedValue({ ...finished, updatedAt: undefined } as unknown as Task);
+
+    await expect(viaWebhook('task-1')).resolves.toBeUndefined();
+
+    expect(sendTaskWebhook).not.toHaveBeenCalled();
+    expect(notify).toHaveBeenCalledTimes(1);
+  });
+});
