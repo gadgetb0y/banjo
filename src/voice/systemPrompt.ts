@@ -148,6 +148,9 @@ function guidanceSections(
               // the other party confirms a read-back. A filler there ("One
               // moment.") stalls a call that has nothing to wait for.
               `- Saving an answer${layer === 'backend' ? ' with record_answer' : ''} is silent: never announce it, and say no filler before it. Just carry on with the call.`,
+              // #167: "One moment." came before a read-back, and before the
+              // closing tool. Nothing on an ask call needs a wait.
+              '- Say no filler ("One moment.") before a read-back, before saving an answer, or before ending the call: none of them needs a wait.',
               '- Once the result comes back, just carry on the conversation. Do not describe what you did or are about to do.',
             ]
           : [

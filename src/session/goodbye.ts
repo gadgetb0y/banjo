@@ -13,16 +13,23 @@
 const SIGN_OFF =
   /\b(good-?bye|bye|take care|talk (to you )?soon|see you|good ?night|have a (great|good|nice|lovely|wonderful|fantastic) (one|day|evening|night|weekend|afternoon|morning|time)|cheers)\b/i;
 const THANKS = /\b(thanks|thank you)\b/i;
+// #167: "I just have what I need for today." and "I'll close with…" wrap up
+// without signing off, the same as "let me wrap this up".
 const DESCRIBES_ENDING =
-  /\b(wrap(ping)? (this |it |things )?up|close (this|it|things) out|end(ing)? (the|this) call|hang(ing)? up|finish(ing)? (this |it |things )?up|say a quick goodbye)\b/i;
+  /\b(wrap(ping)? (this |it |things )?up|close (this|it|things) out|close (with|on)|end(ing)? (the|this) call|hang(ing)? up|finish(ing)? (this |it |things )?up|say a quick goodbye|(have|got|had) (what|all|everything) (i|we) need(ed)?|that'?s all (i|we) need(ed)?)\b/i;
 // "Goodbye" talked about rather than said (#139: "I'll just finish this up
 // with a proper goodbye." ended a call with no goodbye). Removed before the
 // sign-off check, so "I'll say goodbye now. Bye!" still counts.
 const MENTIONS_GOODBYE = /\b(say(ing)?|with|a|the|my|our|proper|quick|real|final) good-?bye\b/gi;
+// Non-global copy for .test(): a /g regex keeps lastIndex between calls.
+const TALKS_ABOUT_GOODBYE = new RegExp(MENTIONS_GOODBYE.source, 'i');
 
 export function saidGoodbye(line: string): boolean {
   if (SIGN_OFF.test(line.replace(MENTIONS_GOODBYE, ''))) return true;
-  return THANKS.test(line) && !DESCRIBES_ENDING.test(line);
+  // A line that talks about a goodbye without saying one describes the ending
+  // (#167: "Okay, thanks for that—I'll close with a quick goodbye now."), so
+  // its "thanks" doesn't count as a sign-off either.
+  return THANKS.test(line) && !DESCRIBES_ENDING.test(line) && !TALKS_ABOUT_GOODBYE.test(line);
 }
 
 /**

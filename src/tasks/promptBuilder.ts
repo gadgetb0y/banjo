@@ -155,6 +155,25 @@ ${personal}`;
 }
 
 /**
+ * #167: in sim runs an ask call opened "I'm calling to ask a couple of quick
+ * questions before booking": a reason nobody gave, which invites a booking
+ * offer the call can't take.
+ */
+function askOpenerRule(principal: string): string {
+  return `When you say why you are calling, say only that you have a quick question or two for ${principal}. Never give a
+reason you were not given, such as ${principal} planning to book, buy or visit.`;
+}
+
+/**
+ * #167, live ask call 2026-10-14: asked "You wanna call back?", Banjo went
+ * straight to its goodbye. It can't promise a callback, but it can answer.
+ */
+function askTheirQuestionsRule(principal: string): string {
+  return `If they ask you something, answer it before you end the call. If they ask whether you'll call back or follow up,
+promise nothing: say you'll pass it on to ${principal} ("I'll pass that on to ${principal}. Thanks so much for your help!").`;
+}
+
+/**
  * An 'ask' call (#148) in place of the booking instructions: no free time, no
  * calendar tools, nothing agreed. The read-back is the errand's equivalent of
  * a booking's (#44): the one sentence that catches a misheard answer while
@@ -166,11 +185,13 @@ function askModeGuidance(task: Task): string {
 ${numberedQuestions(task)}
 
 This call is only to find things out for ${principal}. It books nothing and agrees to nothing. ${askLimits()}
+${askOpenerRule(principal)}
 Ask one question at a time, and let them answer before the next. When they answer, say it back in a few words as
 you go, so they can correct you ("Six on Saturdays, got it. And how much is…"). If they don't know or won't say,
 accept that after asking once more at most, and move on.
-Once they confirm your read-back of an answer, or that they don't know, call record_answer for that question right
-away, without saying anything about it, and carry on.
+Once they reply to your read-back and confirm it, or say they don't know, call record_answer for that question right
+away, without saying anything about it, and carry on. Never in the same turn as your read-back: wait for their reply.
+${askTheirQuestionsRule(principal)}
 After the last answer, say it back and let them reply before you end the call: never end it in the same turn as a
 read-back or a question. Then say goodbye and call report_answers_and_end_call in that same turn, with one entry
 per question by its number. Record only what they actually told you on this call; never fill in a guess. This is
@@ -248,10 +269,12 @@ function askModeFrontendGuidance(task: Task): string {
 
 This call is only to find things out. Your questions, in order:
 ${numberedQuestions(task)}
+${askOpenerRule(config.ASSISTANT_PRINCIPAL_NAME)}
 Ask one at a time, and say each answer back in a few words as you go, so they can correct you. Agree to nothing.
 ${askLimits()}
-Once they confirm your read-back of an answer, or that they don't know, delegate saving that answer to your backend
-right away, without saying anything about it, and carry on.
+Once they reply to your read-back and confirm it, or say they don't know, delegate saving that answer to your backend
+right away, without saying anything about it, and carry on. Never in the same turn as your read-back: wait for their reply.
+${askTheirQuestionsRule(config.ASSISTANT_PRINCIPAL_NAME)}
 After the last answer, say it back and let them reply; then say goodbye and immediately delegate ending the call, with
 the answers they gave.`;
 }
