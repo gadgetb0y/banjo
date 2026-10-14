@@ -148,6 +148,20 @@ that writes the message reads the call's outcome, so limit it to read-only tools
 where the agent may be able to place calls. Keep a confirm-before-calling rule in that agent's
 instructions; Banjo's per-number call cap applies either way.
 
+With no `deliver_extra.chat_id`, Hermes sends to the platform's home channel. For Photon (iMessage)
+that is a bare phone number, but your chat's session is keyed by the full Photon chat id
+(`any;-;+1…`). The message still arrives, but the mirror logs `Mirror: no session found` and a reply
+has no context. Set the full id, which is the part after `agent:main:photon:dm:` in the session's key
+in Hermes's `sessions/sessions.json`:
+
+```yaml
+          deliver: "photon"
+          deliver_extra:
+            chat_id: "any;-;+15555550123"
+```
+
+A log line `delivery mirrored into photon:… session` confirms it.
+
 ### Running Hermes next to Banjo
 
 On an always-on host (see RUNBOOKS, "Running Banjo on an always-on Linux host"), Hermes can go in
