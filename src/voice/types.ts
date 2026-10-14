@@ -150,6 +150,14 @@ export interface VoiceAIProvider {
    * they answered (#71). Absent means it does emit them.
    */
   readonly emitsInterruptions?: boolean;
+  /**
+   * Optional; true for a provider whose transcript of Banjo's own speech can
+   * arrive after the tool call made in the same turn (openai-live finalizes
+   * after an idle). CallSession then can't tell from transcripts that Banjo
+   * said nothing before ending the call (#167), so it doesn't act on that.
+   * Absent means Banjo's lines are transcribed by the time the turn ends.
+   */
+  readonly transcriptsLate?: boolean;
   sayVerbatim(text: string): void;
   /**
    * Optional. A provider that cannot guarantee verbatim delivery (openai-live
