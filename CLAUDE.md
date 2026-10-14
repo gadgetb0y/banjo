@@ -13,17 +13,6 @@ Note: the repo was recently renamed from `ea` to `banjo` (see git history — "c
 ## Commands
 
 ```bash
-npm run dev              # tsx watch src/index.ts — local dev server with hot reload
-npm run build             # tsc -p tsconfig.build.json
-npm start                 # node dist/index.js (run build first)
-npm test                  # vitest run — full suite
-npm run test:watch        # vitest, watch mode
-npx vitest run tests/session/callSession.test.ts   # single test file
-npx vitest run -t "test name substring"            # single test by name
-npm run typecheck         # tsc --noEmit
-npm run db:generate        # drizzle-kit generate (runs build first)
-npm run db:migrate         # drizzle-kit migrate (runs build first)
-npm run db:studio          # drizzle-kit studio
 npm run test:call          # tsx scripts/manual-test-call.ts — places a real outbound call for manual testing
 npm run sim                # text-mode simulator: type as the business while Banjo calls it (OpenAI key + Postgres only; own banjo_sim DB; see docs/ARCHITECTURE.md)
 npm run dav:check          # read-only: lists CalDAV calendars / CardDAV address books, shows what Banjo sees
@@ -71,7 +60,6 @@ The system is two independently-swappable vendor abstraction layers, glued toget
 
 ## Testing conventions
 
-- Tests mirror `src/` structure under `tests/`.
 - Provider/session tests mock at the `VoiceAIProvider`/`TelephonyProvider` interface boundary rather than vendor SDKs directly, matching the abstraction layers above.
 - When touching call-ending or error-handling logic in `callSession.ts`, check `VoiceAIError.retryable` semantics — not every Voice AI `error` event should fail the call (see the retryable-vs-fatal fix in `docs/ARCHITECTURE.md`'s Open Risks item #14).
 - DB-backed suites run against the dedicated `banjo_test` database (`vitest.config.ts`), never the dev `banjo` database. Files run serially against that one shared database, so clear every table a file writes both before each test and after its last one — a row left behind breaks another file's setup, and only when vitest happens to order that file next.
