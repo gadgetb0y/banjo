@@ -100,9 +100,10 @@ already touching this table) is cheaper than leaving it for later.
   'other'` (Google has no equivalent concept), `preferredChannel: null` (unchanged existing behavior — the
   skill still asks once on first real booking decision).
 
-**Deriving `relationshipTier`** is a heuristic, not a guarantee: an explicit People API `relations` entry
-(spouse/child/parent/etc.) or membership in a Google contact group literally named "Family" or "Friends" maps
-to that tier. No match on either leaves the tier null — the contact behaves exactly like any other business
+**Deriving `relationshipTier`** is a heuristic, not a guarantee: membership in a Google contact group
+literally named "Family" or "Friends" maps to that tier. (This first also read People API `relations`
+entries such as spouse/child as family. Dropped in 2026-10: a contact's relations name *their* relatives, so a
+coworker whose card listed their own spouse became `family` and could hear the owner profile, #163.) No match on either leaves the tier null — the contact behaves exactly like any other business
 contact for greeting purposes. This depends entirely on how the principal has organized their own Google
 Contacts; an unlabeled contact simply doesn't get the personal treatment, which is an acceptable, low-stakes
 default rather than a failure mode.

@@ -34,14 +34,14 @@ function match(overrides: Partial<GoogleContactMatch> = {}): GoogleContactMatch 
     displayName: 'Mom',
     phoneNumber: '+15559990000',
     email: 'mom@example.com',
-    relationLabels: ['mother'],
-    groupLabels: [],
+    relationLabels: [],
+    groupLabels: ['Family'],
     ...overrides,
   };
 }
 
 describe('provisionLocalContact', () => {
-  it('creates a new local contact when no phone number match exists, tagging family relation as a tier', async () => {
+  it('creates a new local contact when no phone number match exists, tagging a "Family" group membership as a tier', async () => {
     const created = await provisionLocalContact(match());
 
     expect(created.displayName).toBe('Mom');
@@ -58,8 +58,15 @@ describe('provisionLocalContact', () => {
     expect(created.relationshipTier).toBe('friend');
   });
 
-  it('leaves relationshipTier null when there is no family relation or matching group', async () => {
+  it('leaves relationshipTier null when there is no matching group', async () => {
     const created = await provisionLocalContact(match({ relationLabels: [], groupLabels: ['Book Club'] }));
+    expect(created.relationshipTier).toBeNull();
+  });
+
+  it("ignores related-person labels: they name the contact's own relatives, not their relation to the owner", async () => {
+    // A coworker's card listing their own spouse made them `family`, which
+    // lets them hear the owner profile (#163).
+    const created = await provisionLocalContact(match({ relationLabels: ['spouse', 'relative', 'mother'], groupLabels: ['myContacts'] }));
     expect(created.relationshipTier).toBeNull();
   });
 

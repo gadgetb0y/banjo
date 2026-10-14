@@ -107,7 +107,7 @@ passwords and servers.
    `https://carddav.fastmail.com/dav/addressbooks/user/you@fastmail.com/Default/`.
 4. **Check what Banjo sees.** Run `npm run dav:check` again. For the address book it counts contacts,
    those with phone numbers (only they can identify a caller), groups, and relations — Banjo treats
-   groups named "Family" or "Friends" and relations like spouse or child as close contacts. For the
+   groups named "Family" or "Friends" as close contacts (relations are counted but not used). For the
    calendar it lists the next 7 days of busy times in `CALENDAR_TIMEZONE`; events marked free, declined
    invitations, and all-day events not marked busy are deliberately left out. Nothing is written
    anywhere.
@@ -336,7 +336,7 @@ A contact's `relationshipTier` (`family`, `friend`, or none) decides who may ask
 
 It's set only from places you control, never by an MCP tool. Agents read call transcripts and summaries, which are untrusted, so one that could set a tier could be talked into widening who hears your profile.
 
-- **Google Contacts:** put the person in a group named "Family" or "Friends", or add a family relation (spouse, child, mother, sibling, relative…) to their contact. Banjo copies it the first time it saves them as a contact. It only fills in a missing tier and never changes one already set.
+- **Google Contacts** (or a CardDAV address book): put the person in a group named "Family" or "Friends". Banjo copies it the first time it saves them as a contact. It only fills in a missing tier and never changes one already set, so taking someone out of the group later doesn't lower theirs; clear it directly (below). The person needs a phone number in the address book, since that's how Banjo matches them. A contact's "related person" entries don't count: they name that person's own relatives, not how they're related to you.
 - **Directly**, for a contact Banjo already has. Find their id with `find_contact`, then:
 
   ```bash
