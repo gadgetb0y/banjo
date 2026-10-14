@@ -8,33 +8,22 @@ import {
 import type { Contact, NewContact } from '../contacts/schema.js';
 import type { GoogleContactMatch } from './lookup.js';
 
-const FAMILY_RELATION_TYPES = new Set([
-  'spouse',
-  'child',
-  'parent',
-  'mother',
-  'father',
-  'sibling',
-  'brother',
-  'sister',
-  'domesticpartner',
-  'partner',
-  'relative',
-]);
 const FAMILY_GROUP_NAMES = new Set(['family']);
 const FRIEND_GROUP_NAMES = new Set(['friends']);
 
 /**
- * Heuristic, not a guarantee — depends entirely on how the principal has
- * organized their own Google Contacts. An unlabeled contact simply stays
- * null (behaves like any other business contact), which is an acceptable
- * default, not a failure. See the design spec's "Deriving relationshipTier"
- * section.
+ * From the owner's own groups only ("Family", "Friends"). An unlabeled
+ * contact simply stays null (behaves like any other business contact), which
+ * is an acceptable default, not a failure.
+ *
+ * Related-person labels (relationLabels) are deliberately ignored: on a
+ * contact's card they name that contact's own relatives ("spouse: Jane" on a
+ * coworker's card is the coworker's spouse), not how the contact is related
+ * to the owner. Reading them as the latter made a coworker `family`, which
+ * lets them hear the owner profile (#163).
  */
 function deriveRelationshipTier(match: GoogleContactMatch): Contact['relationshipTier'] {
-  const hasFamilyRelation = match.relationLabels.some((label) => FAMILY_RELATION_TYPES.has(label.toLowerCase()));
-  const inFamilyGroup = match.groupLabels.some((label) => FAMILY_GROUP_NAMES.has(label.toLowerCase()));
-  if (hasFamilyRelation || inFamilyGroup) return 'family';
+  if (match.groupLabels.some((label) => FAMILY_GROUP_NAMES.has(label.toLowerCase()))) return 'family';
   if (match.groupLabels.some((label) => FRIEND_GROUP_NAMES.has(label.toLowerCase()))) return 'friend';
   return null;
 }

@@ -60,7 +60,7 @@ async function summarizeAddressBook(url: string, credentials: DavCredentials) {
   const relations = new Map<string, number>();
   for (const p of people) for (const r of p.card.relationLabels) relations.set(r, (relations.get(r) ?? 0) + 1);
   console.log(`  Relations: ${relations.size ? [...relations].map(([r, count]) => `${r} (${count})`).join(', ') : '(none)'}`);
-  console.log('  Banjo treats groups named "Family" or "Friends", and relations like spouse or child, as close contacts.');
+  console.log('  Banjo treats groups named "Family" or "Friends" as close contacts. Relations are not used: they name each contact\'s own relatives.');
 }
 
 async function showBusy(calendarUrl: string, credentials: DavCredentials) {
