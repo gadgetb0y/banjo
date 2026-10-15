@@ -432,8 +432,8 @@ is the one action here that can't be taken back. So the gate is in Banjo, keyed 
 - `get_task_status` and `list_recent_tasks` add `approval: 'waiting' | 'approved' | 'not_approved'` to
   such tasks.
 - The page shows everything the call will use: the task's notes, windows, length and hold limit, and the
-  contact's notes. The message shows the notes and leaves the rest to the page. Both say whether the
-  contact's name came from the owner's address book (an agent can `add_contact` a stranger as "Mom") and,
+  contact's notes. The message shows the notes and leaves the rest to the page. Both label the contact's
+  name, before it and both ways, as from the owner's address book or typed in (an agent can `add_contact` a stranger as "Mom") and,
   for a `family` or `friend` contact, that the call may answer questions about the owner from their
   profile. Invisible direction and zero-width marks are dropped from agent text.
 - The approval message must reach the owner somewhere the agent can't read: anyone with the link can

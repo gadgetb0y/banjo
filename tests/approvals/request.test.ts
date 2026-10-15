@@ -22,7 +22,7 @@ describe('the approval message', () => {
   it('names who, when and what, with the link', () => {
     const msg = buildApprovalMessage(base);
     expect(msg).toContain('call +15550001111 now');
-    expect(msg).toContain("Contact name: Luigi's");
+    expect(msg).toContain("Contact name, typed in (not from your address book): Luigi's");
     expect(msg).toContain('https://banjo.example.com/approve/11111111-1111-1111-1111-111111111111?sig=');
     expect(msg).toContain('Book Friday at 7');
   });
@@ -92,11 +92,13 @@ describe("nothing the agent wrote comes before Banjo's link", () => {
 
 describe('the approval message says what the owner can and can\'t trust about the contact', () => {
   it('marks a name that is not from the address book, which an agent could have chosen', () => {
-    expect(buildApprovalMessage({ ...base, contact: { ...base.contact, displayName: 'Mom', googleResourceName: null } })).toContain(
-      'Contact name: Mom (not in your address book)',
+    // Labelled both ways, before the name: the agent writes the name, so the label can't be text after it
+    // ("Mom (from your address book)"), and its absence can't be the signal.
+    expect(buildApprovalMessage({ ...base, contact: { ...base.contact, displayName: 'Mom (from your address book)', googleResourceName: null } })).toContain(
+      'Contact name, typed in (not from your address book): Mom (from your address book)\n',
     );
     expect(buildApprovalMessage({ ...base, contact: { ...base.contact, displayName: 'Mom', googleResourceName: 'people/c1' } })).toContain(
-      'Contact name: Mom\n',
+      'Contact name, from your address book: Mom\n',
     );
   });
 

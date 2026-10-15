@@ -65,12 +65,10 @@ approvalRoutes.get('/approve/:taskId', async (c) => {
   const now = Date.now();
   const expiresAt = task.approvalExpiresAt!;
   const rows: Array<[string, string]> = [
+    // The label is Banjo's, in the <dt>, both ways: after the agent-written name it could be imitated.
     [
-      'Who',
-      escapeHtml(
-        `${contact?.displayName ?? 'Unknown contact'} (${contact?.phoneNumber ?? 'no number'})` +
-          (contact && !fromAddressBook(contact) ? ', not in your address book' : ''),
-      ),
+      contact && fromAddressBook(contact) ? 'Who (from your address book)' : 'Who (name typed in, not from your address book)',
+      escapeHtml(`${contact?.displayName ?? 'Unknown contact'} (${contact?.phoneNumber ?? 'no number'})`),
     ],
     ...(contact && tierNote(contact) ? ([['Your profile', escapeHtml(tierNote(contact)!)]] as Array<[string, string]>) : []),
     ['When', whenHtml(task, now)],

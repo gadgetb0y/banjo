@@ -156,13 +156,14 @@ describe('the page shows everything the call will use', () => {
 describe('the page says what the owner can and can\'t trust about the contact', () => {
   it('marks a name that is not from the address book', async () => {
     getContact.mockResolvedValue({ displayName: 'Mom', phoneNumber: '+15550001111', googleResourceName: null });
-    expect(await (await approvalRoutes.request(`/approve/${ID}?sig=${SIG}`)).text()).toContain('Mom (+15550001111), not in your address book');
+    const html = await (await approvalRoutes.request(`/approve/${ID}?sig=${SIG}`)).text();
+    expect(html).toContain('<dt>Who (name typed in, not from your address book)</dt><dd>Mom (+15550001111)</dd>');
   });
 
   it('says a family contact may hear about the owner from their profile', async () => {
     getContact.mockResolvedValue({ displayName: 'Mom', phoneNumber: '+15550001111', googleResourceName: 'people/c1', relationshipTier: 'family' });
     const html = await (await approvalRoutes.request(`/approve/${ID}?sig=${SIG}`)).text();
-    expect(html).toContain('Mom (+15550001111)</dd>');
+    expect(html).toContain('<dt>Who (from your address book)</dt><dd>Mom (+15550001111)</dd>');
     expect(html).toContain('Tagged family: on this call Banjo may answer their questions about you from your profile.');
   });
 

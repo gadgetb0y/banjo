@@ -76,7 +76,8 @@ export function buildApprovalMessage({
     `Approve by ${formatLocal(expiresAt)}, or it won't be placed: ${approvalUrl(task.id, expiresAt)}`,
     '',
     // The name is agent-writable too (add_contact), so it comes after the link.
-    `Contact name: ${oneLine(contact.displayName)}${fromAddressBook(contact) ? '' : ' (not in your address book)'}`,
+    // Labelled both ways, and before the name: the label after an agent-written name could be imitated.
+    `Contact name, ${fromAddressBook(contact) ? 'from your address book' : 'typed in (not from your address book)'}: ${oneLine(contact.displayName)}`,
     ...(tierNote(contact) ? [tierNote(contact)!] : []),
     `The agent wrote (${task.mode} call): ${oneLine(task.goalDescription)}`,
     ...(task.questions?.length ? ['Questions from the agent:', ...task.questions.map((q, i) => `${i + 1}. ${oneLine(q)}`)] : []),
