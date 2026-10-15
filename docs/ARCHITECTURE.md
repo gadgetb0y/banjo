@@ -90,8 +90,12 @@ The `CallSession` is the only component that touches both a `TelephonyProvider` 
 ### Per-number call cap
 
 At most `MAX_CALLS_PER_NUMBER_PER_DAY` (default 3) outbound calls to one phone number in any rolling 24
-hours, with no override. The rule came from live testing on 2026-09-25, when five test calls went to one
-friend in a single evening. The cap counts per contact (`call_attempts` joined to `tasks`). That equals
+hours. The rule came from live testing on 2026-09-25, when five test calls went to one
+friend in a single evening. The owner can override it for testing, and only narrowly: `place_call`'s
+`overrideCallCap`, with the owner's key (never `MCP_AGENT_API_KEY`), for a contact tagged `family` or
+whose number is the owner's own (`TRANSFER_TO_PHONE_NUMBER` or `NOTIFY_TO_PHONE_NUMBER`). Neither can be
+set through MCP. It raises that call's limit to twice the cap (`OVERRIDE_CAP_MULTIPLIER`), stored on the
+task as `call_cap_override` so the check before dialing uses the same limit, and nothing goes past that. The cap counts per contact (`call_attempts` joined to `tasks`). That equals
 per number because `addContact` and `updateContact` store every number normalized to E.164 (libphonenumber,
 the same normalizer Google Contacts sync uses) and `contacts.phone_number` is unique. Rows stored before that
 are normalized at startup (`normalizeStoredPhoneNumbers`). A row whose normalized number another contact
@@ -405,6 +409,32 @@ Exposed over **HTTP/SSE (remote MCP)**, since Banjo runs as a persistent AWS ser
 - **`cancel_task(taskId)`** — calls off a phone task that hasn't dialed yet (`pending` or `checking_availability`, typically a scheduled call); a call already underway or finished is left alone, and the orchestrator re-checks the status its own transitions return so a cancel racing a starting run still stops it before dialing.
 - **`find_contact(query)`**, **`list_contacts(category?)`**, **`add_contact(...)`**, **`update_contact(id, { preferredChannel?, bookingUrl?, notes? })`** — contact directory management.
 - **`record_task_outcome(contactId, goalDescription, outcome)`** — lets the skill log a completed online booking into the same task history as phone-based tasks.
+
+### Agent calls need the owner's approval (`MCP_AGENT_API_KEY`)
+
+Always-on agents (Hermes, OpenClaw) read untrusted text: webhook payloads, transcripts, messages. A
+"confirm before calling" rule in their prompt can be skipped by a steered or confused agent, and a call
+is the one action here that can't be taken back. So the gate is in Banjo, keyed on the credential:
+
+- `requireAuth` returns a role: `owner` for `MCP_API_KEY`, `agent` for `MCP_AGENT_API_KEY`. Only
+  `place_call` differs by role. An SSE session keeps the role it was opened with.
+- An agent's `place_call` runs every normal check, then creates a `pending` task with
+  `approval_expires_at` 30 minutes out, and sends the owner a message (`sendOwnerMessage`) with a link to
+  `/approve/<taskId>?sig=…`. If the message can't be sent, the task is cancelled. At most 3 requests wait
+  at once. `overrideCallCap` is refused.
+- `sig` is an HMAC of the task id and its deadline, keyed from `MCP_API_KEY`, which the agent doesn't
+  hold. Nothing is stored. The link is never logged (the request log redacts `sig`), returned by a tool,
+  or put in the webhook.
+- `GET /approve/:taskId` shows the request, escaped; only the page's button (`POST`) approves, so a link
+  preview can't. Approving is a compare-and-set on `approved_at`, then `triggerOrchestration`.
+- The orchestrator never claims a task waiting for approval. The poller cancels unapproved ones once
+  their deadline passes (`transitionTask` with `unapproved: true`, so it can't land after an approval).
+- `get_task_status` and `list_recent_tasks` add `approval: 'waiting' | 'approved' | 'not_approved'` to
+  such tasks.
+- Startup fails if the agent key is set without `PUBLIC_HOSTNAME`, with `NOTIFICATION_CHANNEL=none`, or
+  equal to `MCP_API_KEY`.
+
+Design: `docs/superpowers/specs/2026-10-14-place-call-approval-design.md`.
 
 ---
 

@@ -76,7 +76,8 @@ mcp_servers:
       include: [find_contact, list_contacts, list_recent_tasks, get_task_status, get_call_transcript]
 ```
 
-Set `BANJO_MCP_KEY` (your Banjo `MCP_API_KEY`) in Hermes's environment or its `.env`. Check the
+Set `BANJO_MCP_KEY` in Hermes's environment or its `.env`. Give it Banjo's agent key,
+`MCP_AGENT_API_KEY`, rather than your own `MCP_API_KEY` (see "Calls an agent asks for" below). Check the
 connection with `hermes mcp test banjo`, which should report 11 tools discovered. The filter is
 applied when the agent loads them.
 
@@ -323,6 +324,24 @@ OpenClaw's hooks authenticate with a bearer token rather than a signature. Set B
 Then set Banjo's `TASK_WEBHOOK_URL` to `http(s)://<openclaw-host>:18789/hooks/banjo`. OpenClaw
 wraps hook content as untrusted external content by default. Leave `allowUnsafeExternalContent`
 off.
+
+## Calls an agent asks for
+
+Set `MCP_AGENT_API_KEY` in Banjo's `.env` (`openssl rand -hex 32`) and give that key to always-on
+agents instead of `MCP_API_KEY`. A call placed with it doesn't dial until you approve it:
+
+1. Banjo sends you a message (Pushover or SMS, whichever `NOTIFICATION_CHANNEL` is) with who, when,
+   what the agent asked for, and a link.
+2. The link opens a page with the details and an **Approve this call** button. The page alone changes
+   nothing; the button does.
+3. Unapproved after 30 minutes, the call is cancelled. To call it off sooner, use `cancel_task`.
+
+The agent gets an `ackMessage` saying it's waiting for your approval, and `get_task_status` shows
+`approval: 'waiting'`, then `'approved'` or `'not_approved'`. It never sees the link. At most 3 requests
+wait at once, and the agent key can't use `overrideCallCap`.
+
+Banjo won't start with the agent key set unless `PUBLIC_HOSTNAME` is set and `NOTIFICATION_CHANNEL`
+isn't `none`. Your own key (Claude Code) works as before, with no approval step.
 
 ## The task webhook
 
