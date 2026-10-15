@@ -59,16 +59,20 @@ export function canOverrideCallCap(contact: Pick<Contact, 'relationshipTier' | '
  * `includeQueued` also counts this contact's calls that are due and about to
  * dial but haven't yet — place_call passes it, so a burst of requests can't
  * queue past the cap. The orchestrator doesn't: the task it's about to dial
- * is itself queued.
+ * is itself queued. `includeAwaitingApproval: false` leaves agent requests the
+ * owner hasn't approved out of that count (the owner's own place_call), so an
+ * agent can't use up the owner's calls to a number by asking for them.
  */
 export async function checkCallCap(
   contactId: string,
   now: Date = new Date(),
-  options: { includeQueued?: boolean; limit?: number } = {},
+  options: { includeQueued?: boolean; includeAwaitingApproval?: boolean; limit?: number } = {},
 ): Promise<CallCapResult> {
   const startedAts = await callsPlacedToContactSince(contactId, new Date(now.getTime() - CALL_CAP_WINDOW_MS));
   const placed = startedAts.length;
-  const queued = options.includeQueued ? await dueQueuedCallsForContact(contactId, now) : 0;
+  const queued = options.includeQueued
+    ? await dueQueuedCallsForContact(contactId, now, { includeAwaitingApproval: options.includeAwaitingApproval ?? true })
+    : 0;
   const cap = options.limit ?? config.MAX_CALLS_PER_NUMBER_PER_DAY;
   if (placed + queued < cap) return { allowed: true, placed, queued, limit: cap };
   // One more call fits once placed + queued - (calls that left) < cap, i.e.

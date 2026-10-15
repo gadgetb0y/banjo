@@ -85,9 +85,10 @@ const READS = { readOnlyHint: true, openWorldHint: false } as const;
 const RECORDS = { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false } as const;
 
 /**
- * Builds the MCP server and registers all 11 tools, for one caller's role:
- * only place_call behaves differently by role (an agent's call waits for the
- * owner's approval). Deliberately separate
+ * Builds the MCP server and registers all 11 tools, for one caller's role.
+ * With the agent key, place_call's call waits for the owner's approval, the
+ * agent can't set contact notes, and cancel_task and stop_call reach only
+ * calls it asked for. Deliberately separate
  * from the HTTP/SSE wiring below so it can be constructed and exercised
  * (e.g. via an in-memory transport) without spinning up Hono.
  *
@@ -142,20 +143,21 @@ export function createMcpServer({ role }: { role: McpRole } = { role: 'owner' })
   server.tool(
     'cancel_task',
     "Call off a phone call that hasn't been placed yet — typically one scheduled for later with place_call's " +
-      'scheduledFor. A call already in progress or finished is not affected; the result says whether it was cancelled.',
+      'scheduledFor. A call already in progress or finished is not affected; the result says whether it was cancelled. ' +
+      "An agent's key can cancel only calls it asked for.",
     cancelTaskInputSchema.shape,
     { title: 'Cancel a scheduled call', readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: false },
-    adapt(cancelTaskHandler),
+    adapt((input: Parameters<typeof cancelTaskHandler>[0]) => cancelTaskHandler(input, { role })),
   );
 
   server.tool(
     'stop_call',
     'Hang up a call that is already in progress — the one thing cancel_task cannot do. Use this to stop a ' +
       'call that is going wrong or was placed in error. The task is recorded as failed with the reason given, ' +
-      'and the usual outcome notification is sent.',
+      "and the usual outcome notification is sent. An agent's key can stop only calls it asked for.",
     stopCallInputSchema.shape,
     { title: 'Hang up a call in progress', readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: true },
-    adapt(stopCallHandler),
+    adapt((input: Parameters<typeof stopCallHandler>[0]) => stopCallHandler(input, { role })),
   );
 
   server.tool(

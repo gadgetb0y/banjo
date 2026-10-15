@@ -4,14 +4,23 @@ import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { config } from '../../src/config/index.js';
 
-// The role comes from which key the caller presented, and only from that:
-// place_call is the one tool that behaves differently by role.
-const { placeCallHandler } = vi.hoisted(() => ({
+// The role comes from which key the caller presented, and only from that.
+const { placeCallHandler, cancelTaskHandler, stopCallHandler } = vi.hoisted(() => ({
   placeCallHandler: vi.fn(async () => ({ taskId: 't', ackMessage: 'ok' })),
+  cancelTaskHandler: vi.fn(async () => ({ taskId: 't', cancelled: true, status: 'cancelled', message: 'ok' })),
+  stopCallHandler: vi.fn(async () => ({ taskId: 't', stopped: true, message: 'ok' })),
 }));
 vi.mock('../../src/mcp/tools/placeCall.js', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../../src/mcp/tools/placeCall.js')>()),
   placeCallHandler,
+}));
+vi.mock('../../src/mcp/tools/cancelTask.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../../src/mcp/tools/cancelTask.js')>()),
+  cancelTaskHandler,
+}));
+vi.mock('../../src/mcp/tools/stopCall.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../../src/mcp/tools/stopCall.js')>()),
+  stopCallHandler,
 }));
 
 const { registerMcpRoutes, sessionRoleMatches } = await import('../../src/mcp/server.js');
@@ -68,6 +77,17 @@ describe('mcp server: owner and agent keys', () => {
     const client = await connect(key === 'owner' ? config.MCP_API_KEY : key);
     await client.callTool({ name: 'place_call', arguments: { contactId: CONTACT_ID, taskDescription: 'Test' } });
     expect(placeCallHandler).toHaveBeenCalledWith(expect.objectContaining({ contactId: CONTACT_ID }), { role });
+  });
+
+  it.each([
+    ['agent', AGENT_KEY],
+    ['owner', 'owner'],
+  ])('cancel_task and stop_call run as %s with that key', async (role, key) => {
+    const client = await connect(key === 'owner' ? config.MCP_API_KEY : key);
+    await client.callTool({ name: 'cancel_task', arguments: { taskId: CONTACT_ID } });
+    await client.callTool({ name: 'stop_call', arguments: { taskId: CONTACT_ID } });
+    expect(cancelTaskHandler).toHaveBeenCalledWith({ taskId: CONTACT_ID }, { role });
+    expect(stopCallHandler).toHaveBeenCalledWith({ taskId: CONTACT_ID }, { role });
   });
 });
 

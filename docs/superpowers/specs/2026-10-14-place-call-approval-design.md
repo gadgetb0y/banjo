@@ -60,7 +60,7 @@ A task **waits for approval** while `approval_expires_at` is set and `approved_a
 
 All existing checks run first and unchanged (input validation, `scheduledFor` rules, the call cap counting queued tasks). Then:
 
-1. **Limit on waiting requests.** If 3 agent requests are already waiting for approval, refuse: "3 calls are already waiting for the owner's approval." This caps how many notifications a looping or steered agent can send.
+1. **Limit on waiting requests.** If 3 agent requests are already waiting for approval, refuse. A request the agent cancelled still counts until its 30 minutes are up, so cancelling and asking again doesn't get around it. This caps how many notifications a looping or steered agent can send.
 2. Create the task with `approval_expires_at = now + 30 min`. Don't trigger orchestration.
 3. Send the approval message with `sendOwnerMessage`. It is changed to return whether the message was delivered (like `sendTaskWebhook` after #168). If it wasn't, cancel the task and tell the agent: "Couldn't reach the owner for approval, so no call will be placed."
 4. Return: "Asked the owner to approve this call. It will be placed once they approve, or cancelled if they haven't by 9:15 PM. Check get_task_status." The result never contains the link.
@@ -68,7 +68,7 @@ All existing checks run first and unchanged (input validation, `scheduledFor` ru
 ### 5. Scheduled calls and the call cap
 
 - **Scheduled calls.** The approval window is always 30 minutes from the request, and a call dials once it is both approved and due. A call scheduled more than 30 minutes out is therefore always approved before its time. One scheduled sooner can be approved after its time and then dials right away; the page says so plainly ("Scheduled for 4:50 PM, 12 minutes ago: approving calls now"), so the owner decides knowingly. This replaces the earlier wording "a scheduled call must be approved before its time", which would leave a call scheduled 2 minutes out almost no time to approve.
-- **Call cap.** Agent requests can't override it (section 6). A request waiting for approval is a `pending` task, so it counts toward `MAX_CALLS_PER_NUMBER_PER_DAY` as a queued call and holds its slot. An expired or cancelled request frees it. The orchestrator's check right before dialing is unchanged, so an approval never lets a call past the cap.
+- **Call cap.** Agent requests can't override it (section 6). A request waiting for approval is a `pending` task, so it counts as a queued call when the agent asks for another call to that number. The owner's own `place_call` leaves it out, so an agent can't use up the owner's calls by asking; once approved, it counts like any other queued call. The orchestrator's check right before dialing is unchanged, so an approval never lets a call past the cap.
 
 ### 6. Owner override of the call cap, for testing
 
@@ -111,7 +111,7 @@ A broken setup fails loudly at boot, so the gate can't be silently off.
 - A Decline button: ignoring the message or `cancel_task` does the same thing.
 - Approving inside Pushover itself (priority 2 receipts): it would drop the page, but has no way to show the full request and repeats alerts until acknowledged.
 - Any override of the call cap from the agent key, or beyond the ceiling of twice the cap.
-- Restricting other tools for the agent role (`stop_call`, `add_contact`, …). They can be considered separately; none of them places a call.
+- Restricting other tools for the agent role, beyond what was added after review: the agent key can't set contact notes, and `cancel_task` and `stop_call` reach only calls it asked for.
 
 ## Setup on the node (after release)
 

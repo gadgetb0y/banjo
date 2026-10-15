@@ -44,6 +44,14 @@ describe('checkCallCap (at most MAX_CALLS_PER_NUMBER_PER_DAY calls per number pe
     expect((await checkCallCap('c1', now)).allowed).toBe(true);
   });
 
+  it("passes includeAwaitingApproval to the queued count, so the owner's check can leave out an agent's waiting requests", async () => {
+    callsPlacedToContactSince.mockResolvedValue([]);
+    await checkCallCap('c1', now, { includeQueued: true, includeAwaitingApproval: false });
+    expect(dueQueuedCallsForContact).toHaveBeenLastCalledWith('c1', now, { includeAwaitingApproval: false });
+    await checkCallCap('c1', now, { includeQueued: true });
+    expect(dueQueuedCallsForContact).toHaveBeenLastCalledWith('c1', now, { includeAwaitingApproval: true });
+  });
+
   it('follows the configured cap', async () => {
     config.MAX_CALLS_PER_NUMBER_PER_DAY = 1;
     callsPlacedToContactSince.mockResolvedValue([new Date('2026-09-26T10:00:00.000Z')]);

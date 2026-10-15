@@ -46,4 +46,25 @@ describe('stop_call', () => {
     getTask.mockResolvedValueOnce(undefined);
     await expect(stopCallHandler({ taskId: 'missing' })).rejects.toThrow(/not found/i);
   });
+
+  describe('with the agent key', () => {
+    const agent = { role: 'agent' as const };
+
+    it('stops a call the agent asked for', async () => {
+      const stop = vi.fn(async () => {});
+      registerLiveCall({ taskId: 'task-1', callAttemptId: 'attempt-1', session: { stop } });
+      getTask.mockResolvedValueOnce({ id: 'task-1', status: 'calling', approvalExpiresAt: new Date() });
+      await expect(stopCallHandler({ taskId: 'task-1' }, agent)).resolves.toMatchObject({ stopped: true });
+      expect(stop).toHaveBeenCalled();
+    });
+
+    it("refuses to hang up the owner's own call", async () => {
+      const stop = vi.fn(async () => {});
+      registerLiveCall({ taskId: 'task-1', callAttemptId: 'attempt-1', session: { stop } });
+      getTask.mockResolvedValueOnce({ id: 'task-1', status: 'calling', approvalExpiresAt: null });
+      await expect(stopCallHandler({ taskId: 'task-1' }, agent)).rejects.toThrow(/only.*calls it asked for/);
+      expect(stop).not.toHaveBeenCalled();
+    });
+  });
 });
+

@@ -86,17 +86,35 @@ describe('approval writes', () => {
     expect(await service.approveTask(t.id)).toBe('not_waiting');
   });
 
-  it('counts waiting requests and keeps them out of the startable list', async () => {
+  it('counts open requests and keeps waiting ones out of the startable list', async () => {
     const c = await contactRow();
     const waiting = await agentTask(c.id, new Date(Date.now() + 30 * MIN));
     await agentTask(c.id, new Date(Date.now() - MIN)); // expired: not counted
     const approved = await agentTask(c.id, new Date(Date.now() + 30 * MIN));
     await service.approveTask(approved.id);
     const owner = await service.createTask({ contactId: c.id, channel: 'phone', goalDescription: 'Book', constraints: {} });
-    expect(await service.countTasksAwaitingApproval()).toBe(1);
+    expect(await service.countOpenApprovalRequests()).toBe(1);
     const startable = (await service.listStartableTasks()).map((t) => t.id);
     expect(startable).toEqual(expect.arrayContaining([approved.id, owner.id]));
     expect(startable).not.toContain(waiting.id);
+  });
+
+  it('keeps counting a request the agent cancelled until its window ends, so cancelling cannot free a slot', async () => {
+    const c = await contactRow();
+    const cancelled = await agentTask(c.id, new Date(Date.now() + 30 * MIN));
+    await service.cancelPendingTask(cancelled.id);
+    expect(await service.countOpenApprovalRequests()).toBe(1);
+    expect(await service.countOpenApprovalRequests(new Date(Date.now() + 31 * MIN))).toBe(0);
+  });
+
+  it("leaves requests still waiting for approval out of the owner's queued count, but not the agent's", async () => {
+    const c = await contactRow();
+    await agentTask(c.id, new Date(Date.now() + 30 * MIN)); // waiting
+    const approved = await agentTask(c.id, new Date(Date.now() + 30 * MIN));
+    await service.approveTask(approved.id);
+    await service.createTask({ contactId: c.id, channel: 'phone', goalDescription: 'Book', constraints: {} });
+    expect(await service.dueQueuedCallsForContact(c.id)).toBe(3);
+    expect(await service.dueQueuedCallsForContact(c.id, new Date(), { includeAwaitingApproval: false })).toBe(2);
   });
 
   it('stores callCapOverride, false by default', async () => {
@@ -113,7 +131,7 @@ describe('withApprovalRequestLock', () => {
     const c = await contactRow();
     const attempt = () =>
       service.withApprovalRequestLock(async () => {
-        if ((await service.countTasksAwaitingApproval()) >= 3) return 'refused';
+        if ((await service.countOpenApprovalRequests()) >= 3) return 'refused';
         // A slow insert widens the gap a check-then-create race needs.
         await new Promise((r) => setTimeout(r, 20));
         await agentTask(c.id, new Date(Date.now() + 30 * MIN));
@@ -121,6 +139,6 @@ describe('withApprovalRequestLock', () => {
       });
     const results = await Promise.all(Array.from({ length: 5 }, attempt));
     expect(results.filter((r) => r === 'created')).toHaveLength(3);
-    expect(await service.countTasksAwaitingApproval()).toBe(3);
+    expect(await service.countOpenApprovalRequests()).toBe(3);
   });
 });

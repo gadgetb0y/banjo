@@ -6,7 +6,7 @@ import { getContact } from '../../contacts/service.js';
 import { logger } from '../../lib/logger.js';
 import { sendOwnerMessage } from '../../notifications/owner.js';
 import { canOverrideCallCap, checkCallCap, describeCallCapRefusal, OVERRIDE_CAP_MULTIPLIER } from '../../tasks/callCap.js';
-import { cancelPendingTask, countTasksAwaitingApproval, createTask, withApprovalRequestLock } from '../../tasks/service.js';
+import { cancelPendingTask, countOpenApprovalRequests, createTask, withApprovalRequestLock } from '../../tasks/service.js';
 import type { McpRole } from '../role.js';
 import { triggerOrchestration } from '../../tasks/orchestrator.js';
 import type { TaskConstraints, TimeWindow } from '../../tasks/schema.js';
@@ -205,13 +205,15 @@ export async function placeCallHandler(
   const limit = config.MAX_CALLS_PER_NUMBER_PER_DAY * (input.overrideCallCap ? OVERRIDE_CAP_MULTIPLIER : 1);
 
   // At most MAX_CALLS_PER_NUMBER_PER_DAY calls to one number in any 24 hours,
-  // counting calls already queued to dial (tasks/callCap.ts). Refused before
-  // anything is created. A call scheduled for later isn't checked here: today's
+  // counting calls already queued to dial (tasks/callCap.ts). The owner's
+  // check leaves out agent requests they haven't approved, so an agent can't
+  // use up the owner's calls by asking; each is counted again before it dials.
+  // Refused before anything is created. A call scheduled for later isn't checked here: today's
   // calls may have left the window by then, so the orchestrator checks it when
   // it comes due instead.
   const callsNow = !scheduledFor || scheduledFor.getTime() <= Date.now();
   if (callsNow) {
-    const cap = await checkCallCap(input.contactId, new Date(), { includeQueued: true, limit });
+    const cap = await checkCallCap(input.contactId, new Date(), { includeQueued: true, includeAwaitingApproval: agent, limit });
     if (!cap.allowed) throw new Error(describeCallCapRefusal(cap));
   }
 
@@ -232,9 +234,10 @@ export async function placeCallHandler(
   const task = !agent
     ? await create()
     : await withApprovalRequestLock(async () => {
-        if ((await countTasksAwaitingApproval()) >= MAX_WAITING_APPROVALS) {
+        if ((await countOpenApprovalRequests()) >= MAX_WAITING_APPROVALS) {
           throw new Error(
-            `${MAX_WAITING_APPROVALS} calls are already waiting for the owner's approval. Wait for those to be approved or expire first.`,
+            `${MAX_WAITING_APPROVALS} call requests are already waiting for the owner's approval, or were cancelled less than ` +
+              `${APPROVAL_WINDOW_MS / 60_000} minutes after they were asked for. Wait for one to be approved or for its window to end.`,
           );
         }
         return create();

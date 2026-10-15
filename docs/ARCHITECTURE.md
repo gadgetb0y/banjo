@@ -416,8 +416,8 @@ Always-on agents (Hermes, OpenClaw) read untrusted text: webhook payloads, trans
 "confirm before calling" rule in their prompt can be skipped by a steered or confused agent, and a call
 is the one action here that can't be taken back. So the gate is in Banjo, keyed on the credential:
 
-- `requireAuth` returns a role: `owner` for `MCP_API_KEY`, `agent` for `MCP_AGENT_API_KEY`. Only
-  `place_call` differs by role. An SSE session keeps the role it was opened with.
+- `requireAuth` returns a role: `owner` for `MCP_API_KEY`, `agent` for `MCP_AGENT_API_KEY`. An SSE
+  session keeps the role it was opened with.
 - An agent's `place_call` runs every normal check, then creates a `pending` task with
   `approval_expires_at` 30 minutes out, and sends the owner a message (`sendOwnerMessage`) with a link to
   `/approve/<taskId>?sig=…`. If the message can't be sent, the task is cancelled. At most 3 requests wait
@@ -435,6 +435,11 @@ is the one action here that can't be taken back. So the gate is in Banjo, keyed 
   limit, and the contact's notes. The agent key can't change a contact's notes (`update_contact` refuses),
   since they go into every call to that contact and could otherwise change a call after it was approved.
   At most 3 requests wait at once; the check and the insert run under one lock (`withApprovalRequestLock`).
+  A request the agent cancels keeps its place until its 30 minutes are up (`countOpenApprovalRequests`), so
+  cancelling and asking again can't flood the owner with messages.
+- The agent key can't use up the owner's calls or stop them. The owner's `place_call` cap check leaves out
+  agent requests still waiting for approval (each is counted again before it dials), and the agent key's
+  `cancel_task` and `stop_call` reach only calls it asked for (`askedByAgent`).
 - Startup fails if the agent key is set without `PUBLIC_HOSTNAME`, with `NOTIFICATION_CHANNEL=none`, or
   equal to `MCP_API_KEY`.
 

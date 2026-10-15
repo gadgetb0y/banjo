@@ -282,12 +282,17 @@ export async function expireApprovalRequests(now: Date = new Date()): Promise<st
   return cancelled;
 }
 
-/** Agent requests still waiting on the owner: place_call allows only a few at once. */
-export async function countTasksAwaitingApproval(now: Date = new Date()): Promise<number> {
+/**
+ * Agent requests the owner hasn't approved whose window is still open, in any
+ * status: place_call allows only a few at once. A request the agent cancelled
+ * keeps its slot until its window would have ended, so cancelling and asking
+ * again can't send the owner an endless run of messages.
+ */
+export async function countOpenApprovalRequests(now: Date = new Date()): Promise<number> {
   const [row] = await db
     .select({ count: count() })
     .from(tasks)
-    .where(and(eq(tasks.status, 'pending'), isNull(tasks.approvedAt), gt(tasks.approvalExpiresAt, now)));
+    .where(and(isNull(tasks.approvedAt), gt(tasks.approvalExpiresAt, now)));
   return row?.count ?? 0;
 }
 
@@ -353,8 +358,16 @@ export async function withApprovalRequestLock<T>(work: () => Promise<T>): Promis
   return run;
 }
 
-/** Phone tasks for a contact that are due and about to dial but haven't yet — counted by place_call's cap check. */
-export async function dueQueuedCallsForContact(contactId: string, now: Date = new Date()): Promise<number> {
+/**
+ * Phone tasks for a contact that are due and about to dial but haven't yet — counted by place_call's cap check.
+ * `includeAwaitingApproval: false` leaves out agent requests the owner hasn't approved, so an agent's requests
+ * can't use up the owner's own calls to a number. The check before dialing still counts every call placed.
+ */
+export async function dueQueuedCallsForContact(
+  contactId: string,
+  now: Date = new Date(),
+  { includeAwaitingApproval = true }: { includeAwaitingApproval?: boolean } = {},
+): Promise<number> {
   const [row] = await db
     .select({ count: count() })
     .from(tasks)
@@ -364,6 +377,7 @@ export async function dueQueuedCallsForContact(contactId: string, now: Date = ne
         eq(tasks.channel, 'phone'),
         inArray(tasks.status, ['pending', 'checking_availability']),
         or(isNull(tasks.scheduledFor), lte(tasks.scheduledFor, now)),
+        includeAwaitingApproval ? undefined : or(isNull(tasks.approvalExpiresAt), isNotNull(tasks.approvedAt)),
       ),
     );
   return row?.count ?? 0;
