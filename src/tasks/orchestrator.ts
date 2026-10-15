@@ -13,7 +13,6 @@ import {
   createCallAttempt,
   expireApprovalRequests,
   getTask,
-  isAwaitingApproval,
   isTaskDue,
   latestCallAttemptFor,
   listNonTerminalTasks,
@@ -23,6 +22,7 @@ import {
 } from './service.js';
 import type { TimeWindow } from './schema.js';
 import { modeRules } from './modes.js';
+import { isAwaitingApproval } from './approval.js';
 
 /** Asked for on each use rather than once at import, so the simulator's overrideCalendarProvider() (scripts/sim.ts) takes effect. */
 function getCalendar(): CalendarProvider {

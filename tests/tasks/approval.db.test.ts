@@ -7,6 +7,7 @@ let contacts: any;
 let tasks: any;
 let callAttempts: any;
 let service: typeof import('../../src/tasks/service.js');
+let approval: typeof import('../../src/tasks/approval.js');
 
 beforeAll(async () => {
   process.env.DATABASE_URL = 'postgresql://banjo:banjo@localhost:5432/banjo_test';
@@ -14,6 +15,7 @@ beforeAll(async () => {
   contacts = (await import('../../src/contacts/schema.js')).contacts;
   ({ tasks, callAttempts } = await import('../../src/tasks/schema.js'));
   service = await import('../../src/tasks/service.js');
+  approval = await import('../../src/tasks/approval.js');
 });
 
 async function clearTables() {
@@ -40,13 +42,13 @@ describe('approval writes', () => {
   it('approves a waiting task once, and reports a second approve', async () => {
     const c = await contactRow();
     const t = await agentTask(c.id, new Date(Date.now() + 30 * MIN));
-    expect(service.isAwaitingApproval(t)).toBe(true);
+    expect(approval.isAwaitingApproval(t)).toBe(true);
     expect(await service.approveTask(t.id)).toBe('approved');
     expect(await service.approveTask(t.id)).toBe('already_approved');
     const after = await service.getTask(t.id);
     expect(after?.approvedAt).toBeInstanceOf(Date);
-    expect(service.isAwaitingApproval(after!)).toBe(false);
-    expect(service.approvalState(after!)).toBe('approved');
+    expect(approval.isAwaitingApproval(after!)).toBe(false);
+    expect(approval.approvalState(after!)).toBe('approved');
   });
 
   it('refuses an expired, a cancelled, an unknown, and an owner task', async () => {
@@ -59,8 +61,8 @@ describe('approval writes', () => {
     expect(await service.approveTask(cancelled.id)).toBe('not_waiting');
     expect(await service.approveTask(owner.id)).toBe('not_waiting');
     expect(await service.approveTask('00000000-0000-0000-0000-000000000000')).toBe('not_found');
-    expect(service.approvalState(owner)).toBeUndefined();
-    expect(service.approvalState((await service.getTask(cancelled.id))!)).toBe('not_approved');
+    expect(approval.approvalState(owner)).toBeUndefined();
+    expect(approval.approvalState((await service.getTask(cancelled.id))!)).toBe('not_approved');
   });
 
   it('expires only unapproved, past-due, pending requests', async () => {
@@ -73,7 +75,7 @@ describe('approval writes', () => {
     expect(await service.expireApprovalRequests(new Date(Date.now() + 2 * MIN))).toEqual([past.id]);
     const swept = await service.getTask(past.id);
     expect(swept?.status).toBe('cancelled');
-    expect(service.approvalState(swept!)).toBe('not_approved');
+    expect(approval.approvalState(swept!)).toBe('not_approved');
     for (const t of [future, approved, owner]) expect((await service.getTask(t.id))?.status).toBe('pending');
   });
 

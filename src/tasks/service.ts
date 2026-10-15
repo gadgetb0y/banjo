@@ -246,20 +246,6 @@ export async function listStartableTasks(now: Date = new Date()): Promise<Task[]
     );
 }
 
-/** A call an agent asked for that the owner hasn't approved yet: never dialed in this state. */
-export function isAwaitingApproval(task: Pick<Task, 'approvalExpiresAt' | 'approvedAt'>): boolean {
-  return task.approvalExpiresAt !== null && task.approvedAt === null;
-}
-
-/** For get_task_status and list_recent_tasks: undefined on a task that never needed approval. */
-export function approvalState(
-  task: Pick<Task, 'approvalExpiresAt' | 'approvedAt' | 'status'>,
-): 'waiting' | 'approved' | 'not_approved' | undefined {
-  if (!task.approvalExpiresAt) return undefined;
-  if (task.approvedAt) return 'approved';
-  return task.status === 'pending' ? 'waiting' : 'not_approved';
-}
-
 /**
  * The owner's Approve (src/approvals/routes.ts). Not a status change, so not
  * transitionTask: a compare-and-set on approved_at. The expiry sweep's own

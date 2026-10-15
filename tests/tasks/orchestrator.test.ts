@@ -15,7 +15,6 @@ vi.mock('../../src/tasks/service.js', () => ({
   transitionTask,
   createCallAttempt,
   isTaskDue: () => true,
-  isAwaitingApproval: (t: { approvalExpiresAt?: Date | null; approvedAt?: Date | null }) => !!t.approvalExpiresAt && !t.approvedAt,
   expireApprovalRequests: vi.fn(async () => []),
   listNonTerminalTasks: vi.fn(async () => []),
   listStartableTasks: vi.fn(async () => []),
