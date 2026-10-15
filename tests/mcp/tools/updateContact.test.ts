@@ -19,9 +19,23 @@ describe('mcp: update_contact by role', () => {
     expect(updateContact).not.toHaveBeenCalled();
   });
 
-  it('lets the agent key change the booking channel and URL', async () => {
-    await updateContactHandler({ id: ID, preferredChannel: 'online', bookingUrl: 'https://example.com/book' }, { role: 'agent' });
-    expect(updateContact).toHaveBeenCalledWith(ID, { preferredChannel: 'online', bookingUrl: 'https://example.com/book' });
+  it('lets the agent key change the booking channel', async () => {
+    await updateContactHandler({ id: ID, preferredChannel: 'online' }, { role: 'agent' });
+    expect(updateContact).toHaveBeenCalledWith(ID, { preferredChannel: 'online' });
+  });
+
+  // Claude Code opens the booking URL when it books online for the owner, so
+  // an agent that could set it could send the owner's session to its own page.
+  it("refuses the agent key's change to the booking URL, changing nothing", async () => {
+    await expect(
+      updateContactHandler({ id: ID, preferredChannel: 'online', bookingUrl: 'https://evil.example/book' }, { role: 'agent' }),
+    ).rejects.toThrow(/booking URL/);
+    expect(updateContact).not.toHaveBeenCalled();
+  });
+
+  it('lets the owner change the booking URL', async () => {
+    await updateContactHandler({ id: ID, bookingUrl: 'https://example.com/book' });
+    expect(updateContact).toHaveBeenCalledWith(ID, { bookingUrl: 'https://example.com/book' });
   });
 
   it('lets the owner change notes, as before', async () => {

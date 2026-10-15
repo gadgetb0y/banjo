@@ -87,7 +87,7 @@ const RECORDS = { readOnlyHint: false, destructiveHint: false, idempotentHint: f
 /**
  * Builds the MCP server and registers all 11 tools, for one caller's role.
  * With the agent key, place_call's call waits for the owner's approval, the
- * agent can't set contact notes, and cancel_task and stop_call reach only
+ * agent can't set contact notes or booking URLs, and cancel_task and stop_call reach only
  * calls it asked for. Deliberately separate
  * from the HTTP/SSE wiring below so it can be constructed and exercised
  * (e.g. via an in-memory transport) without spinning up Hono.
@@ -189,7 +189,7 @@ export function createMcpServer({ role }: { role: McpRole } = { role: 'owner' })
     'update_contact',
     "Update an existing contact — e.g. record the assistant's owner's stated preferred booking channel so future " +
       "tasks for this contact skip asking again, or update notes/booking URL. Notes go into every call to the contact, " +
-      "so only the owner's key can change them.",
+      "and the booking URL is the page opened to book online, so only the owner's key can change either.",
     updateContactInputSchema.shape,
     { title: 'Update a contact', readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: false },
     adapt((input: Parameters<typeof updateContactHandler>[0]) => updateContactHandler(input, { role })),

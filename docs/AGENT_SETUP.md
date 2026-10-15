@@ -339,8 +339,9 @@ agents instead of `MCP_API_KEY`. A call placed with it doesn't dial until you ap
 The agent gets an `ackMessage` saying it's waiting for your approval, and `get_task_status` shows
 `approval: 'waiting'`, then `'approved'` or `'not_approved'`. It never sees the link. At most 3 requests
 wait at once, and one the agent cancels still counts until its 30 minutes are up. The agent key can't
-use `overrideCallCap`, can't set or change a contact's notes (`add_contact`, `update_contact`): notes go
-into every call to that contact, and can cancel or stop only calls it asked for, not yours. Requests
+use `overrideCallCap`, can't set or change a contact's notes or booking URL (`add_contact`,
+`update_contact`): notes go into every call to that contact, and the booking URL is the page Claude Code
+opens to book online for you. It can cancel or stop only calls it asked for, not yours. Requests
 waiting for your approval don't count against the daily limit for your own calls to that number.
 
 Banjo won't start with the agent key set unless `PUBLIC_HOSTNAME` is set and `NOTIFICATION_CHANNEL`

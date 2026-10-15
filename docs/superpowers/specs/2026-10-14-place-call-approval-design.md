@@ -111,7 +111,7 @@ A broken setup fails loudly at boot, so the gate can't be silently off.
 - A Decline button: ignoring the message or `cancel_task` does the same thing.
 - Approving inside Pushover itself (priority 2 receipts): it would drop the page, but has no way to show the full request and repeats alerts until acknowledged.
 - Any override of the call cap from the agent key, or beyond the ceiling of twice the cap.
-- Restricting other tools for the agent role, beyond what was added after review: the agent key can't set contact notes, and `cancel_task` and `stop_call` reach only calls it asked for.
+- Restricting other tools for the agent role, beyond what was added after review: the agent key can't set contact notes or booking URLs, and `cancel_task` and `stop_call` reach only calls it asked for.
 
 ## Setup on the node (after release)
 

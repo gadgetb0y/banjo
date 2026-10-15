@@ -432,8 +432,9 @@ is the one action here that can't be taken back. So the gate is in Banjo, keyed 
 - `get_task_status` and `list_recent_tasks` add `approval: 'waiting' | 'approved' | 'not_approved'` to
   such tasks.
 - The page and the message show everything the call will use: the task's notes, windows, length and hold
-  limit, and the contact's notes. The agent key can't change a contact's notes (`update_contact` refuses),
-  since they go into every call to that contact and could otherwise change a call after it was approved.
+  limit, and the contact's notes. The agent key can't set a contact's notes (`add_contact` and
+  `update_contact` refuse), since they go into every call to that contact and could otherwise change a call
+  after it was approved, nor its booking URL, which Claude Code opens when it books online for the owner.
   At most 3 requests wait at once; the check and the insert run under one lock (`withApprovalRequestLock`).
   A request the agent cancels keeps its place until its 30 minutes are up (`countOpenApprovalRequests`), so
   cancelling and asking again can't flood the owner with messages.

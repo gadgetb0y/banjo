@@ -57,6 +57,14 @@ describe('add_contact with the agent key', () => {
     expect(await db.select().from(contacts)).toHaveLength(0);
   });
 
+  // Claude Code opens the booking URL when it books online for the owner.
+  it('refuses a booking URL, adding nothing', async () => {
+    await expect(
+      addContactHandler({ displayName: 'Agent Added', phoneNumber: '+15551239905', bookingUrl: 'https://evil.example/book' }, { role: 'agent' }),
+    ).rejects.toThrow(/booking URL/);
+    expect(await db.select().from(contacts)).toHaveLength(0);
+  });
+
   it('adds a contact without notes', async () => {
     const result = await addContactHandler({ displayName: 'Agent Added', phoneNumber: '+15551239902' }, { role: 'agent' });
     expect(result.contact?.displayName ?? result.displayName).toBe('Agent Added');

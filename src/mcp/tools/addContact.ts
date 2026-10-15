@@ -19,7 +19,9 @@ export const addContactInputSchema = z.object({
     .string()
     .url()
     .optional()
-    .describe('Online booking URL, if this contact supports booking online as an alternative to a phone call.'),
+    .describe(
+      "Online booking URL, if this contact supports booking online as an alternative to a phone call. Only the owner's key can set it.",
+    ),
 });
 
 export type AddContactResult =
@@ -36,7 +38,8 @@ const MAX_AGENT_NAME_CHARS = 100;
 
 /**
  * The agent key (MCP_AGENT_API_KEY) can't set notes: they go into the prompt
- * of every call to the contact, including ones the owner places later.
+ * of every call to the contact, including ones the owner places later. Nor a
+ * booking URL: Claude Code opens it when it books online for the owner.
  */
 export async function addContactHandler(
   input: z.infer<typeof addContactInputSchema>,
@@ -44,6 +47,9 @@ export async function addContactHandler(
 ): Promise<AddContactResult> {
   if (ctx.role === 'agent' && input.notes !== undefined) {
     throw new Error("A contact's notes can only be set by the owner: they go into every call to this contact. Leave notes out to add the contact.");
+  }
+  if (ctx.role === 'agent' && input.bookingUrl !== undefined) {
+    throw new Error("A contact's booking URL can only be set by the owner: it's the page opened to book online. Leave bookingUrl out to add the contact.");
   }
   // The name goes into every call's prompt as well: from an agent, one short line only.
   if (ctx.role === 'agent' && (/[\r\n\u0085\u2028\u2029]/.test(input.displayName) || input.displayName.length > MAX_AGENT_NAME_CHARS)) {
