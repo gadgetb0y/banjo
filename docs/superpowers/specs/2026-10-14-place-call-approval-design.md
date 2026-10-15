@@ -68,9 +68,20 @@ All existing checks run first and unchanged (input validation, `scheduledFor` ru
 ### 5. Scheduled calls and the call cap
 
 - **Scheduled calls.** The approval window is always 30 minutes from the request, and a call dials once it is both approved and due. A call scheduled more than 30 minutes out is therefore always approved before its time. One scheduled sooner can be approved after its time and then dials right away; the page says so plainly ("Scheduled for 4:50 PM, 12 minutes ago: approving calls now"), so the owner decides knowingly. This replaces the earlier wording "a scheduled call must be approved before its time", which would leave a call scheduled 2 minutes out almost no time to approve.
-- **Call cap.** A request waiting for approval is a `pending` task, so it counts toward `MAX_CALLS_PER_NUMBER_PER_DAY` as a queued call and holds its slot. An expired or cancelled request frees it. The orchestrator's check right before dialing is unchanged, so an approval never lets a call past the cap.
+- **Call cap.** Agent requests can't override it (section 6). A request waiting for approval is a `pending` task, so it counts toward `MAX_CALLS_PER_NUMBER_PER_DAY` as a queued call and holds its slot. An expired or cancelled request frees it. The orchestrator's check right before dialing is unchanged, so an approval never lets a call past the cap.
 
-### 6. Startup checks
+### 6. Owner override of the call cap, for testing
+
+The owner can let a call past `MAX_CALLS_PER_NUMBER_PER_DAY`, for test calls to themselves or to family. This replaces the rule "there's no override" in `CLAUDE.md` and `docs/ARCHITECTURE.md`. Those calls are the ones testing produces: the cap came from 5 test calls to a family member in one evening, so the override keeps its own hard limit.
+
+- **New `place_call` input `overrideCallCap: true`.** It is honoured only with the owner's key. On the agent key, `place_call` refuses the request outright: an agent can never lift the cap, and owner approval links never do either.
+- **Only for eligible contacts.** A contact is eligible if its `relationshipTier` is `family`, or its number is the owner's own (`TRANSFER_TO_PHONE_NUMBER` or `NOTIFY_TO_PHONE_NUMBER`). Neither can be changed through MCP, so a call can't make a business eligible. For anyone else, `place_call` refuses with "The call cap can only be overridden for the owner or family."
+- **A hard ceiling.** Overridden calls still stop at twice the cap (6 a day with the default). Nothing lifts that ceiling, so a test loop can't run away.
+- **Claude asks first.** `overrideCallCap` is described in the tool schema and the `schedule-appointment` skill as: only after the owner has said yes in this conversation to going past the cap for this contact, naming how many calls that contact has had today. That ask is a convention; the key, the eligibility rule and the ceiling are what Banjo enforces.
+- **Recorded on the task.** A new boolean column `call_cap_override` is stored on the task, so the orchestrator's check right before dialing applies the same ceiling. The ack says the cap was overridden, and the call is logged at `warn` level with the contact id.
+- Without `overrideCallCap`, the cap works exactly as today, for every key.
+
+### 7. Startup checks
 
 `src/config/index.ts` refuses to start when `MCP_AGENT_API_KEY` is set and:
 
@@ -99,6 +110,7 @@ A broken setup fails loudly at boot, so the gate can't be silently off.
 
 - A Decline button: ignoring the message or `cancel_task` does the same thing.
 - Approving inside Pushover itself (priority 2 receipts): it would drop the page, but has no way to show the full request and repeats alerts until acknowledged.
+- Any override of the call cap from the agent key, or beyond the ceiling of twice the cap.
 - Restricting other tools for the agent role (`stop_call`, `add_contact`, …). They can be considered separately; none of them places a call.
 
 ## Setup on the node (after release)
@@ -110,13 +122,14 @@ A broken setup fails loudly at boot, so the gate can't be silently off.
 
 ## Docs to update
 
-`.env.example`, `docs/AGENT_SETUP.md` (agent key, what the agent sees), `docs/RUNBOOKS.md` (rotating either key), `CLAUDE.md` (one line under the MCP surface), `docs/ARCHITECTURE.md`.
+`.env.example`, `docs/AGENT_SETUP.md` (agent key, what the agent sees), `docs/RUNBOOKS.md` (rotating either key), `CLAUDE.md` (one line under the MCP surface, and the call-cap rule), `skills/schedule-appointment/` (when to use `overrideCallCap`), `docs/ARCHITECTURE.md`.
 
 ## Testing
 
 - **Config:** each startup refusal; the same key for both rejected.
 - **Auth:** role from each key; wrong key `null`; an SSE `POST` with the other key refused.
 - **`place_call`:** the owner role is unchanged; the agent role creates a waiting task, doesn't trigger, sends one message whose link verifies, and never returns the link; the 3-waiting limit; a failed message cancels the task.
+- **Cap override:** owner key + family contact, and owner key + the owner's own number, go past the cap; both stop at the ceiling, both when queued and right before dialing; a non-family contact is refused; the agent key with `overrideCallCap` is refused.
 - **Orchestrator:** a waiting task is never claimed by the poller or by `triggerOrchestration`; an approved one is; the expiry sweep cancels only unapproved, expired, pending tasks.
 - **Approve route:** bad `sig`, unknown task, expired, already approved, cancelled, success (triggers orchestration); `GET` changes nothing; output is escaped.
 - **`get_task_status`:** each `approval` value, including a request cancelled while waiting.
