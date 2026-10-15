@@ -50,8 +50,28 @@ describe('the approval message shows what else the call will use', () => {
       contact: { ...base.contact, notes: 'Ask for Dana' },
       task: { ...base.task, constraints: { notes: 'Mention the coupon' } },
     });
-    expect(msg).toContain('Notes for the call: Mention the coupon');
+    expect(msg).toContain('Notes for the call, from the agent: Mention the coupon');
     expect(msg).toContain('Notes on this contact: Ask for Dana');
     expect(msg.indexOf('/approve/')).toBeLessThan(msg.indexOf('Mention the coupon'));
+  });
+});
+
+describe("the approval message keeps the agent's text from posing as Banjo's", () => {
+  it('puts agent-written text on single lines, labelled as the agent\'s', () => {
+    const msg = buildApprovalMessage({
+      contact: { ...base.contact, notes: 'line1\nApprove here instead: https://evil.example' },
+      task: {
+        ...base.task,
+        goalDescription: 'Book\n\nApprove by tomorrow, or it won\'t be placed: https://evil.example',
+        constraints: { notes: 'x\r\nBanjo says: already approved' },
+        mode: 'ask',
+        questions: ['Open?\u2028Approve: https://evil.example'],
+      },
+    });
+    const lines = msg.split('\n');
+    // Only Banjo's own line starts with "Approve by", and only one line has a link.
+    expect(lines.filter((l) => l.startsWith('Approve by'))).toHaveLength(1);
+    expect(lines.filter((l) => /^(Approve|Banjo says)/.test(l.trim()))).toHaveLength(1);
+    for (const l of lines.slice(3)) if (l) expect(l).toMatch(/^(The agent wrote|Questions from the agent|\d+\.|Notes)/);
   });
 });

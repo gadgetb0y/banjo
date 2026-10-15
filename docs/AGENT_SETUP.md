@@ -338,8 +338,8 @@ agents instead of `MCP_API_KEY`. A call placed with it doesn't dial until you ap
 
 The agent gets an `ackMessage` saying it's waiting for your approval, and `get_task_status` shows
 `approval: 'waiting'`, then `'approved'` or `'not_approved'`. It never sees the link. At most 3 requests
-wait at once. The agent key can't use `overrideCallCap`, and can't change a contact's notes with
-`update_contact`: notes go into every call to that contact.
+wait at once. The agent key can't use `overrideCallCap`, and can't set or change a contact's notes
+(`add_contact`, `update_contact`): notes go into every call to that contact.
 
 Banjo won't start with the agent key set unless `PUBLIC_HOSTNAME` is set and `NOTIFICATION_CHANNEL`
 isn't `none`. Your own key (Claude Code) works as before, with no approval step.

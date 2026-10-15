@@ -180,7 +180,7 @@ export function createMcpServer({ role }: { role: McpRole } = { role: 'owner' })
     'Save a new contact (business or person) for future calls/bookings.',
     addContactInputSchema.shape,
     { title: 'Add a contact', ...RECORDS },
-    adapt(addContactHandler),
+    adapt((input: Parameters<typeof addContactHandler>[0]) => addContactHandler(input, { role })),
   );
 
   server.tool(

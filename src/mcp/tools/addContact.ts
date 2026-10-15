@@ -2,6 +2,7 @@ import { z } from 'zod';
 import { addContact, getContactByPhoneNumber, isContactsUniqueViolation } from '../../contacts/service.js';
 import { contactCategoryEnum } from '../../contacts/schema.js';
 import type { Contact } from '../../contacts/schema.js';
+import type { McpRole } from '../role.js';
 
 export const addContactInputSchema = z.object({
   displayName: z.string().min(1).describe('Human-readable name for the contact, e.g. "Luxe Salon" or "Dr. Patel".'),
@@ -13,7 +14,7 @@ export const addContactInputSchema = z.object({
   notes: z
     .string()
     .optional()
-    .describe('Free-text notes about this contact — injected into the live-call system prompt as context (hours, quirks, prior history, etc).'),
+    .describe('Free-text notes about this contact — injected into the live-call system prompt as context (hours, quirks, prior history, etc). Only the owner\'s key can set them.'),
   bookingUrl: z
     .string()
     .url()
@@ -31,7 +32,17 @@ export type AddContactResult =
  * DB error crash the tool call — the calling skill needs to gracefully
  * offer update_contact/find_contact instead, not see an opaque isError.
  */
-export async function addContactHandler(input: z.infer<typeof addContactInputSchema>): Promise<AddContactResult> {
+/**
+ * The agent key (MCP_AGENT_API_KEY) can't set notes: they go into the prompt
+ * of every call to the contact, including ones the owner places later.
+ */
+export async function addContactHandler(
+  input: z.infer<typeof addContactInputSchema>,
+  ctx: { role: McpRole } = { role: 'owner' },
+): Promise<AddContactResult> {
+  if (ctx.role === 'agent' && input.notes !== undefined) {
+    throw new Error("A contact's notes can only be set by the owner: they go into every call to this contact. Leave notes out to add the contact.");
+  }
   try {
     const contact = await addContact(input);
     return { created: true, contact };
