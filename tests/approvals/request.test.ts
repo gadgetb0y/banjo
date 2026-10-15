@@ -1,0 +1,44 @@
+import { describe, expect, it } from 'vitest';
+import { config } from '../../src/config/index.js';
+import { buildApprovalMessage } from '../../src/approvals/request.js';
+import { clipText, PUSHOVER_MAX_MESSAGE_CHARS, SMS_MAX_CHARS } from '../../src/notifications/limits.js';
+
+config.PUBLIC_HOSTNAME = 'banjo.example.com';
+
+const base = {
+  contact: { displayName: "Luigi's", phoneNumber: '+15550001111' },
+  task: {
+    id: '11111111-1111-1111-1111-111111111111',
+    goalDescription: 'Book Friday at 7',
+    mode: 'booking' as const,
+    questions: null,
+    scheduledFor: null,
+    approvalExpiresAt: new Date('2026-10-15T01:30:00.000Z'),
+  },
+};
+
+describe('the approval message', () => {
+  it('names who, when and what, with the link', () => {
+    const msg = buildApprovalMessage(base);
+    expect(msg).toContain("Luigi's (+15550001111) now");
+    expect(msg).toContain('https://banjo.example.com/approve/11111111-1111-1111-1111-111111111111?sig=');
+    expect(msg).toContain('Book Friday at 7');
+  });
+
+  it('says when a scheduled call would be placed', () => {
+    const msg = buildApprovalMessage({ ...base, task: { ...base.task, scheduledFor: new Date(Date.now() + 86_400_000) } });
+    expect(msg).toMatch(/\(\+15550001111\) at /);
+  });
+
+  it('keeps the link when a long description is clipped, on Pushover and SMS', () => {
+    const msg = buildApprovalMessage({ ...base, task: { ...base.task, goalDescription: 'x'.repeat(5000) } });
+    expect(clipText(msg, PUSHOVER_MAX_MESSAGE_CHARS)).toMatch(/\/approve\/[0-9a-f-]{36}\?sig=[0-9a-f]{64}/);
+    expect(clipText(msg, SMS_MAX_CHARS)).toMatch(/\/approve\/[0-9a-f-]{36}\?sig=[0-9a-f]{64}/);
+  });
+
+  it("lists an ask call's questions", () => {
+    const msg = buildApprovalMessage({ ...base, task: { ...base.task, mode: 'ask', questions: ['Open Sunday?', 'Walk-ins?'] } });
+    expect(msg).toContain('1. Open Sunday?');
+    expect(msg).toContain('2. Walk-ins?');
+  });
+});

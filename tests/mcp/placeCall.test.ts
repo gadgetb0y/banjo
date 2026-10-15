@@ -2,14 +2,36 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 // placeCallHandler writes a Task row and triggers orchestration — stub both so
 // the scheduling behavior can be exercised without a DB or a real call.
-const { createTask, triggerOrchestration } = vi.hoisted(() => ({
-  createTask: vi.fn(async () => ({ id: 'task-1' })),
+const { createTask, triggerOrchestration, countTasksAwaitingApproval, cancelPendingTask, getContact, sendOwnerMessage } = vi.hoisted(() => ({
+  createTask: vi.fn(async (input: Record<string, unknown>) => ({
+    id: 'task-1',
+    goalDescription: input.goalDescription,
+    mode: input.mode ?? 'booking',
+    questions: input.questions ?? null,
+    scheduledFor: input.scheduledFor ?? null,
+    approvalExpiresAt: input.approvalExpiresAt ?? null,
+  })),
   triggerOrchestration: vi.fn(),
+  countTasksAwaitingApproval: vi.fn(async () => 0),
+  cancelPendingTask: vi.fn(async () => ({})),
+  getContact: vi.fn(
+    async (): Promise<{ id: string; displayName: string; phoneNumber: string; relationshipTier: 'family' | 'friend' | null } | undefined> => ({
+      id: '11111111-1111-1111-1111-111111111111',
+      displayName: 'Salon',
+      phoneNumber: '+15550001111',
+      relationshipTier: null,
+    }),
+  ),
+  sendOwnerMessage: vi.fn(async () => true),
 }));
-vi.mock('../../src/tasks/service.js', () => ({ createTask }));
+vi.mock('../../src/tasks/service.js', () => ({ createTask, countTasksAwaitingApproval, cancelPendingTask }));
+vi.mock('../../src/contacts/service.js', () => ({ getContact }));
+vi.mock('../../src/notifications/owner.js', () => ({ sendOwnerMessage }));
 vi.mock('../../src/tasks/orchestrator.js', () => ({ triggerOrchestration }));
 const { checkCallCap } = vi.hoisted(() => ({
-  checkCallCap: vi.fn(async () => ({ allowed: true, placed: 0, queued: 0 }) as { allowed: boolean; placed: number; queued: number; nextAllowedAt?: Date }),
+  checkCallCap: vi.fn(
+    async () => ({ allowed: true, placed: 0, queued: 0, limit: 3 }) as { allowed: boolean; placed: number; queued: number; nextAllowedAt?: Date; limit: number },
+  ),
 }));
 vi.mock('../../src/tasks/callCap.js', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../../src/tasks/callCap.js')>()),
@@ -17,6 +39,7 @@ vi.mock('../../src/tasks/callCap.js', async (importOriginal) => ({
 }));
 
 const { placeCallHandler, placeCallInputSchema } = await import('../../src/mcp/tools/placeCall.js');
+const { config } = await import('../../src/config/index.js');
 
 const CONTACT_ID = '11111111-1111-1111-1111-111111111111';
 
@@ -159,12 +182,12 @@ describe('mcp: place_call per-number call cap', () => {
 
   it('checks the cap for this contact, counting queued calls, before creating anything', async () => {
     await placeCallHandler({ contactId: CONTACT_ID, taskDescription: 'Call and chat' });
-    expect(checkCallCap).toHaveBeenCalledWith(CONTACT_ID, expect.any(Date), { includeQueued: true });
+    expect(checkCallCap).toHaveBeenCalledWith(CONTACT_ID, expect.any(Date), { includeQueued: true, limit: 3 });
     expect(createTask).toHaveBeenCalled();
   });
 
   it('refuses a call over the cap without creating a task, and says when the next call is allowed', async () => {
-    checkCallCap.mockResolvedValueOnce({ allowed: false, placed: 3, queued: 0, nextAllowedAt: new Date('2026-09-27T01:23:44.000Z') });
+    checkCallCap.mockResolvedValueOnce({ allowed: false, placed: 3, queued: 0, nextAllowedAt: new Date('2026-09-27T01:23:44.000Z'), limit: 3 });
     await expect(placeCallHandler({ contactId: CONTACT_ID, taskDescription: 'Call again' })).rejects.toThrow(
       /call limit reached.*next call allowed/i,
     );
@@ -173,7 +196,7 @@ describe('mcp: place_call per-number call cap', () => {
   });
 
   it("leaves a call scheduled for later to the check at dial time — tonight's calls may be out of the window by then", async () => {
-    checkCallCap.mockResolvedValueOnce({ allowed: false, placed: 3, queued: 0, nextAllowedAt: new Date('2026-09-27T01:23:44.000Z') });
+    checkCallCap.mockResolvedValueOnce({ allowed: false, placed: 3, queued: 0, nextAllowedAt: new Date('2026-09-27T01:23:44.000Z'), limit: 3 });
     await placeCallHandler({ contactId: CONTACT_ID, taskDescription: 'Call later', scheduledFor: '2099-09-13T09:00:00' });
     expect(checkCallCap).not.toHaveBeenCalled();
     expect(createTask).toHaveBeenCalled();
@@ -186,7 +209,7 @@ describe('mcp: place_call date windows', () => {
     // clearAllMocks keeps queued once-values — drop the refusal the call-cap
     // block's scheduled-for-later test queues but never consumes.
     checkCallCap.mockReset();
-    checkCallCap.mockResolvedValue({ allowed: true, placed: 0, queued: 0 });
+    checkCallCap.mockResolvedValue({ allowed: true, placed: 0, queued: 0, limit: 3 });
   });
 
   it('stores offset-less window times as UTC instants read in CALENDAR_TIMEZONE, never the server zone', async () => {
@@ -261,6 +284,108 @@ describe("mcp: place_call with mode 'ask' (#148)", () => {
     await expect(
       placeCallHandler({ contactId: CONTACT_ID, taskDescription: 'Book a haircut', questions: ['Any openings?'] }),
     ).rejects.toThrow("`questions` is only for mode 'ask'");
+    expect(createTask).not.toHaveBeenCalled();
+  });
+});
+
+describe('mcp: place_call with the agent key (owner approval)', () => {
+  const agent = { role: 'agent' as const };
+  const input = { contactId: CONTACT_ID, taskDescription: 'Book a trim' };
+  const originalHost = config.PUBLIC_HOSTNAME;
+  beforeEach(() => {
+    vi.clearAllMocks();
+    checkCallCap.mockReset();
+    checkCallCap.mockResolvedValue({ allowed: true, placed: 0, queued: 0, limit: 3 });
+    config.PUBLIC_HOSTNAME = 'banjo.example.com';
+  });
+  afterEach(() => {
+    config.PUBLIC_HOSTNAME = originalHost;
+  });
+
+  it('creates a task that waits 30 minutes for approval, sends one approval message, and does not dial', async () => {
+    const before = Date.now();
+    const result = await placeCallHandler(input, agent);
+    const created = (createTask.mock.calls.at(-1) as unknown as [{ approvalExpiresAt: Date }])[0];
+    expect(created.approvalExpiresAt.getTime()).toBeGreaterThanOrEqual(before + 30 * 60_000);
+    expect(created.approvalExpiresAt.getTime()).toBeLessThanOrEqual(Date.now() + 30 * 60_000);
+    expect(triggerOrchestration).not.toHaveBeenCalled();
+    expect(sendOwnerMessage).toHaveBeenCalledTimes(1);
+    expect((sendOwnerMessage.mock.calls[0] as unknown as [string])[0]).toContain('/approve/task-1?sig=');
+    expect(result.ackMessage).toMatch(/approve/i);
+    expect(JSON.stringify(result)).not.toContain('sig=');
+  });
+
+  it('refuses once 3 requests are already waiting, before creating anything', async () => {
+    countTasksAwaitingApproval.mockResolvedValueOnce(3);
+    await expect(placeCallHandler(input, agent)).rejects.toThrow(/already waiting/);
+    expect(createTask).not.toHaveBeenCalled();
+    expect(sendOwnerMessage).not.toHaveBeenCalled();
+  });
+
+  it('cancels the task when the owner could not be reached', async () => {
+    sendOwnerMessage.mockResolvedValueOnce(false);
+    await expect(placeCallHandler(input, agent)).rejects.toThrow(/Couldn't reach the owner/);
+    expect(cancelPendingTask).toHaveBeenCalledWith('task-1');
+    expect(triggerOrchestration).not.toHaveBeenCalled();
+  });
+
+  it('refuses overrideCallCap, even for family', async () => {
+    getContact.mockResolvedValueOnce({ id: CONTACT_ID, displayName: 'Mom', phoneNumber: '+15550002222', relationshipTier: 'family' });
+    await expect(placeCallHandler({ ...input, overrideCallCap: true }, agent)).rejects.toThrow(/owner's own key/);
+    expect(createTask).not.toHaveBeenCalled();
+  });
+
+  it('still applies the call cap', async () => {
+    checkCallCap.mockResolvedValueOnce({ allowed: false, placed: 3, queued: 0, limit: 3 });
+    await expect(placeCallHandler(input, agent)).rejects.toThrow(/Call limit reached/);
+    expect(createTask).not.toHaveBeenCalled();
+  });
+
+  it('refuses an unknown contact without asking the owner', async () => {
+    getContact.mockResolvedValueOnce(undefined);
+    await expect(placeCallHandler(input, agent)).rejects.toThrow(/Contact not found/);
+    expect(sendOwnerMessage).not.toHaveBeenCalled();
+  });
+});
+
+describe('mcp: place_call with the owner key', () => {
+  const input = { contactId: CONTACT_ID, taskDescription: 'Test call' };
+  beforeEach(() => {
+    vi.clearAllMocks();
+    checkCallCap.mockReset();
+    checkCallCap.mockResolvedValue({ allowed: true, placed: 0, queued: 0, limit: 3 });
+  });
+
+  it('dials with no approval step, as before', async () => {
+    await placeCallHandler(input);
+    expect((createTask.mock.calls.at(-1) as unknown as [{ approvalExpiresAt?: Date }])[0].approvalExpiresAt).toBeUndefined();
+    expect(triggerOrchestration).toHaveBeenCalledWith('task-1');
+    expect(sendOwnerMessage).not.toHaveBeenCalled();
+  });
+
+  it('overrides the cap for family, up to twice it', async () => {
+    getContact.mockResolvedValueOnce({ id: CONTACT_ID, displayName: 'Mom', phoneNumber: '+15550002222', relationshipTier: 'family' });
+    const result = await placeCallHandler({ ...input, overrideCallCap: true });
+    expect(checkCallCap).toHaveBeenCalledWith(CONTACT_ID, expect.any(Date), { includeQueued: true, limit: 6 });
+    expect((createTask.mock.calls.at(-1) as unknown as [{ callCapOverride?: boolean }])[0].callCapOverride).toBe(true);
+    expect(result.ackMessage).toMatch(/call cap overridden/i);
+  });
+
+  it("overrides the cap for the owner's own number", async () => {
+    getContact.mockResolvedValueOnce({ id: CONTACT_ID, displayName: 'Me', phoneNumber: config.NOTIFY_TO_PHONE_NUMBER!, relationshipTier: null });
+    await placeCallHandler({ ...input, overrideCallCap: true });
+    expect(checkCallCap).toHaveBeenCalledWith(CONTACT_ID, expect.any(Date), { includeQueued: true, limit: 6 });
+  });
+
+  it('refuses the override for anyone but the owner or family', async () => {
+    await expect(placeCallHandler({ ...input, overrideCallCap: true })).rejects.toThrow(/only be overridden for the owner or family/);
+    expect(createTask).not.toHaveBeenCalled();
+  });
+
+  it('stops at the ceiling even with the override', async () => {
+    getContact.mockResolvedValueOnce({ id: CONTACT_ID, displayName: 'Mom', phoneNumber: '+15550002222', relationshipTier: 'family' });
+    checkCallCap.mockResolvedValueOnce({ allowed: false, placed: 6, queued: 0, limit: 6 });
+    await expect(placeCallHandler({ ...input, overrideCallCap: true })).rejects.toThrow(/max 6/);
     expect(createTask).not.toHaveBeenCalled();
   });
 });
