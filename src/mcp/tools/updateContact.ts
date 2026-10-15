@@ -27,7 +27,7 @@ export const updateContactInputSchema = z.object({
  */
 export async function updateContactHandler(
   input: z.infer<typeof updateContactInputSchema>,
-  ctx: { role: McpRole } = { role: 'owner' },
+  ctx: { role: McpRole },
 ): Promise<Contact> {
   if (ctx.role === 'agent' && input.notes !== undefined) {
     throw new Error("A contact's notes can only be changed by the owner: they go into every call to this contact. Leave notes out to update the rest.");

@@ -116,7 +116,7 @@ describe("mcp: place_call, mode 'ask'", () => {
         mode: 'ask',
         questions: ['When do you close Saturday?'],
         constraints: { dateWindows: [{ start: '2026-10-20T09:00:00', end: '2026-10-20T17:00:00' }] },
-      }),
+      }, { role: 'owner' }),
     ).rejects.toThrow(/dateWindows/);
   });
 });
@@ -133,7 +133,7 @@ describe('mcp: place_call scheduling', () => {
   });
 
   it('calls right away when scheduledFor is omitted', async () => {
-    const result = await placeCallHandler({ contactId: CONTACT_ID, taskDescription: 'Call and chat' });
+    const result = await placeCallHandler({ contactId: CONTACT_ID, taskDescription: 'Call and chat' }, { role: 'owner' });
 
     expect(createTask).toHaveBeenCalledWith(expect.objectContaining({ scheduledFor: undefined }));
     expect(triggerOrchestration).toHaveBeenCalledWith('task-1');
@@ -145,7 +145,7 @@ describe('mcp: place_call scheduling', () => {
       contactId: CONTACT_ID,
       taskDescription: 'Ask about breakfast',
       scheduledFor: '2026-09-13T09:00:00',
-    });
+    }, { role: 'owner' });
 
     // 9:00am America/New_York in September is EDT (UTC-4) — never the server's own zone.
     expect(createTask).toHaveBeenCalledWith(expect.objectContaining({ scheduledFor: new Date('2026-09-13T13:00:00.000Z') }));
@@ -156,16 +156,16 @@ describe('mcp: place_call scheduling', () => {
 
   it('calls right away when scheduledFor is only a few minutes in the past', async () => {
     // 12:27am America/New_York — 3 minutes before the fake "now" of 12:30am.
-    await placeCallHandler({ contactId: CONTACT_ID, taskDescription: 'Call now', scheduledFor: '2026-09-13T00:27:00' });
+    await placeCallHandler({ contactId: CONTACT_ID, taskDescription: 'Call now', scheduledFor: '2026-09-13T00:27:00' }, { role: 'owner' });
 
     expect(triggerOrchestration).toHaveBeenCalledWith('task-1');
   });
 
   it('rejects a scheduledFor well in the past — a wrong date or year must not dial immediately', async () => {
-    await expect(placeCallHandler({ contactId: CONTACT_ID, taskDescription: 'Call later', scheduledFor: '2025-09-13T09:00:00' })).rejects.toThrow(
+    await expect(placeCallHandler({ contactId: CONTACT_ID, taskDescription: 'Call later', scheduledFor: '2025-09-13T09:00:00' }, { role: 'owner' })).rejects.toThrow(
       /already in the past/,
     );
-    await expect(placeCallHandler({ contactId: CONTACT_ID, taskDescription: 'Call later', scheduledFor: '2026-09-12T20:00:00' })).rejects.toThrow(
+    await expect(placeCallHandler({ contactId: CONTACT_ID, taskDescription: 'Call later', scheduledFor: '2026-09-12T20:00:00' }, { role: 'owner' })).rejects.toThrow(
       /already in the past/,
     );
     expect(createTask).not.toHaveBeenCalled();
@@ -173,7 +173,7 @@ describe('mcp: place_call scheduling', () => {
   });
 
   it('rejects a date-only scheduledFor, which would otherwise place the call at midnight, without creating a task', async () => {
-    await expect(placeCallHandler({ contactId: CONTACT_ID, taskDescription: 'Call tomorrow', scheduledFor: '2026-09-14' })).rejects.toThrow(
+    await expect(placeCallHandler({ contactId: CONTACT_ID, taskDescription: 'Call tomorrow', scheduledFor: '2026-09-14' }, { role: 'owner' })).rejects.toThrow(
       /must include a time of day/,
     );
     expect(createTask).not.toHaveBeenCalled();
@@ -181,7 +181,7 @@ describe('mcp: place_call scheduling', () => {
   });
 
   it('rejects an unparseable scheduledFor without creating a task', async () => {
-    await expect(placeCallHandler({ contactId: CONTACT_ID, taskDescription: 'Call later', scheduledFor: '2026-02-30Tnoon:00' })).rejects.toThrow(
+    await expect(placeCallHandler({ contactId: CONTACT_ID, taskDescription: 'Call later', scheduledFor: '2026-02-30Tnoon:00' }, { role: 'owner' })).rejects.toThrow(
       /scheduledFor/,
     );
     expect(createTask).not.toHaveBeenCalled();
@@ -195,14 +195,14 @@ describe('mcp: place_call per-number call cap', () => {
   });
 
   it('checks the cap for this contact, counting queued calls, before creating anything', async () => {
-    await placeCallHandler({ contactId: CONTACT_ID, taskDescription: 'Call and chat' });
+    await placeCallHandler({ contactId: CONTACT_ID, taskDescription: 'Call and chat' }, { role: 'owner' });
     expect(checkCallCap).toHaveBeenCalledWith(CONTACT_ID, expect.any(Date), { includeQueued: true, includeAwaitingApproval: false, limit: 3 });
     expect(createTask).toHaveBeenCalled();
   });
 
   it('refuses a call over the cap without creating a task, and says when the next call is allowed', async () => {
     checkCallCap.mockResolvedValueOnce({ allowed: false, placed: 3, queued: 0, nextAllowedAt: new Date('2026-09-27T01:23:44.000Z'), limit: 3 });
-    await expect(placeCallHandler({ contactId: CONTACT_ID, taskDescription: 'Call again' })).rejects.toThrow(
+    await expect(placeCallHandler({ contactId: CONTACT_ID, taskDescription: 'Call again' }, { role: 'owner' })).rejects.toThrow(
       /call limit reached.*next call allowed/i,
     );
     expect(createTask).not.toHaveBeenCalled();
@@ -211,7 +211,7 @@ describe('mcp: place_call per-number call cap', () => {
 
   it("leaves a call scheduled for later to the check at dial time — tonight's calls may be out of the window by then", async () => {
     checkCallCap.mockResolvedValueOnce({ allowed: false, placed: 3, queued: 0, nextAllowedAt: new Date('2026-09-27T01:23:44.000Z'), limit: 3 });
-    await placeCallHandler({ contactId: CONTACT_ID, taskDescription: 'Call later', scheduledFor: '2099-09-13T09:00:00' });
+    await placeCallHandler({ contactId: CONTACT_ID, taskDescription: 'Call later', scheduledFor: '2099-09-13T09:00:00' }, { role: 'owner' });
     expect(checkCallCap).not.toHaveBeenCalled();
     expect(createTask).toHaveBeenCalled();
   });
@@ -231,7 +231,7 @@ describe('mcp: place_call date windows', () => {
       contactId: CONTACT_ID,
       taskDescription: 'Book a haircut',
       constraints: { dateWindows: [{ start: '2026-10-01T15:00:00', end: '2026-10-01T18:00:00' }], durationMinutes: 30 },
-    });
+    }, { role: 'owner' });
 
     // 3pm-6pm America/New_York in October is EDT (UTC-4).
     expect(createTask).toHaveBeenCalledWith(
@@ -249,7 +249,7 @@ describe('mcp: place_call date windows', () => {
       contactId: CONTACT_ID,
       taskDescription: 'Book a haircut',
       constraints: { dateWindows: [{ start: '2026-10-01T15:00:00-07:00', end: '2026-10-01T18:00:00Z' }] },
-    });
+    }, { role: 'owner' });
 
     expect(createTask).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -264,7 +264,7 @@ describe('mcp: place_call date windows', () => {
         contactId: CONTACT_ID,
         taskDescription: 'Book a haircut',
         constraints: { dateWindows: [{ start: 'next tuesday', end: '2026-10-01T18:00:00' }] },
-      }),
+      }, { role: 'owner' }),
     ).rejects.toThrow(/dateWindows/);
     expect(createTask).not.toHaveBeenCalled();
   });
@@ -282,13 +282,13 @@ describe("mcp: place_call with mode 'ask' (#148)", () => {
       taskDescription: 'Find out their Saturday hours',
       mode: 'ask',
       questions: ['When do you close Saturday?'],
-    });
+    }, { role: 'owner' });
     expect(createTask).toHaveBeenCalledWith(expect.objectContaining({ mode: 'ask', questions: ['When do you close Saturday?'] }));
     expect(triggerOrchestration).toHaveBeenCalledWith('task-1');
   });
 
   it('refuses an ask call with no questions, before creating anything', async () => {
-    await expect(placeCallHandler({ contactId: CONTACT_ID, taskDescription: 'Find out their hours', mode: 'ask' })).rejects.toThrow(
+    await expect(placeCallHandler({ contactId: CONTACT_ID, taskDescription: 'Find out their hours', mode: 'ask' }, { role: 'owner' })).rejects.toThrow(
       "mode 'ask' needs at least one question",
     );
     expect(createTask).not.toHaveBeenCalled();
@@ -296,7 +296,7 @@ describe("mcp: place_call with mode 'ask' (#148)", () => {
 
   it('refuses questions on a booking call', async () => {
     await expect(
-      placeCallHandler({ contactId: CONTACT_ID, taskDescription: 'Book a haircut', questions: ['Any openings?'] }),
+      placeCallHandler({ contactId: CONTACT_ID, taskDescription: 'Book a haircut', questions: ['Any openings?'] }, { role: 'owner' }),
     ).rejects.toThrow("`questions` is only for mode 'ask'");
     expect(createTask).not.toHaveBeenCalled();
   });
@@ -390,7 +390,7 @@ describe('mcp: place_call with the owner key', () => {
   });
 
   it('dials with no approval step, as before', async () => {
-    await placeCallHandler(input);
+    await placeCallHandler(input, { role: 'owner' });
     expect((createTask.mock.calls.at(-1) as unknown as [{ approvalExpiresAt?: Date }])[0].approvalExpiresAt).toBeUndefined();
     expect(triggerOrchestration).toHaveBeenCalledWith('task-1');
     expect(sendOwnerMessage).not.toHaveBeenCalled();
@@ -398,7 +398,7 @@ describe('mcp: place_call with the owner key', () => {
 
   it('overrides the cap for family, up to twice it', async () => {
     getContact.mockResolvedValueOnce({ id: CONTACT_ID, displayName: 'Mom', phoneNumber: '+15550002222', relationshipTier: 'family' });
-    const result = await placeCallHandler({ ...input, overrideCallCap: true });
+    const result = await placeCallHandler({ ...input, overrideCallCap: true }, { role: 'owner' });
     expect(checkCallCap).toHaveBeenCalledWith(CONTACT_ID, expect.any(Date), { includeQueued: true, includeAwaitingApproval: false, limit: 6 });
     expect((createTask.mock.calls.at(-1) as unknown as [{ callCapOverride?: boolean }])[0].callCapOverride).toBe(true);
     expect(result.ackMessage).toMatch(/call cap overridden/i);
@@ -406,19 +406,19 @@ describe('mcp: place_call with the owner key', () => {
 
   it("overrides the cap for the owner's own number", async () => {
     getContact.mockResolvedValueOnce({ id: CONTACT_ID, displayName: 'Me', phoneNumber: config.NOTIFY_TO_PHONE_NUMBER!, relationshipTier: null });
-    await placeCallHandler({ ...input, overrideCallCap: true });
+    await placeCallHandler({ ...input, overrideCallCap: true }, { role: 'owner' });
     expect(checkCallCap).toHaveBeenCalledWith(CONTACT_ID, expect.any(Date), { includeQueued: true, includeAwaitingApproval: false, limit: 6 });
   });
 
   it('refuses the override for anyone but the owner or family', async () => {
-    await expect(placeCallHandler({ ...input, overrideCallCap: true })).rejects.toThrow(/only be overridden for the owner or family/);
+    await expect(placeCallHandler({ ...input, overrideCallCap: true }, { role: 'owner' })).rejects.toThrow(/only be overridden for the owner or family/);
     expect(createTask).not.toHaveBeenCalled();
   });
 
   it('stops at the ceiling even with the override', async () => {
     getContact.mockResolvedValueOnce({ id: CONTACT_ID, displayName: 'Mom', phoneNumber: '+15550002222', relationshipTier: 'family' });
     checkCallCap.mockResolvedValueOnce({ allowed: false, placed: 6, queued: 0, limit: 6 });
-    await expect(placeCallHandler({ ...input, overrideCallCap: true })).rejects.toThrow(/max 6/);
+    await expect(placeCallHandler({ ...input, overrideCallCap: true }, { role: 'owner' })).rejects.toThrow(/max 6/);
     expect(createTask).not.toHaveBeenCalled();
   });
 });

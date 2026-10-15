@@ -89,3 +89,26 @@ describe("nothing the agent wrote comes before Banjo's link", () => {
     expect(msg.indexOf('evil')).toBeGreaterThan(msg.indexOf('/approve/'));
   });
 });
+
+describe('the approval message says what the owner can and can\'t trust about the contact', () => {
+  it('marks a name that is not from the address book, which an agent could have chosen', () => {
+    expect(buildApprovalMessage({ ...base, contact: { ...base.contact, displayName: 'Mom', googleResourceName: null } })).toContain(
+      'Contact name: Mom (not in your address book)',
+    );
+    expect(buildApprovalMessage({ ...base, contact: { ...base.contact, displayName: 'Mom', googleResourceName: 'people/c1' } })).toContain(
+      'Contact name: Mom\n',
+    );
+  });
+
+  it('says a family or friend contact may hear about the owner from their profile', () => {
+    const msg = buildApprovalMessage({ ...base, contact: { ...base.contact, relationshipTier: 'family' } });
+    expect(msg).toContain('Tagged family: on this call Banjo may answer their questions about you from your profile.');
+    expect(buildApprovalMessage(base)).not.toContain('Tagged');
+  });
+
+  it('drops invisible direction and zero-width marks from what the agent wrote', () => {
+    const msg = buildApprovalMessage({ ...base, task: { ...base.task, goalDescription: 'Book \u202Eevil\u2066x\u2069\u200B\uFEFF' } });
+    expect(msg).toContain('Book evilx');
+    expect(msg).not.toMatch(/[\u200B-\u200F\u202A-\u202E\u2066-\u2069\uFEFF]/);
+  });
+});

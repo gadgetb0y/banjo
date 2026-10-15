@@ -100,7 +100,7 @@ const RECORDS = { readOnlyHint: false, destructiveHint: false, idempotentHint: f
  * name+shape+cb). Confirm the exact overload set against
  * dist/**\/server/mcp.d.ts once `npm install` has run.
  */
-export function createMcpServer({ role }: { role: McpRole } = { role: 'owner' }): McpServer {
+export function createMcpServer({ role }: { role: McpRole }): McpServer {
   const server = new McpServer({
     name: 'banjo',
     version: PACKAGE_VERSION,

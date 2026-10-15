@@ -431,8 +431,13 @@ is the one action here that can't be taken back. So the gate is in Banjo, keyed 
   their deadline passes (`transitionTask` with `unapproved: true`, so it can't land after an approval).
 - `get_task_status` and `list_recent_tasks` add `approval: 'waiting' | 'approved' | 'not_approved'` to
   such tasks.
-- The page and the message show everything the call will use: the task's notes, windows, length and hold
-  limit, and the contact's notes. The agent key can't set a contact's notes (`add_contact` and
+- The page shows everything the call will use: the task's notes, windows, length and hold limit, and the
+  contact's notes. The message shows the notes and leaves the rest to the page. Both say whether the
+  contact's name came from the owner's address book (an agent can `add_contact` a stranger as "Mom") and,
+  for a `family` or `friend` contact, that the call may answer questions about the owner from their
+  profile. Invisible direction and zero-width marks are dropped from agent text.
+- The approval message must reach the owner somewhere the agent can't read: anyone with the link can
+  approve. With an agent that reads the owner's texts, use Pushover, not `twilio_sms`. The agent key can't set a contact's notes (`add_contact` and
   `update_contact` refuse), since they go into every call to that contact and could otherwise change a call
   after it was approved, nor its booking URL, which Claude Code opens when it books online for the owner.
   At most 3 requests wait at once; the check and the insert run under one lock (`withApprovalRequestLock`).

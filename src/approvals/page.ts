@@ -1,6 +1,12 @@
-/** Escapes text for HTML element content and double-quoted attribute values. */
+import { withoutInvisibleMarks } from './request.js';
+
+/**
+ * Escapes text for HTML element content and double-quoted attribute values,
+ * dropping invisible direction and zero-width marks, so agent-written text
+ * shows as it will be used.
+ */
 export function escapeHtml(text: string): string {
-  return text
+  return withoutInvisibleMarks(text)
     .replace(/&/g, '&amp;')
     .replace(/</g, '&lt;')
     .replace(/>/g, '&gt;')

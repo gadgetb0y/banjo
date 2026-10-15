@@ -345,7 +345,13 @@ opens to book online for you. It can cancel or stop only calls it asked for, not
 waiting for your approval don't count against the daily limit for your own calls to that number.
 
 Banjo won't start with the agent key set unless `PUBLIC_HOSTNAME` is set and `NOTIFICATION_CHANNEL`
-isn't `none`. Your own key (Claude Code) works as before, with no approval step.
+isn't `none`.
+
+**Send the approval message somewhere the agent can't read.** Anyone holding the link can approve the
+call, so an agent that can read your texts could approve its own requests. If your agent reads SMS or
+iMessage on your account (iMessage on a Mac with your Apple ID, text forwarding), use
+`NOTIFICATION_CHANNEL=pushover`, not `twilio_sms`. An agent with its own number, which only sees what's
+sent to that number, is fine either way. Your own key (Claude Code) works as before, with no approval step.
 
 ## The task webhook
 

@@ -24,11 +24,11 @@ The link opens a page rather than approving directly, so a link preview or prefe
 
 - New optional setting **`MCP_AGENT_API_KEY`** (at least 32 characters, must differ from `MCP_API_KEY`).
 - `requireAuth` (`src/mcp/server.ts`) returns the caller's role instead of a boolean: `'owner'` for `MCP_API_KEY`, `'agent'` for `MCP_AGENT_API_KEY`, `null` otherwise. Both comparisons stay constant-time.
-- `createMcpServer({ role })` passes the role to `place_call`'s handler. For the legacy SSE transport, the role is fixed when the stream opens, and a `POST` to that session must authenticate with the same role.
-- Only `place_call` behaves differently by role. Every other tool is unchanged for both keys.
+- `createMcpServer({ role })` passes the role to the tools that differ by it; the role is a required argument, never defaulted. For the legacy SSE transport, the role is fixed when the stream opens, and a `POST` to that session must authenticate with the same role.
+- `place_call` is the tool this design changes by role. After review, the agent key also can't set a contact's notes or booking URL, or cancel or stop calls it didn't ask for (see Out of scope). The read tools are the same for both keys.
 - When `MCP_AGENT_API_KEY` is unset, there is no agent role and nothing changes.
 
-The key is the security anchor: the role comes from the credential, never from anything the caller says, so an agent can't talk its way past the gate.
+The key is the security anchor: the role comes from the credential, never from anything the caller says, so an agent can't talk its way past the gate. The other half is the approval message: it must go somewhere the agent can't read. An agent that can read the owner's texts could open the link and press Approve itself, so with an agent that reads SMS or iMessage on the owner's account, use Pushover (or another channel the agent can't see).
 
 ### 2. The task carries the approval
 
@@ -115,7 +115,7 @@ A broken setup fails loudly at boot, so the gate can't be silently off.
 
 ## Setup on the node (after release)
 
-1. Generate a key and add `MCP_AGENT_API_KEY` to `~/banjo/.env`.
+1. Generate a key and add `MCP_AGENT_API_KEY` to `~/banjo/.env`. Keep `NOTIFICATION_CHANNEL=pushover`: Hermes reads iMessage on its own number, not the owner's Pushover.
 2. Point both Hermes MCP servers (`banjo` and `banjo_readonly`) at the new key in `hermes-data/config.yaml`.
 3. Restart both containers. Test: ask Hermes over iMessage for a call to the Live Test contact; confirm the Pushover arrives, the page shows the request, and the call dials only after Approve. Then let one request expire.
 4. Update Hermes's SOUL.md so it tells the owner it's waiting for approval rather than asking for confirmation in chat.

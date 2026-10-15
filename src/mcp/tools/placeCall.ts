@@ -168,7 +168,7 @@ const formatInCalendarTimezone = formatLocal;
  */
 export async function placeCallHandler(
   input: z.infer<typeof placeCallInputSchema>,
-  ctx: { role: McpRole } = { role: 'owner' },
+  ctx: { role: McpRole },
 ): Promise<PlaceCallResult> {
   // Checked here, not in the schema, so the MCP tool's JSON Schema stays a plain object.
   const asks = modeRules({ mode: input.mode ?? 'booking' }).asks;

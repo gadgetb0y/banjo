@@ -19,20 +19,20 @@ describe('mcp: cancel_task', () => {
 
   it('reports a pending task as cancelled', async () => {
     cancelPendingTask.mockResolvedValue({ id: TASK_ID, status: 'cancelled' });
-    await expect(cancelTaskHandler({ taskId: TASK_ID })).resolves.toMatchObject({ cancelled: true, status: 'cancelled' });
+    await expect(cancelTaskHandler({ taskId: TASK_ID }, { role: 'owner' })).resolves.toMatchObject({ cancelled: true, status: 'cancelled' });
     expect(cancelPendingTask).toHaveBeenCalledWith(TASK_ID);
   });
 
   it('reports a task already on a call or finished as not cancelled, with its status', async () => {
     cancelPendingTask.mockResolvedValue({ id: TASK_ID, status: 'calling' });
-    const result = await cancelTaskHandler({ taskId: TASK_ID });
+    const result = await cancelTaskHandler({ taskId: TASK_ID }, { role: 'owner' });
     expect(result).toMatchObject({ cancelled: false, status: 'calling' });
     expect(result.message).toContain('calling');
   });
 
   it('throws for a task that does not exist', async () => {
     cancelPendingTask.mockResolvedValue(undefined);
-    await expect(cancelTaskHandler({ taskId: TASK_ID })).rejects.toThrow(/Task not found/);
+    await expect(cancelTaskHandler({ taskId: TASK_ID }, { role: 'owner' })).rejects.toThrow(/Task not found/);
   });
 
   describe('with the agent key', () => {

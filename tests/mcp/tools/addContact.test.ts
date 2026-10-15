@@ -31,15 +31,15 @@ beforeEach(async () => {
 
 describe('addContactHandler', () => {
   it('creates a new contact', async () => {
-    const result = await addContactHandler({ displayName: 'Luxe Salon', phoneNumber: '+15551234567' });
+    const result = await addContactHandler({ displayName: 'Luxe Salon', phoneNumber: '+15551234567' }, { role: 'owner' });
     expect(result.created).toBe(true);
     expect(result.created && result.contact.displayName).toBe('Luxe Salon');
   });
 
   it('returns created: false with the existing contact on a duplicate phone number, instead of throwing', async () => {
-    await addContactHandler({ displayName: 'Luxe Salon', phoneNumber: '+15551234567' });
+    await addContactHandler({ displayName: 'Luxe Salon', phoneNumber: '+15551234567' }, { role: 'owner' });
 
-    const result = await addContactHandler({ displayName: 'Luxe Salon (again)', phoneNumber: '+15551234567' });
+    const result = await addContactHandler({ displayName: 'Luxe Salon (again)', phoneNumber: '+15551234567' }, { role: 'owner' });
 
     expect(result.created).toBe(false);
     expect(!result.created && result.existingContact.displayName).toBe('Luxe Salon');
@@ -81,7 +81,7 @@ describe("add_contact with the agent key: the name goes into every call's prompt
   });
 
   it('allows the owner a long name, as before', async () => {
-    const result = await addContactHandler({ displayName: 'S'.repeat(101), phoneNumber: '+15551239904' });
+    const result = await addContactHandler({ displayName: 'S'.repeat(101), phoneNumber: '+15551239904' }, { role: 'owner' });
     expect(result.created).toBe(true);
   });
 });

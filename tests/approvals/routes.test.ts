@@ -152,3 +152,55 @@ describe('the page shows everything the call will use', () => {
     expect(html).toContain('Ask for &lt;Dana&gt;');
   });
 });
+
+describe('the page says what the owner can and can\'t trust about the contact', () => {
+  it('marks a name that is not from the address book', async () => {
+    getContact.mockResolvedValue({ displayName: 'Mom', phoneNumber: '+15550001111', googleResourceName: null });
+    expect(await (await approvalRoutes.request(`/approve/${ID}?sig=${SIG}`)).text()).toContain('Mom (+15550001111), not in your address book');
+  });
+
+  it('says a family contact may hear about the owner from their profile', async () => {
+    getContact.mockResolvedValue({ displayName: 'Mom', phoneNumber: '+15550001111', googleResourceName: 'people/c1', relationshipTier: 'family' });
+    const html = await (await approvalRoutes.request(`/approve/${ID}?sig=${SIG}`)).text();
+    expect(html).toContain('Mom (+15550001111)</dd>');
+    expect(html).toContain('Tagged family: on this call Banjo may answer their questions about you from your profile.');
+  });
+
+  it('drops invisible direction and zero-width marks', async () => {
+    getTask.mockResolvedValue(task({ goalDescription: 'Book \u202Eevil\u200B' }));
+    const html = await (await approvalRoutes.request(`/approve/${ID}?sig=${SIG}`)).text();
+    expect(html).toContain('Book evil');
+    expect(html).not.toMatch(/[\u200B\u202E]/);
+  });
+});
+
+describe('GET /approve/:taskId when the request is no longer waiting', () => {
+  it.each([
+    ['already approved', { approvedAt: new Date() }, 'Already approved.'],
+    ['cancelled', { status: 'cancelled' }, 'This request was cancelled'],
+    ['expired', { approvalExpiresAt: new Date(Date.now() - 60_000) }, 'This request expired'],
+  ])('shows no Approve button when %s', async (_label, overrides, text) => {
+    const expires = (overrides as { approvalExpiresAt?: Date }).approvalExpiresAt ?? EXPIRES;
+    getTask.mockResolvedValue(task(overrides));
+    const html = await (await approvalRoutes.request(`/approve/${ID}?sig=${approvalSignature(ID, expires)}`)).text();
+    expect(html).toContain(text);
+    expect(html).not.toContain('<form');
+  });
+});
+
+describe('POST /approve/:taskId when the request is no longer waiting', () => {
+  it.each([
+    ['expired', 'This request expired'],
+    ['already_approved', 'This call was already approved.'],
+    ['not_waiting', 'This request was cancelled'],
+  ])('reports %s and starts nothing', async (result, text) => {
+    approveTask.mockResolvedValue(result);
+    const res = await approvalRoutes.request(`/approve/${ID}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: `sig=${SIG}`,
+    });
+    expect(await res.text()).toContain(text);
+    expect(triggerOrchestration).not.toHaveBeenCalled();
+  });
+});

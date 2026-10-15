@@ -43,7 +43,7 @@ const MAX_AGENT_NAME_CHARS = 100;
  */
 export async function addContactHandler(
   input: z.infer<typeof addContactInputSchema>,
-  ctx: { role: McpRole } = { role: 'owner' },
+  ctx: { role: McpRole },
 ): Promise<AddContactResult> {
   if (ctx.role === 'agent' && input.notes !== undefined) {
     throw new Error("A contact's notes can only be set by the owner: they go into every call to this contact. Leave notes out to add the contact.");

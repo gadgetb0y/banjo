@@ -6,7 +6,7 @@ import type { Task } from '../tasks/schema.js';
 import { approveTask, getTask } from '../tasks/service.js';
 import { isValidApprovalSignature } from './link.js';
 import { escapeHtml, page } from './page.js';
-import { formatLocal } from './request.js';
+import { formatLocal, fromAddressBook, tierNote, withoutInvisibleMarks } from './request.js';
 
 /**
  * The owner's page for approving a call an agent asked for. GET only shows
@@ -65,7 +65,14 @@ approvalRoutes.get('/approve/:taskId', async (c) => {
   const now = Date.now();
   const expiresAt = task.approvalExpiresAt!;
   const rows: Array<[string, string]> = [
-    ['Who', escapeHtml(`${contact?.displayName ?? 'Unknown contact'} (${contact?.phoneNumber ?? 'no number'})`)],
+    [
+      'Who',
+      escapeHtml(
+        `${contact?.displayName ?? 'Unknown contact'} (${contact?.phoneNumber ?? 'no number'})` +
+          (contact && !fromAddressBook(contact) ? ', not in your address book' : ''),
+      ),
+    ],
+    ...(contact && tierNote(contact) ? ([['Your profile', escapeHtml(tierNote(contact)!)]] as Array<[string, string]>) : []),
     ['When', whenHtml(task, now)],
     ['Kind of call', escapeHtml(task.mode)],
     ['What the agent asked for', escapeHtml(task.goalDescription)],

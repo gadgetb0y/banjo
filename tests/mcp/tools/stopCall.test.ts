@@ -16,7 +16,7 @@ describe('stop_call', () => {
     const stop = vi.fn(async () => {});
     registerLiveCall({ taskId: 'task-1', callAttemptId: 'attempt-1', session: { stop } });
 
-    const result = await stopCallHandler({ taskId: 'task-1', reason: 'wrong number' });
+    const result = await stopCallHandler({ taskId: 'task-1', reason: 'wrong number' }, { role: 'owner' });
 
     expect(stop).toHaveBeenCalledWith('wrong number');
     expect(result).toMatchObject({ taskId: 'task-1', stopped: true });
@@ -26,7 +26,7 @@ describe('stop_call', () => {
     const stop = vi.fn(async () => {});
     registerLiveCall({ taskId: 'task-1', callAttemptId: 'attempt-1', session: { stop } });
 
-    await stopCallHandler({ taskId: 'task-1' });
+    await stopCallHandler({ taskId: 'task-1' }, { role: 'owner' });
 
     expect(stop).toHaveBeenCalledWith(expect.stringContaining('stopped'));
   });
@@ -36,7 +36,7 @@ describe('stop_call', () => {
     // driven by a different process, is not something this can reach.
     getTask.mockResolvedValueOnce({ id: 'task-1', status: 'confirmed' });
 
-    const result = await stopCallHandler({ taskId: 'task-1' });
+    const result = await stopCallHandler({ taskId: 'task-1' }, { role: 'owner' });
 
     expect(result).toMatchObject({ taskId: 'task-1', stopped: false, status: 'confirmed' });
     expect(result.message).toMatch(/no live call/i);
@@ -44,7 +44,7 @@ describe('stop_call', () => {
 
   it('throws for a task that does not exist at all', async () => {
     getTask.mockResolvedValueOnce(undefined);
-    await expect(stopCallHandler({ taskId: 'missing' })).rejects.toThrow(/not found/i);
+    await expect(stopCallHandler({ taskId: 'missing' }, { role: 'owner' })).rejects.toThrow(/not found/i);
   });
 
   describe('with the agent key', () => {

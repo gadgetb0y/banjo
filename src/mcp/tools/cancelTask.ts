@@ -22,7 +22,7 @@ export interface CancelTaskResult {
  */
 export async function cancelTaskHandler(
   input: z.infer<typeof cancelTaskInputSchema>,
-  ctx: { role: McpRole } = { role: 'owner' },
+  ctx: { role: McpRole },
 ): Promise<CancelTaskResult> {
   if (ctx.role === 'agent') {
     const existing = await getTask(input.taskId);

@@ -34,12 +34,12 @@ describe('mcp: update_contact by role', () => {
   });
 
   it('lets the owner change the booking URL', async () => {
-    await updateContactHandler({ id: ID, bookingUrl: 'https://example.com/book' });
+    await updateContactHandler({ id: ID, bookingUrl: 'https://example.com/book' }, { role: 'owner' });
     expect(updateContact).toHaveBeenCalledWith(ID, { bookingUrl: 'https://example.com/book' });
   });
 
   it('lets the owner change notes, as before', async () => {
-    await updateContactHandler({ id: ID, notes: 'Ask for Dana' });
+    await updateContactHandler({ id: ID, notes: 'Ask for Dana' }, { role: 'owner' });
     expect(updateContact).toHaveBeenCalledWith(ID, { notes: 'Ask for Dana' });
   });
 });

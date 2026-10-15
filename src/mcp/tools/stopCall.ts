@@ -37,7 +37,7 @@ const DEFAULT_REASON = 'Call stopped by the user';
  */
 export async function stopCallHandler(
   input: z.infer<typeof stopCallInputSchema>,
-  ctx: { role: McpRole } = { role: 'owner' },
+  ctx: { role: McpRole },
 ): Promise<StopCallResult> {
   if (ctx.role === 'agent') {
     const task = await getTask(input.taskId);
