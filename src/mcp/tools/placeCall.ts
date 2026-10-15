@@ -6,7 +6,7 @@ import { getContact } from '../../contacts/service.js';
 import { logger } from '../../lib/logger.js';
 import { sendOwnerMessage } from '../../notifications/owner.js';
 import { canOverrideCallCap, checkCallCap, describeCallCapRefusal, OVERRIDE_CAP_MULTIPLIER } from '../../tasks/callCap.js';
-import { cancelPendingTask, countTasksAwaitingApproval, createTask } from '../../tasks/service.js';
+import { cancelPendingTask, countTasksAwaitingApproval, createTask, withApprovalRequestLock } from '../../tasks/service.js';
 import type { McpRole } from '../role.js';
 import { triggerOrchestration } from '../../tasks/orchestrator.js';
 import type { TaskConstraints, TimeWindow } from '../../tasks/schema.js';
@@ -197,9 +197,6 @@ export async function placeCallHandler(
   if (agent && input.overrideCallCap) {
     throw new Error("overrideCallCap needs the owner's own key: an agent can't lift the call limit.");
   }
-  if (agent && (await countTasksAwaitingApproval()) >= MAX_WAITING_APPROVALS) {
-    throw new Error(`${MAX_WAITING_APPROVALS} calls are already waiting for the owner's approval. Wait for those to be approved or expire first.`);
-  }
   const contact = agent || input.overrideCallCap ? await getContact(input.contactId) : undefined;
   if ((agent || input.overrideCallCap) && !contact) throw new Error(`Contact not found: ${input.contactId}`);
   if (input.overrideCallCap && !canOverrideCallCap(contact!)) {
@@ -218,17 +215,30 @@ export async function placeCallHandler(
     if (!cap.allowed) throw new Error(describeCallCapRefusal(cap));
   }
 
-  const task = await createTask({
-    contactId: input.contactId,
-    channel: 'phone',
-    goalDescription: input.taskDescription,
-    constraints,
-    mode: input.mode,
-    questions: input.questions,
-    scheduledFor,
-    ...(agent ? { approvalExpiresAt: new Date(Date.now() + APPROVAL_WINDOW_MS) } : {}),
-    ...(input.overrideCallCap ? { callCapOverride: true } : {}),
-  });
+  const create = () =>
+    createTask({
+      contactId: input.contactId,
+      channel: 'phone',
+      goalDescription: input.taskDescription,
+      constraints,
+      mode: input.mode,
+      questions: input.questions,
+      scheduledFor,
+      ...(agent ? { approvalExpiresAt: new Date(Date.now() + APPROVAL_WINDOW_MS) } : {}),
+      ...(input.overrideCallCap ? { callCapOverride: true } : {}),
+    });
+  // An agent's request is checked against the waiting limit and created under
+  // one lock, so simultaneous requests can't all pass the check.
+  const task = !agent
+    ? await create()
+    : await withApprovalRequestLock(async () => {
+        if ((await countTasksAwaitingApproval()) >= MAX_WAITING_APPROVALS) {
+          throw new Error(
+            `${MAX_WAITING_APPROVALS} calls are already waiting for the owner's approval. Wait for those to be approved or expire first.`,
+          );
+        }
+        return create();
+      });
 
   if (agent) {
     const delivered = await sendOwnerMessage(buildApprovalMessage({ contact: contact!, task }));

@@ -24,7 +24,21 @@ const { createTask, triggerOrchestration, countTasksAwaitingApproval, cancelPend
   ),
   sendOwnerMessage: vi.fn(async () => true),
 }));
-vi.mock('../../src/tasks/service.js', () => ({ createTask, countTasksAwaitingApproval, cancelPendingTask }));
+const { lockLog, withApprovalRequestLock } = vi.hoisted(() => {
+  const lockLog: string[] = [];
+  return {
+    lockLog,
+    withApprovalRequestLock: vi.fn(async <T,>(work: () => Promise<T>) => {
+      lockLog.push('lock');
+      try {
+        return await work();
+      } finally {
+        lockLog.push('unlock');
+      }
+    }),
+  };
+});
+vi.mock('../../src/tasks/service.js', () => ({ createTask, countTasksAwaitingApproval, cancelPendingTask, withApprovalRequestLock }));
 vi.mock('../../src/contacts/service.js', () => ({ getContact }));
 vi.mock('../../src/notifications/owner.js', () => ({ sendOwnerMessage }));
 vi.mock('../../src/tasks/orchestrator.js', () => ({ triggerOrchestration }));
@@ -313,6 +327,20 @@ describe('mcp: place_call with the agent key (owner approval)', () => {
     expect((sendOwnerMessage.mock.calls[0] as unknown as [string])[0]).toContain('/approve/task-1?sig=');
     expect(result.ackMessage).toMatch(/approve/i);
     expect(JSON.stringify(result)).not.toContain('sig=');
+  });
+
+  it('checks the waiting limit and creates the task inside one lock, so simultaneous requests cannot all pass', async () => {
+    lockLog.length = 0;
+    countTasksAwaitingApproval.mockImplementationOnce(async () => {
+      lockLog.push('count');
+      return 0;
+    });
+    createTask.mockImplementationOnce(async (input: Record<string, unknown>) => {
+      lockLog.push('create');
+      return { id: 'task-1', goalDescription: input.goalDescription, mode: 'booking', questions: null, scheduledFor: null, approvalExpiresAt: input.approvalExpiresAt ?? null };
+    });
+    await placeCallHandler(input, agent);
+    expect(lockLog).toEqual(['lock', 'count', 'create', 'unlock']);
   });
 
   it('refuses once 3 requests are already waiting, before creating anything', async () => {

@@ -107,3 +107,20 @@ describe('approval writes', () => {
     expect(over.callCapOverride).toBe(true);
   });
 });
+
+describe('withApprovalRequestLock', () => {
+  it('lets only 3 of 5 simultaneous agent requests through the waiting limit', async () => {
+    const c = await contactRow();
+    const attempt = () =>
+      service.withApprovalRequestLock(async () => {
+        if ((await service.countTasksAwaitingApproval()) >= 3) return 'refused';
+        // A slow insert widens the gap a check-then-create race needs.
+        await new Promise((r) => setTimeout(r, 20));
+        await agentTask(c.id, new Date(Date.now() + 30 * MIN));
+        return 'created';
+      });
+    const results = await Promise.all(Array.from({ length: 5 }, attempt));
+    expect(results.filter((r) => r === 'created')).toHaveLength(3);
+    expect(await service.countTasksAwaitingApproval()).toBe(3);
+  });
+});

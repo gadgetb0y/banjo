@@ -332,6 +332,27 @@ export async function withContactAdvisoryLock<T>(contactId: string, work: () => 
   });
 }
 
+let approvalRequestChain: Promise<unknown> = Promise.resolve();
+
+/**
+ * Runs `work` with no other agent call request between its waiting-limit
+ * check and its insert, so simultaneous requests can't all pass the check
+ * (place_call's MAX_WAITING_APPROVALS). Chained in-process first, so only one
+ * connection here waits on the advisory lock, which covers other processes.
+ */
+export async function withApprovalRequestLock<T>(work: () => Promise<T>): Promise<T> {
+  const run = approvalRequestChain
+    .catch(() => {})
+    .then(() =>
+      db.transaction(async (tx) => {
+        await tx.execute(sql`select pg_advisory_xact_lock(hashtext('approval-requests'))`);
+        return work();
+      }),
+    );
+  approvalRequestChain = run.catch(() => {});
+  return run;
+}
+
 /** Phone tasks for a contact that are due and about to dial but haven't yet — counted by place_call's cap check. */
 export async function dueQueuedCallsForContact(contactId: string, now: Date = new Date()): Promise<number> {
   const [row] = await db
