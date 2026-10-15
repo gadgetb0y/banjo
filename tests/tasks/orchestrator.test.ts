@@ -159,7 +159,7 @@ describe('per-number call cap at dial time', () => {
     triggerOrchestration('task-cap');
     await vi.waitFor(() => expect(notifyTaskOutcome).toHaveBeenCalledWith('task-cap'));
 
-    expect(checkCallCap).toHaveBeenCalledWith('contact-1', expect.any(Date));
+    expect(checkCallCap).toHaveBeenCalledWith('contact-1', expect.any(Date), { limit: 3 });
     expect(transitionTask).toHaveBeenCalledWith(
       'task-cap',
       'failed',
@@ -170,6 +170,21 @@ describe('per-number call cap at dial time', () => {
     expect(CallSession).not.toHaveBeenCalled();
     // Refused before spending a calendar lookup on a call that won't be made.
     expect(computeCandidateWindows).not.toHaveBeenCalled();
+    checkCallCap.mockReset();
+    checkCallCap.mockResolvedValue({ allowed: true, placed: 0, queued: 0 });
+  });
+
+  it('checks a task the owner overrode against twice the cap, early and at dialing', async () => {
+    getTask.mockResolvedValue({ id: 'task-over', channel: 'phone', status: 'pending', contactId: 'contact-1', constraints: {}, callCapOverride: true });
+    getContact.mockResolvedValue({ id: 'contact-1' });
+    transitionTask.mockImplementation(async (id: string, status: string) => ({ id, status }));
+    checkCallCap.mockResolvedValue({ allowed: false, placed: 6, queued: 0 });
+
+    triggerOrchestration('task-over');
+    await vi.waitFor(() => expect(notifyTaskOutcome).toHaveBeenCalledWith('task-over'));
+
+    expect(checkCallCap).toHaveBeenCalledWith('contact-1', expect.any(Date), { limit: 6 });
+    expect(createCallAttempt).not.toHaveBeenCalled();
     checkCallCap.mockReset();
     checkCallCap.mockResolvedValue({ allowed: true, placed: 0, queued: 0 });
   });

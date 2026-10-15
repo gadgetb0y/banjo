@@ -4,7 +4,7 @@ import { getContact } from '../contacts/service.js';
 import { logger } from '../lib/logger.js';
 import { CallSession } from '../session/callSession.js';
 import { createTelephonyProvider } from '../telephony/factory.js';
-import { checkCallCap, describeCallCapRefusal, withContactDialLock } from './callCap.js';
+import { callCapLimit, checkCallCap, describeCallCapRefusal, withContactDialLock } from './callCap.js';
 import { buildOutboundCallSessionOptions, notifyTaskOutcome } from './callSessionAdapter.js';
 import { buildCallFrontendPrompt, buildCallSystemPrompt } from './promptBuilder.js';
 import { readOwnerProfile } from './ownerProfile.js';
@@ -120,7 +120,7 @@ async function runTask(taskId: string): Promise<void> {
   // An early, unlocked look at the call cap, so a call that can't be placed
   // fails before spending a calendar lookup. The check that counts is the
   // locked one below.
-  const earlyCap = await checkCallCap(task.contactId, new Date());
+  const earlyCap = await checkCallCap(task.contactId, new Date(), { limit: callCapLimit(task) });
   if (!earlyCap.allowed) {
     await failOverCallCap(task.id, describeCallCapRefusal(earlyCap), stillOurs);
     return;
@@ -137,7 +137,7 @@ async function runTask(taskId: string): Promise<void> {
   // after other calls to the same number. Held under a per-contact lock until
   // the call attempt is recorded, so two due calls can't both pass the check.
   const dial = await withContactDialLock(task.contactId, async () => {
-    const cap = await checkCallCap(task.contactId, new Date());
+    const cap = await checkCallCap(task.contactId, new Date(), { limit: callCapLimit(task) });
     if (!cap.allowed) return { kind: 'refused', reason: describeCallCapRefusal(cap) } as const;
     const calling = await transitionTask(task.id, 'calling', { candidateWindows }, stillOurs);
     if (!calling) return { kind: 'stopped' } as const;

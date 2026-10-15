@@ -8,7 +8,9 @@ const { callsPlacedToContactSince, dueQueuedCallsForContact, withContactAdvisory
 vi.mock('../../src/tasks/service.js', () => ({ callsPlacedToContactSince, dueQueuedCallsForContact, withContactAdvisoryLock }));
 
 const { config } = await import('../../src/config/index.js');
-const { checkCallCap, CALL_CAP_WINDOW_MS, describeCallCapRefusal, withContactDialLock } = await import('../../src/tasks/callCap.js');
+const { checkCallCap, CALL_CAP_WINDOW_MS, callCapLimit, canOverrideCallCap, describeCallCapRefusal, withContactDialLock } = await import(
+  '../../src/tasks/callCap.js'
+);
 
 const now = new Date('2026-09-26T20:00:00.000Z');
 
@@ -131,5 +133,39 @@ describe('dial sections are capped per process, so locks cannot exhaust the conn
     }
     await Promise.all(runs);
     expect(maxInside).toBe(4);
+  });
+});
+
+describe('the owner override (testing calls to themselves or family)', () => {
+  it('a raised limit lets more calls through, and a refusal names that limit', async () => {
+    callsPlacedToContactSince.mockResolvedValue([now, now, now].map((d) => new Date(d.getTime() - 60_000)));
+    expect((await checkCallCap('c1', now)).allowed).toBe(false);
+    expect(await checkCallCap('c1', now, { limit: 6 })).toMatchObject({ allowed: true, limit: 6 });
+    callsPlacedToContactSince.mockResolvedValue(Array.from({ length: 6 }, () => new Date(now.getTime() - 60_000)));
+    const full = await checkCallCap('c1', now, { limit: 6 });
+    expect(full.allowed).toBe(false);
+    expect(describeCallCapRefusal(full)).toMatch(/max 6 per 24 hours/);
+  });
+
+  it('callCapLimit is twice the cap only with the override', () => {
+    expect(callCapLimit({ callCapOverride: false })).toBe(3);
+    expect(callCapLimit({ callCapOverride: true })).toBe(6);
+  });
+
+  it('only the owner and family can be overridden', () => {
+    expect(canOverrideCallCap({ relationshipTier: 'family', phoneNumber: '+15550000001' })).toBe(true);
+    expect(canOverrideCallCap({ relationshipTier: 'friend', phoneNumber: '+15550000001' })).toBe(false);
+    expect(canOverrideCallCap({ relationshipTier: null, phoneNumber: '+15550000001' })).toBe(false);
+    expect(canOverrideCallCap({ relationshipTier: null, phoneNumber: config.NOTIFY_TO_PHONE_NUMBER! })).toBe(true);
+  });
+
+  it("counts TRANSFER_TO_PHONE_NUMBER as the owner's own number", () => {
+    const original = config.TRANSFER_TO_PHONE_NUMBER;
+    config.TRANSFER_TO_PHONE_NUMBER = '+15550009999';
+    try {
+      expect(canOverrideCallCap({ relationshipTier: null, phoneNumber: '+15550009999' })).toBe(true);
+    } finally {
+      config.TRANSFER_TO_PHONE_NUMBER = original;
+    }
   });
 });

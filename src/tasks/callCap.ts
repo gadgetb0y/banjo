@@ -1,4 +1,6 @@
 import { config } from '../config/index.js';
+import type { Contact } from '../contacts/schema.js';
+import type { Task } from './schema.js';
 import { callsPlacedToContactSince, dueQueuedCallsForContact, withContactAdvisoryLock } from './service.js';
 
 /**
@@ -6,8 +8,10 @@ import { callsPlacedToContactSince, dueQueuedCallsForContact, withContactAdvisor
  * to one phone number in any rolling 24 hours. Checked twice: by place_call
  * when a call is requested (mcp/tools/placeCall.ts), and by the orchestrator
  * right before it dials (./orchestrator.ts), so a call scheduled earlier can't
- * slip past it. There is no override — each call is an AI calling a real
- * person, and five in one evening to one friend is how this came about.
+ * slip past it. Each call is an AI calling a real person, and five in one
+ * evening to one friend is how this came about. The owner can let a test call
+ * to themselves or family go past it, up to OVERRIDE_CAP_MULTIPLIER times it
+ * (place_call's overrideCallCap, owner key only); nothing goes past that.
  *
  * A call counts once it's dialed, whether or not it connected: a busy line,
  * a call nobody answered and a call Twilio failed all count (#79). Each still
@@ -27,6 +31,28 @@ export interface CallCapResult {
    * started, so there's no time to count from.
    */
   nextAllowedAt?: Date;
+  /** The most calls this check allowed in 24 hours: the cap, or the override's ceiling. */
+  limit: number;
+}
+
+/** How far the owner's override can raise the cap: no further, whatever is asked. */
+export const OVERRIDE_CAP_MULTIPLIER = 2;
+
+/** The limit a task's call is checked against: the cap, or twice it if the owner overrode it. */
+export function callCapLimit(task: Pick<Task, 'callCapOverride'>): number {
+  return config.MAX_CALLS_PER_NUMBER_PER_DAY * (task.callCapOverride ? OVERRIDE_CAP_MULTIPLIER : 1);
+}
+
+/**
+ * Who the owner may override the cap for: themselves (the number Banjo
+ * transfers or texts them on) or family. Neither can be set through MCP: the
+ * tier comes only from Google/CardDAV groups (#163, #170), so a call can't
+ * make a business eligible.
+ */
+export function canOverrideCallCap(contact: Pick<Contact, 'relationshipTier' | 'phoneNumber'>): boolean {
+  if (contact.relationshipTier === 'family') return true;
+  const own = [config.TRANSFER_TO_PHONE_NUMBER, config.NOTIFY_TO_PHONE_NUMBER].filter(Boolean);
+  return own.includes(contact.phoneNumber);
 }
 
 /**
@@ -38,20 +64,20 @@ export interface CallCapResult {
 export async function checkCallCap(
   contactId: string,
   now: Date = new Date(),
-  options: { includeQueued?: boolean } = {},
+  options: { includeQueued?: boolean; limit?: number } = {},
 ): Promise<CallCapResult> {
   const startedAts = await callsPlacedToContactSince(contactId, new Date(now.getTime() - CALL_CAP_WINDOW_MS));
   const placed = startedAts.length;
   const queued = options.includeQueued ? await dueQueuedCallsForContact(contactId, now) : 0;
-  const cap = config.MAX_CALLS_PER_NUMBER_PER_DAY;
-  if (placed + queued < cap) return { allowed: true, placed, queued };
+  const cap = options.limit ?? config.MAX_CALLS_PER_NUMBER_PER_DAY;
+  if (placed + queued < cap) return { allowed: true, placed, queued, limit: cap };
   // One more call fits once placed + queued - (calls that left) < cap, i.e.
   // after the k-th oldest placed call leaves the window. More than `cap` can be
   // counted (the cap was lowered, or calls queued before it existed).
   const mustLeave = placed + queued - cap + 1;
   const kthOldest = startedAts[mustLeave - 1];
   const nextAllowedAt = kthOldest ? new Date(kthOldest.getTime() + CALL_CAP_WINDOW_MS) : undefined;
-  return { allowed: false, placed, queued, nextAllowedAt };
+  return { allowed: false, placed, queued, nextAllowedAt, limit: cap };
 }
 
 const dialLocks = new Map<string, Promise<unknown>>();
@@ -108,5 +134,5 @@ export function describeCallCapRefusal(result: CallCapResult): string {
   const next = result.nextAllowedAt
     ? ` Next call allowed after ${result.nextAllowedAt.toLocaleString('en-US', { timeZone: config.CALENDAR_TIMEZONE, dateStyle: 'medium', timeStyle: 'short' })} (${config.CALENDAR_TIMEZONE}).`
     : ' The next call is allowed once the queued calls have gone out and 24 hours have passed since them.';
-  return `Call limit reached for this number: ${counted} (max ${config.MAX_CALLS_PER_NUMBER_PER_DAY} per 24 hours).${next}`;
+  return `Call limit reached for this number: ${counted} (max ${result.limit} per 24 hours).${next}`;
 }
