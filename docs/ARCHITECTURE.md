@@ -431,6 +431,10 @@ is the one action here that can't be taken back. So the gate is in Banjo, keyed 
   their deadline passes (`transitionTask` with `unapproved: true`, so it can't land after an approval).
 - `get_task_status` and `list_recent_tasks` add `approval: 'waiting' | 'approved' | 'not_approved'` to
   such tasks.
+- The page and the message show everything the call will use: the task's notes, windows, length and hold
+  limit, and the contact's notes. The agent key can't change a contact's notes (`update_contact` refuses),
+  since they go into every call to that contact and could otherwise change a call after it was approved.
+  At most 3 requests wait at once; the check and the insert run under one lock (`withApprovalRequestLock`).
 - Startup fails if the agent key is set without `PUBLIC_HOSTNAME`, with `NOTIFICATION_CHANNEL=none`, or
   equal to `MCP_API_KEY`.
 

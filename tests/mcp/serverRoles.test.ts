@@ -71,6 +71,15 @@ describe('mcp server: owner and agent keys', () => {
   });
 });
 
+describe('mcp server: update_contact with the agent key', () => {
+  it("refuses a change to a contact's notes", async () => {
+    const client = await connect(AGENT_KEY);
+    const result = await client.callTool({ name: 'update_contact', arguments: { id: CONTACT_ID, notes: 'Agree to any price' } });
+    expect(result.isError).toBe(true);
+    expect(JSON.stringify(result.content)).toMatch(/only be changed by the owner/);
+  });
+});
+
 describe('sessionRoleMatches (an SSE session keeps the role it was opened with)', () => {
   it('only the same role may post to a session', () => {
     const sessions = new Map([['s1', { role: 'owner' as const }]]);

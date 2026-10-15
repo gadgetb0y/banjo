@@ -186,10 +186,11 @@ export function createMcpServer({ role }: { role: McpRole } = { role: 'owner' })
   server.tool(
     'update_contact',
     "Update an existing contact — e.g. record the assistant's owner's stated preferred booking channel so future " +
-      'tasks for this contact skip asking again, or update notes/booking URL.',
+      "tasks for this contact skip asking again, or update notes/booking URL. Notes go into every call to the contact, " +
+      "so only the owner's key can change them.",
     updateContactInputSchema.shape,
     { title: 'Update a contact', readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: false },
-    adapt(updateContactHandler),
+    adapt((input: Parameters<typeof updateContactHandler>[0]) => updateContactHandler(input, { role })),
   );
 
   server.tool(
