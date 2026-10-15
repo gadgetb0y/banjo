@@ -40,6 +40,8 @@ const { lockLog, withApprovalRequestLock } = vi.hoisted(() => {
 });
 vi.mock('../../src/tasks/service.js', () => ({ createTask, countOpenApprovalRequests, cancelPendingTask, withApprovalRequestLock }));
 vi.mock('../../src/contacts/service.js', () => ({ getContact }));
+const { addressBookNameFor } = vi.hoisted(() => ({ addressBookNameFor: vi.fn(async (): Promise<string | undefined> => undefined) }));
+vi.mock('../../src/googleContacts/lookup.js', () => ({ addressBookNameFor }));
 vi.mock('../../src/notifications/owner.js', () => ({ sendOwnerMessage }));
 vi.mock('../../src/tasks/orchestrator.js', () => ({ triggerOrchestration }));
 const { checkCallCap } = vi.hoisted(() => ({
@@ -325,6 +327,7 @@ describe('mcp: place_call with the agent key (owner approval)', () => {
     expect(triggerOrchestration).not.toHaveBeenCalled();
     expect(sendOwnerMessage).toHaveBeenCalledTimes(1);
     expect((sendOwnerMessage.mock.calls[0] as unknown as [string])[0]).toContain('/approve/task-1?sig=');
+    expect(addressBookNameFor).toHaveBeenCalled();
     expect(result.ackMessage).toMatch(/approve/i);
     expect(JSON.stringify(result)).not.toContain('sig=');
   });

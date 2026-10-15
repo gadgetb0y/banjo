@@ -6,7 +6,8 @@ import type { Task } from '../tasks/schema.js';
 import { approveTask, getTask } from '../tasks/service.js';
 import { isValidApprovalSignature } from './link.js';
 import { escapeHtml, page } from './page.js';
-import { formatLocal, fromAddressBook, tierNote, withoutInvisibleMarks } from './request.js';
+import { addressBookNameFor } from '../googleContacts/lookup.js';
+import { contactNames, formatLocal, tierNote } from './request.js';
 
 /**
  * The owner's page for approving a call an agent asked for. GET only shows
@@ -57,19 +58,27 @@ function constraintRows(task: Task): Array<[string, string]> {
   return rows;
 }
 
+const PAGE_NAME_LABELS = {
+  address_book: 'Who (from your address book)',
+  typed_in: 'Who (name typed in, not from your address book)',
+  typed_in_differs: 'Name saved in Banjo, typed in (used on the call)',
+} as const;
+
 approvalRoutes.get('/approve/:taskId', async (c) => {
   const sig = c.req.query('sig');
   const task = await signedTask(c.req.param('taskId'), sig);
   if (!task) return invalid(c);
-  const contact = await getContact(task.contactId);
+  const found = await getContact(task.contactId);
+  const contact = found && { ...found, addressBookName: await addressBookNameFor(found) };
   const now = Date.now();
   const expiresAt = task.approvalExpiresAt!;
   const rows: Array<[string, string]> = [
-    // The label is Banjo's, in the <dt>, both ways: after the agent-written name it could be imitated.
-    [
-      contact && fromAddressBook(contact) ? 'Who (from your address book)' : 'Who (name typed in, not from your address book)',
-      escapeHtml(`${contact?.displayName ?? 'Unknown contact'} (${contact?.phoneNumber ?? 'no number'})`),
-    ],
+    // Banjo's labels, in the <dt>: after an agent-written name they could be imitated.
+    ...(contact
+      ? contactNames(contact).map(([label, name], i): [string, string] =>
+          i === 0 ? [PAGE_NAME_LABELS[label], escapeHtml(`${name} (${contact.phoneNumber})`)] : [PAGE_NAME_LABELS[label], escapeHtml(name)],
+        )
+      : ([['Who', 'Unknown contact']] as Array<[string, string]>)),
     ...(contact && tierNote(contact) ? ([['Your profile', escapeHtml(tierNote(contact)!)]] as Array<[string, string]>) : []),
     ['When', whenHtml(task, now)],
     ['Kind of call', escapeHtml(task.mode)],

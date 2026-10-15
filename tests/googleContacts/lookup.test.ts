@@ -21,6 +21,7 @@ let db: any;
 let googleContacts: any;
 let findByPhone: any;
 let findByName: any;
+let addressBookNameFor: any;
 
 // Set the real database URL and reload modules before any tests run — same
 // convention as tests/contacts/service.test.ts and
@@ -38,6 +39,7 @@ beforeAll(async () => {
   googleContacts = schemaModule.googleContacts;
   findByPhone = lookupModule.findByPhone;
   findByName = lookupModule.findByName;
+  addressBookNameFor = lookupModule.addressBookNameFor;
 });
 
 beforeEach(async () => {
@@ -197,5 +199,20 @@ describe('findByName', () => {
 
     expect(results).toHaveLength(1);
     expect(results[0]?.displayName).toBe('Dr. Jones');
+  });
+});
+
+describe('addressBookNameFor (the approval page vouches only for this name)', () => {
+  it("returns the address book's own name for a linked contact, from the cache", async () => {
+    await db.insert(googleContacts).values({ googleResourceName: 'people/c9', displayName: 'Jane Hatch', phoneNumbers: [{ e164: '+15551239999' }] });
+    expect(await addressBookNameFor({ googleResourceName: 'people/c9', phoneNumber: '+15551239999' })).toBe('Jane Hatch');
+    expect(searchContacts).not.toHaveBeenCalled();
+  });
+
+  it('returns nothing for an unlinked contact, a missing row, or a number the entry no longer has', async () => {
+    await db.insert(googleContacts).values({ googleResourceName: 'people/c9', displayName: 'Jane Hatch', phoneNumbers: [{ e164: '+15551239999' }] });
+    expect(await addressBookNameFor({ googleResourceName: null, phoneNumber: '+15551239999' })).toBeUndefined();
+    expect(await addressBookNameFor({ googleResourceName: 'people/gone', phoneNumber: '+15551239999' })).toBeUndefined();
+    expect(await addressBookNameFor({ googleResourceName: 'people/c9', phoneNumber: '+15551230000' })).toBeUndefined();
   });
 });

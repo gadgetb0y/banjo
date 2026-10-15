@@ -9,6 +9,8 @@ const { getTask, approveTask, getContact, triggerOrchestration } = vi.hoisted(()
 vi.mock('../../src/tasks/service.js', () => ({ getTask, approveTask }));
 vi.mock('../../src/contacts/service.js', () => ({ getContact }));
 vi.mock('../../src/tasks/orchestrator.js', () => ({ triggerOrchestration }));
+const { addressBookNameFor } = vi.hoisted(() => ({ addressBookNameFor: vi.fn(async (): Promise<string | undefined> => undefined) }));
+vi.mock('../../src/googleContacts/lookup.js', () => ({ addressBookNameFor }));
 
 const { approvalRoutes } = await import('../../src/approvals/routes.js');
 const { approvalSignature } = await import('../../src/approvals/link.js');
@@ -162,9 +164,19 @@ describe('the page says what the owner can and can\'t trust about the contact', 
 
   it('says a family contact may hear about the owner from their profile', async () => {
     getContact.mockResolvedValue({ displayName: 'Mom', phoneNumber: '+15550001111', googleResourceName: 'people/c1', relationshipTier: 'family' });
+    addressBookNameFor.mockResolvedValueOnce('Mom');
     const html = await (await approvalRoutes.request(`/approve/${ID}?sig=${SIG}`)).text();
     expect(html).toContain('<dt>Who (from your address book)</dt><dd>Mom (+15550001111)</dd>');
+    expect(html).not.toContain('Name saved in Banjo');
     expect(html).toContain('Tagged family: on this call Banjo may answer their questions about you from your profile.');
+  });
+
+  it("vouches only for the address book's own name, and shows the typed-in one separately", async () => {
+    getContact.mockResolvedValue({ displayName: "Dr. Smith's office", phoneNumber: '+15550001111', googleResourceName: 'people/c1' });
+    addressBookNameFor.mockResolvedValueOnce('Jane Hatch');
+    const html = await (await approvalRoutes.request(`/approve/${ID}?sig=${SIG}`)).text();
+    expect(html).toContain('<dt>Who (from your address book)</dt><dd>Jane Hatch (+15550001111)</dd>');
+    expect(html).toContain('<dt>Name saved in Banjo, typed in (used on the call)</dt><dd>Dr. Smith&#39;s office</dd>');
   });
 
   it('drops invisible direction and zero-width marks', async () => {

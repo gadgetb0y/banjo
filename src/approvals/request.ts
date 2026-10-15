@@ -28,17 +28,25 @@ function oneLine(text: string): string {
 
 type ContactShown = Pick<Contact, 'displayName' | 'phoneNumber'> & {
   notes?: string | null;
-  googleResourceName?: string | null;
   relationshipTier?: Contact['relationshipTier'];
+  /**
+   * The owner's address book's own name for this number (addressBookNameFor), if it's linked to an entry.
+   * The only name the approval vouches for: displayName may have been typed in, by an agent too (add_contact).
+   */
+  addressBookName?: string;
 };
 
 /**
- * A contact synced from the owner's address book has a googleResourceName; any
- * other name was typed in, possibly by an agent (add_contact), so the owner
- * shouldn't trust "Mom" over the number.
+ * Who the call is to, as [label, name] pairs, each label Banjo's and before
+ * its name, so agent text after it can't imitate one. The address book's name
+ * is vouched for; a name typed into Banjo isn't, and is shown too when it
+ * differs, since it's the name used on the call.
  */
-export function fromAddressBook(contact: ContactShown): boolean {
-  return Boolean(contact.googleResourceName);
+export function contactNames(contact: ContactShown): Array<[label: 'address_book' | 'typed_in' | 'typed_in_differs', name: string]> {
+  if (!contact.addressBookName) return [['typed_in', contact.displayName]];
+  const names: Array<['address_book' | 'typed_in' | 'typed_in_differs', string]> = [['address_book', contact.addressBookName]];
+  if (oneLine(contact.addressBookName) !== oneLine(contact.displayName)) names.push(['typed_in_differs', contact.displayName]);
+  return names;
 }
 
 /** What a family or friend contact may hear on the call (src/tasks/promptBuilder.ts's profileSharingRule), or undefined. */
@@ -53,11 +61,17 @@ export function tierNote(contact: ContactShown): string | undefined {
  * link has to survive that. Nothing an agent could have written (the contact's
  * name included) comes before them. Everything after them that an agent could have
  * written is on its own labelled single line, so it can't pose as Banjo's
- * lines (a second "Approve by" with another link). It says whether the name
- * came from the owner's address book and what a family or friend contact may
+ * lines (a second "Approve by" with another link). It vouches only for the
+ * address book's own name (contactNames) and what a family or friend contact may
  * hear about the owner. It includes the notes that
  * go into the call's prompt; the page (./routes.ts) shows the rest.
  */
+const MESSAGE_NAME_LABELS = {
+  address_book: 'Contact name, from your address book',
+  typed_in: 'Contact name, typed in (not from your address book)',
+  typed_in_differs: 'Name saved in Banjo, typed in (used on the call)',
+} as const;
+
 export function buildApprovalMessage({
   contact,
   task,
@@ -76,8 +90,7 @@ export function buildApprovalMessage({
     `Approve by ${formatLocal(expiresAt)}, or it won't be placed: ${approvalUrl(task.id, expiresAt)}`,
     '',
     // The name is agent-writable too (add_contact), so it comes after the link.
-    // Labelled both ways, and before the name: the label after an agent-written name could be imitated.
-    `Contact name, ${fromAddressBook(contact) ? 'from your address book' : 'typed in (not from your address book)'}: ${oneLine(contact.displayName)}`,
+    ...contactNames(contact).map(([label, name]) => `${MESSAGE_NAME_LABELS[label]}: ${oneLine(name)}`),
     ...(tierNote(contact) ? [tierNote(contact)!] : []),
     `The agent wrote (${task.mode} call): ${oneLine(task.goalDescription)}`,
     ...(task.questions?.length ? ['Questions from the agent:', ...task.questions.map((q, i) => `${i + 1}. ${oneLine(q)}`)] : []),

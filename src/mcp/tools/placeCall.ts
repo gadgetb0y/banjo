@@ -3,6 +3,7 @@ import { config } from '../../config/index.js';
 import { zonedTimeToUtcIso } from '../../lib/timezone.js';
 import { APPROVAL_WINDOW_MS, buildApprovalMessage, formatLocal, MAX_WAITING_APPROVALS } from '../../approvals/request.js';
 import { getContact } from '../../contacts/service.js';
+import { addressBookNameFor } from '../../googleContacts/lookup.js';
 import { logger } from '../../lib/logger.js';
 import { sendOwnerMessage } from '../../notifications/owner.js';
 import { canOverrideCallCap, checkCallCap, describeCallCapRefusal, OVERRIDE_CAP_MULTIPLIER } from '../../tasks/callCap.js';
@@ -244,7 +245,8 @@ export async function placeCallHandler(
       });
 
   if (agent) {
-    const delivered = await sendOwnerMessage(buildApprovalMessage({ contact: contact!, task }));
+    const addressBookName = await addressBookNameFor(contact!);
+    const delivered = await sendOwnerMessage(buildApprovalMessage({ contact: { ...contact!, addressBookName }, task }));
     if (!delivered) {
       await cancelPendingTask(task.id);
       throw new Error("Couldn't reach the owner for approval, so no call will be placed.");

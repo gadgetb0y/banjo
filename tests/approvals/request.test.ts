@@ -91,14 +91,30 @@ describe("nothing the agent wrote comes before Banjo's link", () => {
 });
 
 describe('the approval message says what the owner can and can\'t trust about the contact', () => {
-  it('marks a name that is not from the address book, which an agent could have chosen', () => {
-    // Labelled both ways, before the name: the agent writes the name, so the label can't be text after it
-    // ("Mom (from your address book)"), and its absence can't be the signal.
-    expect(buildApprovalMessage({ ...base, contact: { ...base.contact, displayName: 'Mom (from your address book)', googleResourceName: null } })).toContain(
+  it('labels a name nobody vouches for as typed in, before the name', () => {
+    // The label goes before the agent-written name, so it can't be imitated after it.
+    expect(buildApprovalMessage({ ...base, contact: { ...base.contact, displayName: 'Mom (from your address book)' } })).toContain(
       'Contact name, typed in (not from your address book): Mom (from your address book)\n',
     );
-    expect(buildApprovalMessage({ ...base, contact: { ...base.contact, displayName: 'Mom', googleResourceName: 'people/c1' } })).toContain(
-      'Contact name, from your address book: Mom\n',
+  });
+
+  it("vouches only for the address book's own name", () => {
+    expect(buildApprovalMessage({ ...base, contact: { ...base.contact, displayName: 'Mom', addressBookName: 'Mom' } })).toMatch(
+      /Contact name, from your address book: Mom\n(?!Name saved in Banjo)/,
+    );
+    // A contact the agent added under its own name, later linked to an address-book entry by its number.
+    const msg = buildApprovalMessage({
+      ...base,
+      contact: { ...base.contact, displayName: "Dr. Smith's office", addressBookName: 'Jane Hatch' },
+    });
+    expect(msg).toContain('Contact name, from your address book: Jane Hatch\n');
+    expect(msg).toContain("Name saved in Banjo, typed in (used on the call): Dr. Smith's office");
+    expect(msg).not.toContain("address book: Dr. Smith's office");
+  });
+
+  it('does not vouch for a linked contact whose address-book entry is gone (addressBookNameFor found none)', () => {
+    expect(buildApprovalMessage({ ...base, contact: { ...base.contact, displayName: 'Mom' } })).toContain(
+      'Contact name, typed in (not from your address book): Mom\n',
     );
   });
 

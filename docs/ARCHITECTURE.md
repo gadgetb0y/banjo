@@ -433,9 +433,12 @@ is the one action here that can't be taken back. So the gate is in Banjo, keyed 
   such tasks.
 - The page shows everything the call will use: the task's notes, windows, length and hold limit, and the
   contact's notes. The message shows the notes and leaves the rest to the page. Both label the contact's
-  name, before it and both ways, as from the owner's address book or typed in (an agent can `add_contact` a stranger as "Mom") and,
-  for a `family` or `friend` contact, that the call may answer questions about the owner from their
-  profile. Invisible direction and zero-width marks are dropped from agent text.
+  name, before it: only the address book's own name for the number (`addressBookNameFor`, from the
+  contacts cache) is shown as from the address book. Any other name is labelled typed in, including one an
+  agent gave a number that was later linked to an address-book entry (reconcile never overwrites
+  `displayName`), and it's shown as the name used on the call. An agent can `add_contact` a stranger as
+  "Mom". For a `family` or `friend` contact, both also say that the call may answer questions about the
+  owner from their profile. Invisible direction and zero-width marks are dropped from agent text.
 - The approval message must reach the owner somewhere the agent can't read: anyone with the link can
   approve. With an agent that reads the owner's texts, use Pushover, not `twilio_sms`. The agent key can't set a contact's notes (`add_contact` and
   `update_contact` refuse), since they go into every call to that contact and could otherwise change a call
