@@ -8,6 +8,7 @@ import { SSEServerTransport } from '@modelcontextprotocol/sdk/server/sse.js';
 import { WebStandardStreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js';
 import { config } from '../config/index.js';
 import { logger } from '../lib/logger.js';
+import type { McpRole } from './role.js';
 
 import { placeCallInputSchema, placeCallHandler } from './tools/placeCall.js';
 import { cancelTaskInputSchema, cancelTaskHandler } from './tools/cancelTask.js';
@@ -84,7 +85,9 @@ const READS = { readOnlyHint: true, openWorldHint: false } as const;
 const RECORDS = { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false } as const;
 
 /**
- * Builds the MCP server and registers all 11 tools. Deliberately separate
+ * Builds the MCP server and registers all 11 tools, for one caller's role:
+ * only place_call behaves differently by role (an agent's call waits for the
+ * owner's approval). Deliberately separate
  * from the HTTP/SSE wiring below so it can be constructed and exercised
  * (e.g. via an in-memory transport) without spinning up Hono.
  *
@@ -96,7 +99,7 @@ const RECORDS = { readOnlyHint: false, destructiveHint: false, idempotentHint: f
  * name+shape+cb). Confirm the exact overload set against
  * dist/**\/server/mcp.d.ts once `npm install` has run.
  */
-export function createMcpServer(): McpServer {
+export function createMcpServer({ role }: { role: McpRole } = { role: 'owner' }): McpServer {
   const server = new McpServer({
     name: 'banjo',
     version: PACKAGE_VERSION,
@@ -108,10 +111,12 @@ export function createMcpServer(): McpServer {
       "a business a question with mode 'ask'). " +
       'Returns immediately with a taskId — the call itself runs asynchronously over the following ' +
       'minutes (or at scheduledFor, if given, to call later instead of now). Poll get_task_status with the ' +
-      'returned taskId to learn the outcome.',
+      'returned taskId to learn the outcome. If this server asks the owner to approve calls first, the result says ' +
+      "so: get_task_status then shows approval: 'waiting' until they approve (the call goes ahead) or 30 minutes " +
+      "pass (it's cancelled, approval: 'not_approved'). Tell the owner it's waiting for their approval.",
     placeCallInputSchema.shape,
     { title: 'Place a phone call', readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
-    adapt(placeCallHandler),
+    adapt((input: Parameters<typeof placeCallHandler>[0]) => placeCallHandler(input, { role })),
   );
 
   server.tool(
@@ -208,17 +213,37 @@ export function createMcpServer(): McpServer {
   return server;
 }
 
-function requireAuth(c: Context): boolean {
-  const authHeader = c.req.header('Authorization') ?? '';
-  const expected = `Bearer ${config.MCP_API_KEY}`;
+function keyMatches(authHeader: string, key: string | undefined): boolean {
+  if (!key) return false;
   const provided = Buffer.from(authHeader);
-  const wanted = Buffer.from(expected);
+  const wanted = Buffer.from(`Bearer ${key}`);
   // Length must match before timingSafeEqual (it throws on a length mismatch),
   // but comparing full buffer contents in constant time — rather than the
   // plain `===` this replaces — prevents a remote attacker from inferring
   // the key character-by-character via response-time differences.
   if (provided.length !== wanted.length) return false;
   return timingSafeEqual(provided, wanted);
+}
+
+/**
+ * The caller's role, from which key it presented: MCP_API_KEY is the owner,
+ * MCP_AGENT_API_KEY an agent whose calls wait for approval. Null: neither.
+ * Both keys are compared every time.
+ */
+function requireAuth(c: Context): McpRole | null {
+  const authHeader = c.req.header('Authorization') ?? '';
+  const owner = keyMatches(authHeader, config.MCP_API_KEY);
+  const agent = keyMatches(authHeader, config.MCP_AGENT_API_KEY);
+  return owner ? 'owner' : agent ? 'agent' : null;
+}
+
+/**
+ * Whether a POST to an SSE session comes from the role that opened it, so an
+ * agent holding a session id can't post into an owner's session (whose
+ * place_call needs no approval).
+ */
+export function sessionRoleMatches(sessions: Map<string, { role: McpRole }>, sessionId: string, role: McpRole): boolean {
+  return sessions.get(sessionId)?.role === role;
 }
 
 /**
@@ -258,8 +283,9 @@ function getRawNodeReqRes(c: Context): { req: IncomingMessage; res: ServerRespon
  * individual JSON-RPC messages POSTed to a companion endpoint carrying
  * `?sessionId=<id>`.
  *
- * Every route under /mcp requires `Authorization: Bearer <MCP_API_KEY>` —
- * this is a hard security requirement since the endpoint is internet-facing.
+ * Every route under /mcp requires `Authorization: Bearer <MCP_API_KEY>` (or
+ * MCP_AGENT_API_KEY, for an agent) — this is a hard security requirement
+ * since the endpoint is internet-facing.
  *
  * NEEDS VERIFICATION (SDK surface, @modelcontextprotocol/sdk ^1.9.0):
  *  - `new SSEServerTransport(postEndpointPath, res)` constructor signature.
@@ -277,10 +303,11 @@ export function registerMcpRoutes(app: Hono): void {
   // Banjo could serve exactly one Claude Code session at a time (issue #31).
   // The per-session `transports` map below was always built for many clients;
   // the server just has to match it.
-  const transports = new Map<string, SSEServerTransport>();
+  const transports = new Map<string, { transport: SSEServerTransport; role: McpRole }>();
 
   app.on(['GET', 'POST', 'DELETE'], MCP_PATH, async (c) => {
-    if (!requireAuth(c)) {
+    const role = requireAuth(c);
+    if (!role) {
       return c.text('Unauthorized', 401);
     }
     // Stateless: there's no stream to offer on GET and no session to end on
@@ -293,7 +320,7 @@ export function registerMcpRoutes(app: Hono): void {
       });
     }
 
-    const server = createMcpServer();
+    const server = createMcpServer({ role });
     const transport = new WebStandardStreamableHTTPServerTransport({
       sessionIdGenerator: undefined,
       enableJsonResponse: true,
@@ -309,7 +336,8 @@ export function registerMcpRoutes(app: Hono): void {
   });
 
   app.get(MCP_SSE_PATH, async (c) => {
-    if (!requireAuth(c)) {
+    const role = requireAuth(c);
+    if (!role) {
       return c.text('Unauthorized', 401);
     }
 
@@ -321,9 +349,9 @@ export function registerMcpRoutes(app: Hono): void {
       return c.text('Internal Server Error', 500);
     }
 
-    const server = createMcpServer();
+    const server = createMcpServer({ role });
     const transport = new SSEServerTransport(MCP_MESSAGES_PATH, raw.res);
-    transports.set(transport.sessionId, transport);
+    transports.set(transport.sessionId, { transport, role });
 
     raw.res.on('close', () => {
       transports.delete(transport.sessionId);
@@ -343,15 +371,20 @@ export function registerMcpRoutes(app: Hono): void {
   });
 
   app.post(MCP_MESSAGES_PATH, async (c) => {
-    if (!requireAuth(c)) {
+    const role = requireAuth(c);
+    if (!role) {
       return c.text('Unauthorized', 401);
     }
 
     const sessionId = c.req.query('sessionId');
-    const transport = sessionId ? transports.get(sessionId) : undefined;
-    if (!transport) {
+    const session = sessionId ? transports.get(sessionId) : undefined;
+    if (!session) {
       return c.text('No transport found for sessionId', 400);
     }
+    if (!sessionRoleMatches(transports, sessionId!, role)) {
+      return c.text('Unauthorized', 401);
+    }
+    const { transport } = session;
 
     const raw = getRawNodeReqRes(c);
     if (!raw) {

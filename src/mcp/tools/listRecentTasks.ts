@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { listRecentTasks } from '../../tasks/service.js';
+import { approvalState } from '../../tasks/approval.js';
 import type { Task } from '../../tasks/schema.js';
 
 export const listRecentTasksInputSchema = z.object({
@@ -22,9 +23,15 @@ export const listRecentTasksInputSchema = z.object({
  * returns them paired with their questions (#148 review), so they have one
  * shape and one place to be read from.
  */
-export type TaskSummary = Omit<Task, 'candidateWindows' | 'collectedAnswers'>;
+export type TaskSummary = Omit<Task, 'candidateWindows' | 'collectedAnswers'> & {
+  /** Only on a call an agent asked for: see get_task_status. */
+  approval?: 'waiting' | 'approved' | 'not_approved';
+};
 
 export async function listRecentTasksHandler(input: z.infer<typeof listRecentTasksInputSchema>): Promise<TaskSummary[]> {
   const tasks = await listRecentTasks(input.limit ?? 20);
-  return tasks.map(({ candidateWindows: _candidateWindows, collectedAnswers: _collectedAnswers, ...summary }) => summary);
+  return tasks.map(({ candidateWindows: _candidateWindows, collectedAnswers: _collectedAnswers, ...summary }) => {
+    const approval = approvalState(summary);
+    return approval ? { ...summary, approval } : summary;
+  });
 }

@@ -65,3 +65,15 @@ describe('mcp: list_recent_tasks', () => {
     expect(listRecentTasks).toHaveBeenLastCalledWith(5);
   });
 });
+
+describe('mcp: list_recent_tasks, approval of an agent\'s call', () => {
+  it('adds approval only to tasks that needed it', async () => {
+    listRecentTasks.mockResolvedValue([
+      { ...TASK, approvalExpiresAt: null, approvedAt: null },
+      { ...TASK, id: 'waiting', status: 'pending', approvalExpiresAt: new Date('2026-10-15T01:30:00Z'), approvedAt: null },
+    ]);
+    const [plain, waiting] = await listRecentTasksHandler({});
+    expect(plain).not.toHaveProperty('approval');
+    expect(waiting).toMatchObject({ approval: 'waiting' });
+  });
+});
