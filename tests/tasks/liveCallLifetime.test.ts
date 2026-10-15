@@ -23,6 +23,7 @@ vi.mock('../../src/tasks/service.js', () => ({
   transitionTask,
   createCallAttempt,
   isTaskDue: () => true,
+  isAwaitingApproval: () => false,
   listNonTerminalTasks: vi.fn(async () => []),
   latestCallAttemptFor: vi.fn(async () => undefined),
   // Under the per-number call cap, so the run gets as far as dialing.

@@ -15,6 +15,8 @@ vi.mock('../../src/tasks/service.js', () => ({
   transitionTask,
   createCallAttempt,
   isTaskDue: () => true,
+  isAwaitingApproval: (t: { approvalExpiresAt?: Date | null; approvedAt?: Date | null }) => !!t.approvalExpiresAt && !t.approvedAt,
+  expireApprovalRequests: vi.fn(async () => []),
   listNonTerminalTasks: vi.fn(async () => []),
   listStartableTasks: vi.fn(async () => []),
   withContactAdvisoryLock: <T,>(_contactId: string, work: () => Promise<T>) => work(),
@@ -292,5 +294,37 @@ describe("an 'ask' task (#148)", () => {
 
     expect(computeCandidateWindows).not.toHaveBeenCalled();
     expect(transitionTask).toHaveBeenCalledWith('task-ask', 'calling', { candidateWindows: [] }, expect.objectContaining({ from: ['checking_availability'] }));
+  });
+});
+
+describe('a call waiting for the owner to approve it', () => {
+  it('is not claimed or dialed while unapproved', async () => {
+    getTask.mockResolvedValue({
+      id: 'waiting', channel: 'phone', status: 'pending', contactId: 'contact-1', constraints: {}, mode: 'booking',
+      approvalExpiresAt: new Date(Date.now() + 60_000), approvedAt: null,
+    });
+    getContact.mockResolvedValue({ id: 'contact-1' });
+    transitionTask.mockImplementation(async (id: string, status: string) => ({ id, status }));
+
+    triggerOrchestration('waiting');
+    await vi.waitFor(() => expect(getTask).toHaveBeenCalledWith('waiting'));
+    await new Promise((r) => setTimeout(r, 10));
+
+    expect(transitionTask).not.toHaveBeenCalled();
+    expect(createCallAttempt).not.toHaveBeenCalled();
+  });
+
+  it('is claimed once approved', async () => {
+    getTask.mockResolvedValue({
+      id: 'approved', channel: 'phone', status: 'pending', contactId: 'contact-1', constraints: {}, mode: 'booking',
+      approvalExpiresAt: new Date(Date.now() + 60_000), approvedAt: new Date(),
+    });
+    getContact.mockResolvedValue({ id: 'contact-1' });
+    transitionTask.mockImplementation(async (id: string, status: string) => ({ id, status }));
+
+    triggerOrchestration('approved');
+    await vi.waitFor(() =>
+      expect(transitionTask).toHaveBeenCalledWith('approved', 'checking_availability', undefined, { from: ['pending'] }),
+    );
   });
 });

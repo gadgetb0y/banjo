@@ -11,7 +11,9 @@ import { readOwnerProfile } from './ownerProfile.js';
 import { getLiveCall, registerLiveCall, unregisterLiveCall } from './liveCalls.js';
 import {
   createCallAttempt,
+  expireApprovalRequests,
   getTask,
+  isAwaitingApproval,
   isTaskDue,
   latestCallAttemptFor,
   listNonTerminalTasks,
@@ -61,6 +63,11 @@ async function runTask(taskId: string): Promise<void> {
   if (!isTaskDue(task)) {
     // Scheduled for later (place_call's scheduledFor). Left 'pending' — the
     // poller below starts it once it's due.
+    return;
+  }
+  if (isAwaitingApproval(task)) {
+    // An agent's request (MCP_AGENT_API_KEY): placed only once the owner
+    // approves it (src/approvals/), which runs this again.
     return;
   }
 
@@ -353,7 +360,8 @@ export async function sweepStaleCalls(): Promise<void> {
  *
  * It's also what starts a scheduled call (place_call's scheduledFor): a task
  * isn't picked up until isTaskDue, so it starts within POLL_INTERVAL_MS of
- * its scheduled time.
+ * its scheduled time. And it cancels the calls agents asked for that the owner
+ * didn't approve in time.
  */
 export function startOrchestrationPoller(): void {
   setInterval(() => {
@@ -364,5 +372,11 @@ export function startOrchestrationPoller(): void {
       .catch((err) => logger.error({ err }, 'Orchestration poller failed'));
 
     sweepStaleCalls().catch((err) => logger.error({ err }, 'Stale-call sweep failed'));
+
+    expireApprovalRequests()
+      .then((ids) => {
+        if (ids.length) logger.info({ taskIds: ids }, 'cancelled call requests the owner did not approve in time');
+      })
+      .catch((err) => logger.error({ err }, 'Approval expiry sweep failed'));
   }, POLL_INTERVAL_MS);
 }
