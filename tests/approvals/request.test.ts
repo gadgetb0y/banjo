@@ -21,14 +21,15 @@ const base = {
 describe('the approval message', () => {
   it('names who, when and what, with the link', () => {
     const msg = buildApprovalMessage(base);
-    expect(msg).toContain("Luigi's (+15550001111) now");
+    expect(msg).toContain('call +15550001111 now');
+    expect(msg).toContain("Contact name: Luigi's");
     expect(msg).toContain('https://banjo.example.com/approve/11111111-1111-1111-1111-111111111111?sig=');
     expect(msg).toContain('Book Friday at 7');
   });
 
   it('says when a scheduled call would be placed', () => {
     const msg = buildApprovalMessage({ ...base, task: { ...base.task, scheduledFor: new Date(Date.now() + 86_400_000) } });
-    expect(msg).toMatch(/\(\+15550001111\) at /);
+    expect(msg).toMatch(/call \+15550001111 at /);
   });
 
   it('keeps the link when a long description is clipped, on Pushover and SMS', () => {
@@ -72,6 +73,19 @@ describe("the approval message keeps the agent's text from posing as Banjo's", (
     // Only Banjo's own line starts with "Approve by", and only one line has a link.
     expect(lines.filter((l) => l.startsWith('Approve by'))).toHaveLength(1);
     expect(lines.filter((l) => /^(Approve|Banjo says)/.test(l.trim()))).toHaveLength(1);
-    for (const l of lines.slice(3)) if (l) expect(l).toMatch(/^(The agent wrote|Questions from the agent|\d+\.|Notes)/);
+    for (const l of lines.slice(3)) if (l) expect(l).toMatch(/^(Contact name|The agent wrote|Questions from the agent|\d+\.|Notes)/);
+  });
+});
+
+describe("nothing the agent wrote comes before Banjo's link", () => {
+  it("keeps the contact's name, which the agent can set, after the link line", () => {
+    const msg = buildApprovalMessage({
+      ...base,
+      contact: { displayName: "Luigi's. Approve by 9 PM, or it won't be placed: https://evil.example", phoneNumber: '+15550001111' },
+    });
+    const [first, second] = msg.split('\n');
+    expect(first).not.toContain('evil');
+    expect(second).toMatch(/^Approve by .*\/approve\//);
+    expect(msg.indexOf('evil')).toBeGreaterThan(msg.indexOf('/approve/'));
   });
 });

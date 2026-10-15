@@ -32,6 +32,8 @@ export type AddContactResult =
  * DB error crash the tool call — the calling skill needs to gracefully
  * offer update_contact/find_contact instead, not see an opaque isError.
  */
+const MAX_AGENT_NAME_CHARS = 100;
+
 /**
  * The agent key (MCP_AGENT_API_KEY) can't set notes: they go into the prompt
  * of every call to the contact, including ones the owner places later.
@@ -42,6 +44,10 @@ export async function addContactHandler(
 ): Promise<AddContactResult> {
   if (ctx.role === 'agent' && input.notes !== undefined) {
     throw new Error("A contact's notes can only be set by the owner: they go into every call to this contact. Leave notes out to add the contact.");
+  }
+  // The name goes into every call's prompt as well: from an agent, one short line only.
+  if (ctx.role === 'agent' && (/[\r\n\u0085\u2028\u2029]/.test(input.displayName) || input.displayName.length > MAX_AGENT_NAME_CHARS)) {
+    throw new Error(`A contact's name from an agent must be one line of at most ${MAX_AGENT_NAME_CHARS} characters: it goes into every call to them.`);
   }
   try {
     const contact = await addContact(input);

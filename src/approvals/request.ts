@@ -21,7 +21,8 @@ function oneLine(text: string): string {
 /**
  * The owner's approval request. The link and the deadline come before
  * anything the agent wrote: Pushover and SMS clip a long message, and the
- * link has to survive that. Everything after them that an agent could have
+ * link has to survive that. Nothing an agent could have written (the contact's
+ * name included) comes before them. Everything after them that an agent could have
  * written is on its own labelled single line, so it can't pose as Banjo's
  * lines (a second "Approve by" with another link). It includes the notes that
  * go into the call's prompt; the page (./routes.ts) shows the rest.
@@ -40,9 +41,11 @@ export function buildApprovalMessage({
   const callNotes = oneLine(task.constraints?.notes ?? '');
   const contactNotes = oneLine(contact.notes ?? '');
   return [
-    `An agent asked Banjo to call ${oneLine(contact.displayName)} (${contact.phoneNumber}) ${when}.`,
+    `An agent asked Banjo to call ${contact.phoneNumber} ${when}.`,
     `Approve by ${formatLocal(expiresAt)}, or it won't be placed: ${approvalUrl(task.id, expiresAt)}`,
     '',
+    // The name is agent-writable too (add_contact), so it comes after the link.
+    `Contact name: ${oneLine(contact.displayName)}`,
     `The agent wrote (${task.mode} call): ${oneLine(task.goalDescription)}`,
     ...(task.questions?.length ? ['Questions from the agent:', ...task.questions.map((q, i) => `${i + 1}. ${oneLine(q)}`)] : []),
     ...(callNotes ? [`Notes for the call, from the agent: ${callNotes}`] : []),
