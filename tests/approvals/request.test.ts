@@ -14,6 +14,7 @@ const base = {
     questions: null,
     scheduledFor: null,
     approvalExpiresAt: new Date('2026-10-15T01:30:00.000Z'),
+    constraints: {},
   },
 };
 
@@ -40,5 +41,17 @@ describe('the approval message', () => {
     const msg = buildApprovalMessage({ ...base, task: { ...base.task, mode: 'ask', questions: ['Open Sunday?', 'Walk-ins?'] } });
     expect(msg).toContain('1. Open Sunday?');
     expect(msg).toContain('2. Walk-ins?');
+  });
+});
+
+describe('the approval message shows what else the call will use', () => {
+  it("includes the task's notes and the contact's notes, after the link", () => {
+    const msg = buildApprovalMessage({
+      contact: { ...base.contact, notes: 'Ask for Dana' },
+      task: { ...base.task, constraints: { notes: 'Mention the coupon' } },
+    });
+    expect(msg).toContain('Notes for the call: Mention the coupon');
+    expect(msg).toContain('Notes on this contact: Ask for Dana');
+    expect(msg.indexOf('/approve/')).toBeLessThan(msg.indexOf('Mention the coupon'));
   });
 });

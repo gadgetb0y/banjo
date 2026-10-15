@@ -43,6 +43,20 @@ function whenHtml(task: Task, now: number): string {
   return `<span class="warn">Scheduled for ${escapeHtml(formatLocal(task.scheduledFor))}, ${minutes} minutes ago: approving calls now</span>`;
 }
 
+/** Everything else from the task that reaches the call: what the owner approves has to include it. */
+function constraintRows(task: Task): Array<[string, string]> {
+  const { notes, durationMinutes, maxHoldMinutes, dateWindows } = task.constraints ?? {};
+  const rows: Array<[string, string]> = [];
+  if (notes?.trim()) rows.push(['Notes for the call', escapeHtml(notes.trim())]);
+  if (dateWindows?.length) {
+    const windows = dateWindows.map((w) => `${formatLocal(new Date(w.start))} to ${formatLocal(new Date(w.end))}`);
+    rows.push(['Acceptable times', escapeHtml(windows.join('\n'))]);
+  }
+  if (durationMinutes) rows.push(['Appointment length', `${durationMinutes} minutes`]);
+  if (maxHoldMinutes) rows.push(['Longest wait on hold', `${maxHoldMinutes} minutes`]);
+  return rows;
+}
+
 approvalRoutes.get('/approve/:taskId', async (c) => {
   const sig = c.req.query('sig');
   const task = await signedTask(c.req.param('taskId'), sig);
@@ -58,6 +72,8 @@ approvalRoutes.get('/approve/:taskId', async (c) => {
     ...(task.questions?.length
       ? ([['Questions', escapeHtml(task.questions.map((q, i) => `${i + 1}. ${q}`).join('\n'))]] as Array<[string, string]>)
       : []),
+    ...constraintRows(task),
+    ...(contact?.notes?.trim() ? ([['Notes on this contact (used on every call to them)', escapeHtml(contact.notes.trim())]] as Array<[string, string]>) : []),
     ['Approve by', escapeHtml(`${formatLocal(expiresAt)} (${config.CALENDAR_TIMEZONE})`)],
   ];
   const action = task.approvedAt

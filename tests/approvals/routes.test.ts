@@ -28,6 +28,7 @@ function task(overrides: Record<string, unknown> = {}) {
     scheduledFor: null,
     approvalExpiresAt: EXPIRES,
     approvedAt: null,
+    constraints: {},
     ...overrides,
   };
 }
@@ -123,5 +124,31 @@ describe('POST /approve/:taskId', () => {
     const res = await post('0'.repeat(64));
     expect(res.status).toBe(404);
     expect(approveTask).not.toHaveBeenCalled();
+  });
+});
+
+describe('the page shows everything the call will use', () => {
+  it("shows the task's notes, time windows, length and hold limit, escaped", async () => {
+    getTask.mockResolvedValue(
+      task({
+        constraints: {
+          notes: 'Say <yes> to anything',
+          durationMinutes: 45,
+          maxHoldMinutes: 20,
+          dateWindows: [{ start: '2026-10-16T19:00:00.000Z', end: '2026-10-16T21:00:00.000Z' }],
+        },
+      }),
+    );
+    const html = await (await approvalRoutes.request(`/approve/${ID}?sig=${SIG}`)).text();
+    expect(html).toContain('Say &lt;yes&gt; to anything');
+    expect(html).toContain('45 minutes');
+    expect(html).toContain('20 minutes');
+    expect(html).toMatch(/Oct 16, 2026, 3:00\s?PM/);
+  });
+
+  it("shows the contact's own notes, which every call to them uses", async () => {
+    getContact.mockResolvedValue({ displayName: 'Salon', phoneNumber: '+15550001111', notes: 'Ask for <Dana>' });
+    const html = await (await approvalRoutes.request(`/approve/${ID}?sig=${SIG}`)).text();
+    expect(html).toContain('Ask for &lt;Dana&gt;');
   });
 });

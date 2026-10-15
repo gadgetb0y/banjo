@@ -16,14 +16,17 @@ export function formatLocal(date: Date): string {
 /**
  * The owner's approval request. The link and the deadline come before
  * anything the agent wrote: Pushover and SMS clip a long message, and the
- * link has to survive that.
+ * link has to survive that. It includes the notes that go into the call's
+ * prompt; the page (./routes.ts) shows the rest of what the call will use.
  */
 export function buildApprovalMessage({
   contact,
   task,
 }: {
-  contact: Pick<Contact, 'displayName' | 'phoneNumber'>;
-  task: Pick<Task, 'id' | 'goalDescription' | 'mode' | 'questions' | 'scheduledFor' | 'approvalExpiresAt'>;
+  contact: Pick<Contact, 'displayName' | 'phoneNumber'> & { notes?: string | null };
+  task: Pick<Task, 'id' | 'goalDescription' | 'mode' | 'questions' | 'scheduledFor' | 'approvalExpiresAt'> & {
+    constraints?: Task['constraints'];
+  };
 }): string {
   const expiresAt = task.approvalExpiresAt!;
   const when = task.scheduledFor && task.scheduledFor.getTime() > Date.now() ? `at ${formatLocal(task.scheduledFor)}` : 'now';
@@ -33,5 +36,7 @@ export function buildApprovalMessage({
     '',
     `Task (${task.mode}): ${task.goalDescription}`,
     ...(task.questions?.length ? ['Questions:', ...task.questions.map((q, i) => `${i + 1}. ${q}`)] : []),
+    ...(task.constraints?.notes?.trim() ? [`Notes for the call: ${task.constraints.notes.trim()}`] : []),
+    ...(contact.notes?.trim() ? [`Notes on this contact: ${contact.notes.trim()}`] : []),
   ].join('\n');
 }
