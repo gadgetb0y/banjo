@@ -188,6 +188,17 @@ export class OpenAIRealtimeProvider implements VoiceAIProvider {
   private openResponseIds = new Set<string>();
   private spokenResponseIds = new Set<string>();
   private afterResponseDone = new Map<string, (() => void)[]>();
+  /**
+   * A tool result is waiting for a reply that can't be prompted yet: another
+   * response is open, and OpenAI rejects a second response.create
+   * (conversation_already_has_active_response). Prompted once none is open.
+   * In sim warm-transfer runs the "owner declined" result was rejected that
+   * way while Banjo answered the other party, and never got a reply.
+   */
+  private toolReplyWaiting = false;
+  /** event_ids of the response.create messages sent for tool results, so a rejection of one can be told apart. */
+  private readonly toolReplyEventIds = new Set<string>();
+  private toolReplySeq = 0;
   /** The rate we negotiated for output audio (session.audio.output.format.rate) — used to tag emitted audio_chunks correctly instead of assuming a fixed rate. */
   private outputSampleRate = 24000;
   /** A triggerResponse() that arrived before the socket opened: false for none, else its cue (undefined for none). */
@@ -360,7 +371,25 @@ export class OpenAIRealtimeProvider implements VoiceAIProvider {
     // Prompt the model to continue now that it has the tool result, unless the
     // caller wants it to wait for the other party (server VAD responds then).
     if (options?.respond === 'if-silent') return this.respondIfSilent(toolCallId);
-    if (options?.respond !== false) this.ws.send(JSON.stringify({ type: 'response.create' }));
+    if (options?.respond !== false) this.promptToolReply();
+  }
+
+  /** Prompts a reply to a tool result now, or once no other response is open. One prompt covers every result waiting. */
+  private promptToolReply(): void {
+    this.toolReplyWaiting = true;
+    this.flushToolReply();
+  }
+
+  private flushToolReply(): void {
+    if (!this.toolReplyWaiting || this.openResponseIds.size > 0 || this.ws?.readyState !== WebSocket.OPEN) return;
+    this.toolReplyWaiting = false;
+    const eventId = `banjo_tool_reply_${++this.toolReplySeq}`;
+    this.toolReplyEventIds.add(eventId);
+    for (const old of this.toolReplyEventIds) {
+      if (this.toolReplyEventIds.size <= 20) break;
+      this.toolReplyEventIds.delete(old);
+    }
+    this.ws.send(JSON.stringify({ type: 'response.create', event_id: eventId }));
   }
 
   /**
@@ -374,7 +403,7 @@ export class OpenAIRealtimeProvider implements VoiceAIProvider {
     this.callResponseIds.delete(toolCallId);
     const decide = () => {
       if (responseId !== undefined && this.spokenResponseIds.has(responseId)) return;
-      if (this.ws?.readyState === WebSocket.OPEN) this.ws.send(JSON.stringify({ type: 'response.create' }));
+      this.promptToolReply();
     };
     if (responseId !== undefined && this.openResponseIds.has(responseId)) {
       this.afterResponseDone.set(responseId, [...(this.afterResponseDone.get(responseId) ?? []), decide]);
@@ -668,6 +697,7 @@ export class OpenAIRealtimeProvider implements VoiceAIProvider {
           const waiting = this.afterResponseDone.get(responseId) ?? [];
           this.afterResponseDone.delete(responseId);
           for (const decide of waiting) decide();
+          this.flushToolReply();
           // Only recent responses: a tool result asks about its own, moments later.
           for (const old of this.spokenResponseIds) {
             if (this.spokenResponseIds.size <= 50) break;
@@ -685,6 +715,13 @@ export class OpenAIRealtimeProvider implements VoiceAIProvider {
 
       case 'error': {
         const errPayload = msg.error ?? {};
+        // Our tool result's prompt lost a race with a response the server had
+        // just started (e.g. a reply to the other party): prompt again once
+        // that one is done, rather than leave the result with no reply.
+        if (errPayload.code === 'conversation_already_has_active_response' && this.toolReplyEventIds.delete(errPayload.event_id)) {
+          this.toolReplyWaiting = true;
+          return;
+        }
         this.emitEvent({
           type: 'error',
           error: new VoiceAIError(errPayload.message ?? 'Unknown OpenAI Realtime error', true, errPayload.code),

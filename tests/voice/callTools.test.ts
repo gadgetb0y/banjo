@@ -30,7 +30,9 @@ const {
   escalateAndEndCallTool,
   hangUpAfterSpeaking,
   leaveVoicemailAndEndCallTool,
+  reportAnswersAndEndCallTool,
   reportNegotiationFailedTool,
+  undoConfirmedAppointmentTool,
   VOICEMAIL_MESSAGE_MAX_CHARS,
 } = await import('../../src/voice/tools/callTools.js');
 
@@ -541,9 +543,56 @@ describe('ending a call: answer what is open, then an actual goodbye (#55)', () 
     it(`${tool.name}: says to answer any open question and say a real goodbye first, never narrate the ending`, () => {
       expect(tool.description).toMatch(/answer any question/i);
       expect(tool.description).toMatch(/actual goodbye/i);
-      expect(tool.description).toMatch(/never say you are wrapping up/i);
+      expect(tool.description).toMatch(/same turn as a question/i);
+    });
+
+    // #154: the narrations heard on live calls reused the phrases these
+    // descriptions quoted as what not to say.
+    it(`${tool.name}: quotes no narrated ending for the model to copy`, () => {
+      expect(tool.description).not.toMatch(/wrap(ping)? up|let me respond|finishing/i);
     });
   }
+});
+
+describe('what the model records about a call is only what happened on it (#131, #155)', () => {
+  // Live conversation call, 2026-10-06: the summary said she "reacted with
+  // surprised amusement and laughter, then the chat wrapped up naturally".
+  // The transcript had no laughter, and Banjo hung up before she answered.
+  const describeArg = (tool: { schema: unknown }, arg: string) =>
+    (tool.schema as { shape: Record<string, { description?: string }> }).shape[arg]?.description ?? '';
+
+  for (const [tool, arg] of [
+    [endCallTool, 'summary'],
+    [endConversationCallTool, 'summary'],
+    [reportAnswersAndEndCallTool, 'summary'],
+    [reportNegotiationFailedTool, 'reason'],
+    [escalateAndEndCallTool, 'reason'],
+    [undoConfirmedAppointmentTool, 'reason'],
+    [confirmAppointmentTool, 'details'],
+  ] as const) {
+    it(`${tool.name}'s ${arg}: only what was said or done on this call, nothing guessed`, () => {
+      const text = describeArg(tool, arg);
+      expect(text).toMatch(/only what was (actually )?said or done on this call/i);
+      expect(text).toMatch(/nothing you guess/i);
+    });
+  }
+
+  for (const [tool, arg] of [
+    [endCallTool, 'summary'],
+    [endConversationCallTool, 'summary'],
+  ] as const) {
+    it(`${tool.name}'s ${arg}: no reactions they didn't put into words, and says so if the call ended early`, () => {
+      const text = describeArg(tool, arg);
+      expect(text).toMatch(/feelings, tone or reactions/i);
+      expect(text).toMatch(/before they answered/i);
+    });
+  }
+
+  // #155: the sim's details said the dog was "nervous around water and
+  // clippers", from the owner profile, though nobody mentioned it on the call.
+  it("confirm_appointment's details: not facts from the instructions that nobody discussed", () => {
+    expect(describeArg(confirmAppointmentTool, 'details')).toMatch(/not facts from your instructions or \w+'s notes that nobody mentioned on this call/i);
+  });
 });
 
 describe('leave_voicemail_and_end_call: message length (#3)', () => {

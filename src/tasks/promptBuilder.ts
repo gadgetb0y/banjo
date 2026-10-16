@@ -120,7 +120,7 @@ end_conversation_call with a short summary — this is the correct, successful w
 nothing specific was decided or accomplished. Do NOT use escalate_and_end_call or end_call to close out a normal
 conversation that went fine — those mark the task as needing ${config.ASSISTANT_PRINCIPAL_NAME}'s follow-up, which would be wrong here.
 escalate_and_end_call is still the right call if something genuinely goes wrong (hostile response, you can't
-understand each other, you're truly stuck) — just not as a way to wrap up a conversation that went normally.`;
+understand each other, you're truly stuck) — just not as a way to end a conversation that went normally.`;
 }
 
 /**

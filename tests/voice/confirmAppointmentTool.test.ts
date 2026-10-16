@@ -257,7 +257,9 @@ describe('what the model is told to do after a booking goes through (#47)', () =
 
   it('booking call: forbids describing the ending instead of doing it', async () => {
     const { nextStep } = await confirm('booking');
-    expect(nextStep).toMatch(/never say you are wrapping up/i);
+    expect(nextStep).toMatch(/goodbye is the last thing you say/i);
+    // #154: quoting the narration ("wrapping up") primed the model to say it.
+    expect(nextStep).not.toMatch(/wrap(ping)? up|finishing/i);
   });
 
   it('a task with no mode is a booking call', async () => {

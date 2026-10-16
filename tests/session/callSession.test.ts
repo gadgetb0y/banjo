@@ -2197,6 +2197,10 @@ describe('CallSession: a call-ending tool needs a spoken goodbye first (#102)', 
     await endTurnAndSettle(callTool('call-1'));
     expect(handler).not.toHaveBeenCalled();
     expect(fakeVoiceAI.sendToolResult).toHaveBeenCalledWith('call-1', expect.objectContaining({ ok: false, error: 'no_goodbye' }), true);
+    // #154: says what to say, and doesn't name the narration it's avoiding.
+    const [, refusal] = vi.mocked(fakeVoiceAI.sendToolResult).mock.lastCall!;
+    expect((refusal as { message: string }).message).toMatch(/say to them now only a short goodbye/i);
+    expect((refusal as { message: string }).message).not.toMatch(/talk about ending|saying goodbye/i);
 
     say('assistant', 'Thanks so much, take care. Bye!');
     await endTurnAndSettle(callTool('call-2'));
@@ -2397,7 +2401,10 @@ describe('CallSession: a call-ending tool needs a spoken goodbye first (#102)', 
       expect(handler).not.toHaveBeenCalled();
       expect(fakeVoiceAI.sendToolResult).toHaveBeenLastCalledWith('call-1', expect.objectContaining({ ok: false, error: 'no_reply' }), true);
       const [, result] = vi.mocked(fakeVoiceAI.sendToolResult).mock.lastCall!;
-      expect((result as { message: string }).message).toMatch(/if they asked you something, answer it/i);
+      expect((result as { message: string }).message).toMatch(/the answer to anything they just asked you/i);
+      // #154: a refusal that names what to do ("reply to what they said") came
+      // back as narration ("I'll respond to that and then wrap things up.").
+      expect((result as { message: string }).message).not.toMatch(/reply to|respond|ending the call/i);
 
       say('assistant', "I'll pass that on to Steve. Thanks so much for your help—bye!");
       await endTurnAndSettle(callTool('call-2'));
@@ -2412,6 +2419,20 @@ describe('CallSession: a call-ending tool needs a spoken goodbye first (#102)', 
       await endTurnThenFallbackGoodbye(callTool('call-2'));
 
       expect(handler).toHaveBeenCalledTimes(1);
+    });
+
+    it("doesn't say a second goodbye when Banjo's goodbye was answered with theirs", async () => {
+      // Sim ask run: Banjo said "…take care, bye!" without calling the tool,
+      // they said "Okay, thanks. Bye.", and the late tool call got the fixed
+      // goodbye on top.
+      const { handler, callTool } = await startWithEndTool();
+      say('user', "Yeah, that's right.");
+      say('assistant', 'Okay, thanks for your help — take care, bye!');
+      say('user', 'Okay, thanks. Bye.');
+      await endTurnAndSettle(callTool('call-1'));
+
+      expect(handler).toHaveBeenCalledTimes(1);
+      expect(fakeVoiceAI.sayVerbatim).not.toHaveBeenCalled();
     });
 
     it('says the fixed goodbye straight away when they had signed off (#144)', async () => {
@@ -2444,6 +2465,130 @@ describe('CallSession: a call-ending tool needs a spoken goodbye first (#102)', 
 
       expect(handler).toHaveBeenCalledTimes(1);
       expect(fakeVoiceAI.sayVerbatim).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("Banjo ends the call before they've answered its question (#130)", () => {
+    // Live conversation call, 2026-10-06: Banjo asked "Anything else you want
+    // to chat about, or should I let you go…?", then said "Bye, Gemma!" and
+    // hung up six seconds later, with no reply from her in between.
+    const unanswered = expect.objectContaining({ ok: false, error: 'unanswered_question' });
+
+    it('refuses without prompting a reply, so Banjo waits for their answer', async () => {
+      const { handler, callTool } = await startWithEndTool();
+      say('user', 'So cool.');
+      say('assistant', 'Right? Anything else you want to chat about?');
+      await endTurnAndSettle(callTool('call-1'));
+
+      expect(handler).not.toHaveBeenCalled();
+      expect(fakeVoiceAI.sendToolResult).toHaveBeenLastCalledWith('call-1', unanswered, true, { respond: false });
+      expect(fakeVoiceAI.sayVerbatim).not.toHaveBeenCalled();
+    });
+
+    it('also catches a goodbye said after the question, with no answer between (the live call)', async () => {
+      const { handler, callTool } = await startWithEndTool();
+      say('user', 'So cool.');
+      say('assistant', 'Anything else you want to chat about?');
+      say('assistant', 'Bye, Gemma!');
+      await endTurnAndSettle(callTool('call-1'));
+
+      expect(handler).not.toHaveBeenCalled();
+      expect(fakeVoiceAI.sendToolResult).toHaveBeenLastCalledWith('call-1', unanswered, true, { respond: false });
+    });
+
+    it('lets the call end once they have answered and Banjo said goodbye', async () => {
+      const { handler, callTool } = await startWithEndTool();
+      say('assistant', 'Anything else you want to chat about?');
+      await endTurnAndSettle(callTool('call-1'));
+      say('user', 'No, I have to run. Talk later!');
+      say('assistant', 'Okay, talk soon. Bye!');
+      await endTurnAndSettle(callTool('call-2'));
+
+      expect(handler).toHaveBeenCalledTimes(1);
+      expect(fakeVoiceAI.sayVerbatim).not.toHaveBeenCalled();
+    });
+
+    it("cues a goodbye if they still haven't answered after a while, and lets that ending through", async () => {
+      vi.useFakeTimers();
+      try {
+        const { handler, callTool } = await startWithEndTool();
+        say('assistant', 'Anything else you want to chat about?');
+        await endTurnAndSettle(callTool('call-1'));
+        expect(fakeVoiceAI.triggerResponse).not.toHaveBeenCalled();
+
+        await vi.advanceTimersByTimeAsync(10_000);
+        expect(fakeVoiceAI.triggerResponse).toHaveBeenCalledTimes(1);
+        expect(vi.mocked(fakeVoiceAI.triggerResponse).mock.lastCall?.[0]).toMatch(/haven't answered/i);
+
+        say('assistant', 'Okay, take care. Bye!');
+        await endTurnAndSettle(callTool('call-2'));
+        expect(handler).toHaveBeenCalledTimes(1);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("sends the goodbye cue as a system note where the provider can add one, keeping the session's instructions", async () => {
+      // A triggerResponse() cue replaces the session's instructions for that
+      // response (OpenAI); a system note doesn't.
+      const addContext = vi.fn();
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (fakeVoiceAI as any).addContext = addContext;
+      vi.useFakeTimers();
+      try {
+        const { callTool } = await startWithEndTool();
+        say('assistant', 'Anything else you want to chat about?');
+        await endTurnAndSettle(callTool('call-1'));
+        await vi.advanceTimersByTimeAsync(10_000);
+
+        expect(addContext).toHaveBeenCalledWith([{ role: 'system', text: expect.stringMatching(/haven't answered/i) }]);
+        expect(fakeVoiceAI.triggerResponse).toHaveBeenLastCalledWith();
+      } finally {
+        vi.useRealTimers();
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        delete (fakeVoiceAI as any).addContext;
+      }
+    });
+
+    it("doesn't cue anything once they've answered", async () => {
+      vi.useFakeTimers();
+      try {
+        const { callTool } = await startWithEndTool();
+        say('assistant', 'Anything else you want to chat about?');
+        await endTurnAndSettle(callTool('call-1'));
+        say('user', 'Nope!');
+        vi.mocked(fakeVoiceAI.triggerResponse).mockClear();
+        await vi.advanceTimersByTimeAsync(10_000);
+
+        expect(fakeVoiceAI.triggerResponse).not.toHaveBeenCalledWith(expect.stringMatching(/haven't answered/i));
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('lets a question said in the same line as a goodbye through', async () => {
+      const { handler, callTool } = await startWithEndTool();
+      say('user', 'Thanks so much!');
+      say('assistant', "You're welcome! Have a great day, okay? Bye!");
+      await endTurnAndSettle(callTool('call-1'));
+
+      expect(handler).toHaveBeenCalledTimes(1);
+    });
+
+    it("doesn't hold the call on a provider whose transcripts arrive late: their answer may only be late", async () => {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (fakeVoiceAI as any).transcriptsLate = true;
+      try {
+        const { handler, callTool } = await startWithEndTool();
+        say('assistant', 'Anything else?');
+        say('assistant', 'Okay, take care. Bye!');
+        await endTurnAndSettle(callTool('call-1'));
+
+        expect(handler).toHaveBeenCalledTimes(1);
+      } finally {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        delete (fakeVoiceAI as any).transcriptsLate;
+      }
     });
   });
 

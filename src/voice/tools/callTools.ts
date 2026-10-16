@@ -184,14 +184,27 @@ function calendarTitleFrom(goalDescription: string): string {
  * not a rule forty lines up. A conversation-mode call carries on afterwards —
  * a booking made in passing isn't the end of it.
  */
+/**
+ * For every free-text argument that records what happened on the call (#131,
+ * #155). These reach the owner's notification, get_task_status and the task
+ * webhook as the record of the call: a live summary said the callee laughed
+ * and the call "wrapped up naturally", when she hadn't and it didn't.
+ */
+const ONLY_WHAT_HAPPENED = 'Only what was actually said or done on this call, and nothing you guess.';
+const NO_ADDED_COLOR =
+  ' No feelings, tone or reactions they did not put into words. If the call ended before they answered something, say so.';
+
 function afterBookingStep(mode: string | undefined, spokenStart: string): string {
-  const readBack = `Booked. Tell them in one short sentence what is booked, using this day and time: "You're all set for ${spokenStart}", plus what it is for.`;
+  const readBack = `Booked. Now tell them in one short sentence what is booked, using this day and time: "You're all set for ${spokenStart}", plus what it is for.`;
   if (mode === 'conversation') {
     return `${readBack} Then carry on the conversation — this booking is not the end of the call.`;
   }
   return (
-    `${readBack} If they have a question, answer it first. Then, in the same turn, say an actual goodbye to them ` +
-    `(e.g. "Thanks so much — have a great day!") and call end_call. Never say you are wrapping up, finishing, or ending the call — just say goodbye.`
+    // #154: "…and call end_call" read as the next action, and 2 of 3 sim
+    // runs called it before saying a word. Speaking comes first, and the
+    // narration this used to quote as what not to say is no longer quoted.
+    `${readBack} If they have a question, answer it first. In the same breath, say an actual goodbye to them ` +
+    `(e.g. "Thanks so much — have a great day!"). Your goodbye is the last thing you say. Only once you have said it, call end_call.`
   );
 }
 
@@ -217,7 +230,14 @@ export const confirmAppointmentTool: VoiceTool<{
       .describe(
         `A short calendar title for the appointment, as ${config.ASSISTANT_PRINCIPAL_NAME} should see it in their calendar — e.g. "Dinner at Luigi's" or "Haircut with Clauda". A few words, not a sentence.`,
       ),
-    details: z.string().optional().describe('Any additional details worth recording (location, contact name, notes).'),
+    details: z
+      .string()
+      .optional()
+      .describe(
+        // #155: a sim run recorded the owner profile's "nervous with clippers"
+        // here, though nobody mentioned it on the call.
+        `Anything said on this call that the calendar entry should hold, e.g. who to ask for, what to bring, or a price they quoted. ${ONLY_WHAT_HAPPENED} Not facts from your instructions or ${config.ASSISTANT_PRINCIPAL_NAME}'s notes that nobody mentioned on this call: those are on file already. Leave out if there is nothing.`,
+      ),
   }),
   handler: async (input, ctx) => {
     return runToolSafely('confirm_appointment', async () => {
@@ -343,7 +363,7 @@ export const undoConfirmedAppointmentTool: VoiceTool<{ reason: string }> = defin
     reason: z
       .string()
       .min(1)
-      .describe('Why the confirmed appointment is being undone, e.g. "callee asked for 5pm instead". Recorded for the user; not spoken to the callee.'),
+      .describe(`Why the confirmed appointment is being undone, e.g. "callee asked for 5pm instead". ${ONLY_WHAT_HAPPENED} Recorded for the user; not spoken to the callee.`),
   }),
   handler: async (input, ctx) => {
     return runToolSafely('undo_confirmed_appointment', async () => {
@@ -457,7 +477,7 @@ export const reportNegotiationFailedTool: VoiceTool<{ reason: string }> = define
   description:
     'Use this when you reached and properly engaged with a human, but none of the times offered by either side fit the constraints of the task, and no further negotiation is possible. This is distinct from escalate_and_end_call — use this only when the call went smoothly but simply failed to reach an agreement.',
   schema: z.object({
-    reason: z.string().describe('A short explanation of why no offered time worked.'),
+    reason: z.string().describe(`A short explanation of why no offered time worked. ${ONLY_WHAT_HAPPENED}`),
   }),
   endsCall: true,
   yieldsToCallee: true,
@@ -478,7 +498,7 @@ export const escalateAndEndCallTool: VoiceTool<{ reason: string; stuckAt?: 'phon
   description:
     `Use this when you are genuinely stuck and cannot proceed — e.g. a confusing automated phone menu you cannot navigate, a hostile or uncooperative response, or any situation you cannot resolve on your own. This ends the call and flags the task for human (${config.ASSISTANT_PRINCIPAL_NAME}) follow-up.`,
   schema: z.object({
-    reason: z.string().describe('A short explanation of why the call needed to be escalated.'),
+    reason: z.string().describe(`A short explanation of why the call needed to be escalated. ${ONLY_WHAT_HAPPENED}`),
     stuckAt: z
       .enum(['phone_menu'])
       .optional()
@@ -505,8 +525,8 @@ export const escalateAndEndCallTool: VoiceTool<{ reason: string; stuckAt?: 'phon
  */
 const BEFORE_ENDING =
   ' Before calling this, in the same turn: answer any question the other party just asked, then say an actual ' +
-  'goodbye to them (e.g. "Thanks so much — have a great day!"). Never say you are wrapping up, finishing, or ' +
-  'ending the call, and never say what you are about to do ("let me respond") — just do it.';
+  'goodbye to them (e.g. "Thanks so much — have a great day!"). Your goodbye is the last thing you say. Never call ' +
+  'this in the same turn as a question to them: wait for their answer first.';
 
 export const endCallTool: VoiceTool<{ summary?: string }> = defineVoiceTool({
   name: 'end_call',
@@ -514,7 +534,7 @@ export const endCallTool: VoiceTool<{ summary?: string }> = defineVoiceTool({
     'Call this once you have said everything you need to say and are ready to end the call normally — e.g. right after confirm_appointment has succeeded and you have told the caller the confirmed time. This does NOT itself record any outcome; use it only after an outcome-setting tool (confirm_appointment) has already run, or when there is genuinely nothing more to say and no better-fitting tool applies. leave_voicemail_and_end_call, report_negotiation_failed, and escalate_and_end_call already end the call themselves — do not call end_call after those.' +
     BEFORE_ENDING,
   schema: z.object({
-    summary: z.string().optional().describe('Optional short note about how the call concluded.'),
+    summary: z.string().optional().describe(`Optional short note about how the call concluded. ${ONLY_WHAT_HAPPENED}${NO_ADDED_COLOR}`),
   }),
   endsCall: true,
   yieldsToCallee: true,
@@ -558,7 +578,7 @@ export const endConversationCallTool: VoiceTool<{ summary: string }> = defineVoi
     'calls with no booking/negotiation goal.' +
     BEFORE_ENDING,
   schema: z.object({
-    summary: z.string().describe('A short summary of what was discussed/accomplished on this call.'),
+    summary: z.string().describe(`A short summary of what was discussed/accomplished on this call. ${ONLY_WHAT_HAPPENED}${NO_ADDED_COLOR}`),
   }),
   endsCall: true,
   yieldsToCallee: true,
@@ -586,7 +606,7 @@ export const endConversationCallTool: VoiceTool<{ summary: string }> = defineVoi
  */
 const RECORD_ANSWER_NEXT =
   "Saved. Don't mention it, and don't repeat what you just said. If you already asked your next question, wait " +
-  'for their answer. Otherwise ask your next question, or, if none are left, wrap up the call.';
+  'for their answer. Otherwise ask your next question, or, if none are left, say goodbye and end the call.';
 
 export const recordAnswerTool: VoiceTool<ReportedAnswer> = defineVoiceTool({
   name: 'record_answer',
@@ -634,7 +654,10 @@ export const reportAnswersAndEndCallTool: VoiceTool<{
     answers: z
       .array(reportedAnswerSchema)
       .describe('One entry per question on your list.'),
-    summary: z.string().optional().describe('Anything else worth passing on that they told you, briefly. Leave out if nothing.'),
+    summary: z
+      .string()
+      .optional()
+      .describe(`Anything else worth passing on that they told you, briefly. ${ONLY_WHAT_HAPPENED} Leave out if nothing.`),
   }),
   endsCall: true,
   yieldsToCallee: true,
