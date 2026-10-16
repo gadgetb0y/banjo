@@ -76,7 +76,8 @@ mcp_servers:
       include: [find_contact, list_contacts, list_recent_tasks, get_task_status, get_call_transcript]
 ```
 
-Set `BANJO_MCP_KEY` (your Banjo `MCP_API_KEY`) in Hermes's environment or its `.env`. Check the
+Set `BANJO_MCP_KEY` in Hermes's environment or its `.env`. Give it Banjo's agent key,
+`MCP_AGENT_API_KEY`, rather than your own `MCP_API_KEY` (see "Calls an agent asks for" below). Check the
 connection with `hermes mcp test banjo`, which should report 11 tools discovered. The filter is
 applied when the agent loads them.
 
@@ -323,6 +324,34 @@ OpenClaw's hooks authenticate with a bearer token rather than a signature. Set B
 Then set Banjo's `TASK_WEBHOOK_URL` to `http(s)://<openclaw-host>:18789/hooks/banjo`. OpenClaw
 wraps hook content as untrusted external content by default. Leave `allowUnsafeExternalContent`
 off.
+
+## Calls an agent asks for
+
+Set `MCP_AGENT_API_KEY` in Banjo's `.env` (`openssl rand -hex 32`) and give that key to always-on
+agents instead of `MCP_API_KEY`. A call placed with it doesn't dial until you approve it:
+
+1. Banjo sends you a message (Pushover or SMS, whichever `NOTIFICATION_CHANNEL` is) with who, when,
+   what the agent asked for, and a link.
+2. The link opens a page with the details and an **Approve this call** button. The page alone changes
+   nothing; the button does.
+3. Unapproved after 30 minutes, the call is cancelled. To call it off sooner, use `cancel_task`.
+
+The agent gets an `ackMessage` saying it's waiting for your approval, and `get_task_status` shows
+`approval: 'waiting'`, then `'approved'` or `'not_approved'`. It never sees the link. At most 3 requests
+wait at once, and one the agent cancels still counts until its 30 minutes are up. The agent key can't
+use `overrideCallCap`, can't set or change a contact's notes or booking URL (`add_contact`,
+`update_contact`): notes go into every call to that contact, and the booking URL is the page Claude Code
+opens to book online for you. It can cancel or stop only calls it asked for, not yours. Requests
+waiting for your approval don't count against the daily limit for your own calls to that number.
+
+Banjo won't start with the agent key set unless `PUBLIC_HOSTNAME` is set and `NOTIFICATION_CHANNEL`
+isn't `none`.
+
+**Send the approval message somewhere the agent can't read.** Anyone holding the link can approve the
+call, so an agent that can read your texts could approve its own requests. If your agent reads SMS or
+iMessage on your account (iMessage on a Mac with your Apple ID, text forwarding), use
+`NOTIFICATION_CHANNEL=pushover`, not `twilio_sms`. An agent with its own number, which only sees what's
+sent to that number, is fine either way. Your own key (Claude Code) works as before, with no approval step.
 
 ## The task webhook
 

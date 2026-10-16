@@ -1,5 +1,7 @@
 import { z } from 'zod';
-import { cancelPendingTask } from '../../tasks/service.js';
+import { askedByAgent, NOT_AGENTS_CALL } from '../../tasks/approval.js';
+import { cancelPendingTask, getTask } from '../../tasks/service.js';
+import type { McpRole } from '../role.js';
 
 export const cancelTaskInputSchema = z.object({
   taskId: z.string().uuid().describe('Id of the task to cancel, as returned by place_call.'),
@@ -15,9 +17,18 @@ export interface CancelTaskResult {
 /**
  * Calls off a phone call that hasn't been placed yet — typically one
  * scheduled for later via place_call's scheduledFor. A call already in
- * progress or finished is left alone and reported as not cancelled.
+ * progress or finished is left alone and reported as not cancelled. The agent
+ * key may cancel only calls it asked for, so it can't call off the owner's.
  */
-export async function cancelTaskHandler(input: z.infer<typeof cancelTaskInputSchema>): Promise<CancelTaskResult> {
+export async function cancelTaskHandler(
+  input: z.infer<typeof cancelTaskInputSchema>,
+  ctx: { role: McpRole },
+): Promise<CancelTaskResult> {
+  if (ctx.role === 'agent') {
+    const existing = await getTask(input.taskId);
+    if (!existing) throw new Error(`Task not found: ${input.taskId}`);
+    if (!askedByAgent(existing)) throw new Error(NOT_AGENTS_CALL);
+  }
   const task = await cancelPendingTask(input.taskId);
   if (!task) throw new Error(`Task not found: ${input.taskId}`);
   if (task.status === 'cancelled') {

@@ -1,6 +1,8 @@
 import { z } from 'zod';
 import { getLiveCall } from '../../tasks/liveCalls.js';
+import { askedByAgent, NOT_AGENTS_CALL } from '../../tasks/approval.js';
 import { getTask } from '../../tasks/service.js';
+import type { McpRole } from '../role.js';
 
 export const stopCallInputSchema = z.object({
   taskId: z.string().uuid().describe('Id of the task whose call should be stopped, as returned by place_call.'),
@@ -31,9 +33,17 @@ const DEFAULT_REASON = 'Call stopped by the user';
  * The registry is per-process by necessity (a CallSession owns live WebSocket
  * state), so "no live call" here means "not running in THIS process" — which
  * for a single-instance deployment is the same thing, and the message says so
- * rather than overclaiming.
+ * rather than overclaiming. The agent key may stop only calls it asked for.
  */
-export async function stopCallHandler(input: z.infer<typeof stopCallInputSchema>): Promise<StopCallResult> {
+export async function stopCallHandler(
+  input: z.infer<typeof stopCallInputSchema>,
+  ctx: { role: McpRole },
+): Promise<StopCallResult> {
+  if (ctx.role === 'agent') {
+    const task = await getTask(input.taskId);
+    if (!task) throw new Error(`Task not found: ${input.taskId}`);
+    if (!askedByAgent(task)) throw new Error(NOT_AGENTS_CALL);
+  }
   const live = getLiveCall(input.taskId);
   if (live) {
     const reason = input.reason ?? DEFAULT_REASON;

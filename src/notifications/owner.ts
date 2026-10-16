@@ -7,18 +7,20 @@ import { NoopNotificationChannel, sendOwnerSms, TwilioSmsNotificationChannel } f
  * Tells the owner something directly, over whichever NOTIFICATION_CHANNEL is
  * configured — for events with no Task outcome to report: inbound bookings
  * and reschedules, an inbound call flagged for attention, a booking written
- * after its call was already reported. A no-op for NOTIFICATION_CHANNEL=none.
+ * after its call was already reported, a call an agent wants approved.
+ * Resolves whether the channel took the message (false for
+ * NOTIFICATION_CHANNEL=none); never throws.
  * `urgent` raises the Pushover priority past quiet hours; SMS has no
  * equivalent, so it's ignored there.
  */
-export async function sendOwnerMessage(body: string, { urgent = false }: { urgent?: boolean } = {}): Promise<void> {
+export async function sendOwnerMessage(body: string, { urgent = false }: { urgent?: boolean } = {}): Promise<boolean> {
   switch (config.NOTIFICATION_CHANNEL) {
     case 'twilio_sms':
       return sendOwnerSms(body);
     case 'pushover':
       return sendPushover({ message: body, urgent });
     case 'none':
-      return;
+      return false;
   }
 }
 

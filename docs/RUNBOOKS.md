@@ -71,6 +71,15 @@ Rotate on any of:
    rewriting shared history (ask before doing this — it rewrites commit hashes for anyone else
    with a clone).
 
+Rotating `MCP_API_KEY` also voids any approval links still waiting (they're signed with a key derived
+from it): those requests expire unapproved, and the agent can ask again.
+
+### Rotating `MCP_AGENT_API_KEY`
+
+The same steps, for the agent key: generate a new one, set it in Banjo's `.env`, put it in each agent's
+MCP config (on the node, both `banjo` and `banjo_readonly` in `hermes-data/config.yaml`), and restart
+Banjo and the agents. It must differ from `MCP_API_KEY`, or Banjo won't start.
+
 ### What this doesn't cover yet
 
 No secrets-manager integration exists (confirmed — grepping `src/` for `SecretsManager`/`vault`

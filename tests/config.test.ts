@@ -28,7 +28,7 @@ const ALL_CONFIG_KEYS = [
   'GOOGLE_OAUTH_CLIENT_ID', 'GOOGLE_OAUTH_CLIENT_SECRET', 'GOOGLE_OAUTH_REFRESH_TOKEN', 'GOOGLE_CALENDAR_ID',
   'NOTIFICATION_CHANNEL', 'NOTIFY_TO_PHONE_NUMBER', 'NOTIFY_FROM_PHONE_NUMBER', 'PUSHOVER_APP_TOKEN', 'PUSHOVER_USER_KEY', 'PUSHOVER_DEVICE',
   'TASK_WEBHOOK_URL', 'TASK_WEBHOOK_SECRET', 'TASK_WEBHOOK_TOKEN', 'OUTCOME_SUMMARY_VIA',
-  'MCP_API_KEY', 'TOOL_TIMEOUT_MS', 'LOG_TRANSCRIPTS',
+  'MCP_API_KEY', 'MCP_AGENT_API_KEY', 'TOOL_TIMEOUT_MS', 'LOG_TRANSCRIPTS',
   'INBOUND_BOOKING_ENABLED', 'BUSINESS_HOURS_DAYS', 'BUSINESS_HOURS_START', 'BUSINESS_HOURS_END',
   'INBOUND_DEFAULT_DURATION_MINUTES', 'INBOUND_MAX_LOOKAHEAD_DAYS', 'ASSISTANT_PRINCIPAL_NAME', 'DISCLOSURE_LINE', 'RECORD_CALLS', 'RECORDING_RETENTION_DAYS',
   'TRANSFER_ENABLED', 'TRANSFER_TO_PHONE_NUMBER', 'TRANSFER_FALLBACK_MESSAGE', 'TRANSFER_MODE', 'HOLD_MAX_MINUTES',
@@ -37,6 +37,8 @@ const ALL_CONFIG_KEYS = [
 function setEnv(overrides: Record<string, string | undefined>) {
   for (const key of ALL_CONFIG_KEYS) delete process.env[key];
   Object.assign(process.env, BASE_ENV, overrides);
+  // Object.assign would set an undefined override to the string "undefined".
+  for (const [key, value] of Object.entries(overrides)) if (value === undefined) delete process.env[key];
 }
 
 describe('config: env schema', () => {
@@ -414,5 +416,45 @@ describe('config: env schema', () => {
       setEnv({ TRANSFER_ENABLED: 'true', TRANSFER_TO_PHONE_NUMBER: '15557654321' });
       await expect(import('../src/config/index.js')).rejects.toThrow();
     });
+  });
+});
+
+describe('config: MCP_AGENT_API_KEY', () => {
+  beforeEach(() => {
+    vi.resetModules();
+  });
+
+  afterEach(() => {
+    process.env = { ...originalEnv };
+  });
+
+  const AGENT_KEY = 'agent-key-for-tests-only-0123456789';
+  const PUSHOVER = {
+    NOTIFICATION_CHANNEL: 'pushover',
+    PUSHOVER_APP_TOKEN: 'a'.repeat(30),
+    PUSHOVER_USER_KEY: 'u'.repeat(30),
+    PUBLIC_HOSTNAME: 'banjo.example.com',
+  };
+
+  it('is optional', async () => {
+    setEnv({});
+    const { config } = await import('../src/config/index.js');
+    expect(config.MCP_AGENT_API_KEY).toBeUndefined();
+  });
+
+  it('accepts a separate key with a hostname and a notification channel', async () => {
+    setEnv({ ...PUSHOVER, MCP_AGENT_API_KEY: AGENT_KEY });
+    const { config } = await import('../src/config/index.js');
+    expect(config.MCP_AGENT_API_KEY).toBe(AGENT_KEY);
+  });
+
+  it.each([
+    ['shorter than 32 characters', { ...PUSHOVER, MCP_AGENT_API_KEY: 'short' }, /at least 32/],
+    ['the same as MCP_API_KEY', { ...PUSHOVER, MCP_AGENT_API_KEY: BASE_ENV.MCP_API_KEY }, /differ/],
+    ['set without PUBLIC_HOSTNAME', { ...PUSHOVER, PUBLIC_HOSTNAME: undefined, MCP_AGENT_API_KEY: AGENT_KEY }, /PUBLIC_HOSTNAME/],
+    ['set with NOTIFICATION_CHANNEL=none', { PUBLIC_HOSTNAME: 'banjo.example.com', MCP_AGENT_API_KEY: AGENT_KEY }, /NOTIFICATION_CHANNEL/],
+  ])('refuses a key %s', async (_label, env, message) => {
+    setEnv(env as Record<string, string | undefined>);
+    await expect(import('../src/config/index.js')).rejects.toThrow(message);
   });
 });

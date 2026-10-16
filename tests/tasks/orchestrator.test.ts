@@ -15,6 +15,7 @@ vi.mock('../../src/tasks/service.js', () => ({
   transitionTask,
   createCallAttempt,
   isTaskDue: () => true,
+  expireApprovalRequests: vi.fn(async () => []),
   listNonTerminalTasks: vi.fn(async () => []),
   listStartableTasks: vi.fn(async () => []),
   withContactAdvisoryLock: <T,>(_contactId: string, work: () => Promise<T>) => work(),
@@ -159,7 +160,7 @@ describe('per-number call cap at dial time', () => {
     triggerOrchestration('task-cap');
     await vi.waitFor(() => expect(notifyTaskOutcome).toHaveBeenCalledWith('task-cap'));
 
-    expect(checkCallCap).toHaveBeenCalledWith('contact-1', expect.any(Date));
+    expect(checkCallCap).toHaveBeenCalledWith('contact-1', expect.any(Date), { limit: 3 });
     expect(transitionTask).toHaveBeenCalledWith(
       'task-cap',
       'failed',
@@ -170,6 +171,21 @@ describe('per-number call cap at dial time', () => {
     expect(CallSession).not.toHaveBeenCalled();
     // Refused before spending a calendar lookup on a call that won't be made.
     expect(computeCandidateWindows).not.toHaveBeenCalled();
+    checkCallCap.mockReset();
+    checkCallCap.mockResolvedValue({ allowed: true, placed: 0, queued: 0 });
+  });
+
+  it('checks a task the owner overrode against twice the cap, early and at dialing', async () => {
+    getTask.mockResolvedValue({ id: 'task-over', channel: 'phone', status: 'pending', contactId: 'contact-1', constraints: {}, callCapOverride: true });
+    getContact.mockResolvedValue({ id: 'contact-1' });
+    transitionTask.mockImplementation(async (id: string, status: string) => ({ id, status }));
+    checkCallCap.mockResolvedValue({ allowed: false, placed: 6, queued: 0 });
+
+    triggerOrchestration('task-over');
+    await vi.waitFor(() => expect(notifyTaskOutcome).toHaveBeenCalledWith('task-over'));
+
+    expect(checkCallCap).toHaveBeenCalledWith('contact-1', expect.any(Date), { limit: 6 });
+    expect(createCallAttempt).not.toHaveBeenCalled();
     checkCallCap.mockReset();
     checkCallCap.mockResolvedValue({ allowed: true, placed: 0, queued: 0 });
   });
@@ -277,5 +293,37 @@ describe("an 'ask' task (#148)", () => {
 
     expect(computeCandidateWindows).not.toHaveBeenCalled();
     expect(transitionTask).toHaveBeenCalledWith('task-ask', 'calling', { candidateWindows: [] }, expect.objectContaining({ from: ['checking_availability'] }));
+  });
+});
+
+describe('a call waiting for the owner to approve it', () => {
+  it('is not claimed or dialed while unapproved', async () => {
+    getTask.mockResolvedValue({
+      id: 'waiting', channel: 'phone', status: 'pending', contactId: 'contact-1', constraints: {}, mode: 'booking',
+      approvalExpiresAt: new Date(Date.now() + 60_000), approvedAt: null,
+    });
+    getContact.mockResolvedValue({ id: 'contact-1' });
+    transitionTask.mockImplementation(async (id: string, status: string) => ({ id, status }));
+
+    triggerOrchestration('waiting');
+    await vi.waitFor(() => expect(getTask).toHaveBeenCalledWith('waiting'));
+    await new Promise((r) => setTimeout(r, 10));
+
+    expect(transitionTask).not.toHaveBeenCalled();
+    expect(createCallAttempt).not.toHaveBeenCalled();
+  });
+
+  it('is claimed once approved', async () => {
+    getTask.mockResolvedValue({
+      id: 'approved', channel: 'phone', status: 'pending', contactId: 'contact-1', constraints: {}, mode: 'booking',
+      approvalExpiresAt: new Date(Date.now() + 60_000), approvedAt: new Date(),
+    });
+    getContact.mockResolvedValue({ id: 'contact-1' });
+    transitionTask.mockImplementation(async (id: string, status: string) => ({ id, status }));
+
+    triggerOrchestration('approved');
+    await vi.waitFor(() =>
+      expect(transitionTask).toHaveBeenCalledWith('approved', 'checking_availability', undefined, { from: ['pending'] }),
+    );
   });
 });

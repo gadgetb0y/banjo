@@ -20,9 +20,9 @@ function getSmsClient(): ReturnType<typeof twilioLib> {
  * (not an error) when NOTIFICATION_CHANNEL isn't 'twilio_sms', matching
  * NoopNotificationChannel's behavior for the Task-shaped path below.
  */
-export async function sendOwnerSms(body: string): Promise<void> {
-  if (config.NOTIFICATION_CHANNEL !== 'twilio_sms') return;
-  await sendSms(body, {});
+export async function sendOwnerSms(body: string): Promise<boolean> {
+  if (config.NOTIFICATION_CHANNEL !== 'twilio_sms') return false;
+  return sendSms(body, {});
 }
 
 /**
@@ -48,9 +48,9 @@ function deliveryHint(errorCode: number | null): string {
  * carrier (error 30034) with nothing logged, because the send itself had
  * succeeded. Never throws: a notification problem must not reach the call.
  * Clipped to SMS_MAX_CHARS first: Twilio rejects a longer body outright, and
- * a cut-off message beats none.
+ * a cut-off message beats none. Resolves whether Twilio accepted it.
  */
-async function sendSms(body: string, logContext: Record<string, unknown>): Promise<void> {
+async function sendSms(body: string, logContext: Record<string, unknown>): Promise<boolean> {
   let messageSid: string;
   try {
     const message = await getSmsClient().messages.create({
@@ -61,7 +61,7 @@ async function sendSms(body: string, logContext: Record<string, unknown>): Promi
     messageSid = message.sid;
   } catch (err) {
     logger.error({ err, ...logContext }, 'Failed to send notification SMS');
-    return;
+    return false;
   }
   setTimeout(() => {
     getSmsClient()
@@ -72,6 +72,8 @@ async function sendSms(body: string, logContext: Record<string, unknown>): Promi
       })
       .catch((err) => logger.warn({ err, messageSid }, 'could not check notification SMS delivery'));
   }, DELIVERY_CHECK_DELAY_MS).unref();
+  // Accepted by Twilio: the most that's known now. A carrier block shows up in the check above.
+  return true;
 }
 
 export class TwilioSmsNotificationChannel implements NotificationChannel {

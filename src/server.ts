@@ -12,6 +12,7 @@ import { buildInboundFrontendPrompt, buildInboundSystemPrompt } from './inbound/
 import { logger } from './lib/logger.js';
 import { registerMcpRoutes } from './mcp/server.js';
 import { healthRoutes } from './routes/health.js';
+import { approvalRoutes, redactQuery } from './approvals/routes.js';
 import { CallSession } from './session/callSession.js';
 import { createTelephonyProvider } from './telephony/factory.js';
 import type { TransferResult } from './tasks/schema.js';
@@ -77,12 +78,13 @@ app.use('*', async (c, next) => {
   const start = Date.now();
   await next();
   logger.info(
-    { method: c.req.method, path: c.req.path, query: c.req.query(), status: c.res.status, ms: Date.now() - start },
+    { method: c.req.method, path: c.req.path, query: redactQuery(c.req.query()), status: c.res.status, ms: Date.now() - start },
     'http request',
   );
 });
 
 app.route('/', healthRoutes);
+app.route('/', approvalRoutes);
 registerMcpRoutes(app);
 
 const telephony = createTelephonyProvider() as unknown as TwilioHttpHooks;

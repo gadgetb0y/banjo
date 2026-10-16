@@ -101,7 +101,7 @@ export async function startSimCall(opts: SimCallOptions): Promise<SimCall> {
   });
 
   const contact = await addContact({ displayName: opts.business, phoneNumber: SIM_BUSINESS_NUMBER, category: opts.category });
-  const { taskId } = await placeCallHandler({ ...input.data, contactId: contact.id });
+  const { taskId } = await placeCallHandler({ ...input.data, contactId: contact.id }, { role: 'owner' });
 
   const finished = waitUntilFinished(taskId);
   // A task that ends before Banjo ever connects (refused, failed to start) has no call to wait for.

@@ -63,3 +63,19 @@ describe('mcp: get_task_status', () => {
     expect(await getTaskStatusHandler({ taskId: TASK_ID })).not.toHaveProperty('collectedAnswers');
   });
 });
+
+describe('mcp: get_task_status, approval of an agent\'s call', () => {
+  const expiresAt = new Date('2026-10-15T01:30:00Z');
+  it('leaves approval out of a call that never needed it', async () => {
+    getTask.mockResolvedValue(task({ approvalExpiresAt: null, approvedAt: null }));
+    expect(await getTaskStatusHandler({ taskId: TASK_ID })).not.toHaveProperty('approval');
+  });
+  it.each([
+    ['waiting', { status: 'pending', approvedAt: null }],
+    ['approved', { status: 'calling', approvedAt: new Date() }],
+    ['not_approved', { status: 'cancelled', approvedAt: null }],
+  ])('reports %s', async (state, fields) => {
+    getTask.mockResolvedValue(task({ approvalExpiresAt: expiresAt, ...fields }));
+    expect(await getTaskStatusHandler({ taskId: TASK_ID })).toMatchObject({ approval: state });
+  });
+});

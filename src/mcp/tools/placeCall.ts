@@ -1,8 +1,14 @@
 import { z } from 'zod';
 import { config } from '../../config/index.js';
 import { zonedTimeToUtcIso } from '../../lib/timezone.js';
-import { checkCallCap, describeCallCapRefusal } from '../../tasks/callCap.js';
-import { createTask } from '../../tasks/service.js';
+import { APPROVAL_WINDOW_MS, buildApprovalMessage, formatLocal, MAX_WAITING_APPROVALS } from '../../approvals/request.js';
+import { getContact } from '../../contacts/service.js';
+import { addressBookNameFor } from '../../googleContacts/lookup.js';
+import { logger } from '../../lib/logger.js';
+import { sendOwnerMessage } from '../../notifications/owner.js';
+import { canOverrideCallCap, checkCallCap, describeCallCapRefusal, OVERRIDE_CAP_MULTIPLIER } from '../../tasks/callCap.js';
+import { cancelPendingTask, countOpenApprovalRequests, createTask, withApprovalRequestLock } from '../../tasks/service.js';
+import type { McpRole } from '../role.js';
 import { triggerOrchestration } from '../../tasks/orchestrator.js';
 import type { TaskConstraints, TimeWindow } from '../../tasks/schema.js';
 import { modeRules } from '../../tasks/modes.js';
@@ -88,6 +94,15 @@ export const placeCallInputSchema = z.object({
     })
     .optional()
     .describe('Constraints guiding what times/details are acceptable. Omit if unconstrained.'),
+  overrideCallCap: z
+    .boolean()
+    .optional()
+    .describe(
+      `Owner only, for testing: let this call go past the limit of ${config.MAX_CALLS_PER_NUMBER_PER_DAY} calls per number ` +
+        `per 24 hours, up to ${OVERRIDE_CAP_MULTIPLIER} times it. Only for a family contact or the owner's own number. Set it ` +
+        "only after the owner has said yes in this conversation to going past the limit for this contact, told how many " +
+        'calls it has had today. Never on your own initiative.',
+    ),
 });
 
 export interface PlaceCallResult {
@@ -137,9 +152,7 @@ function normalizeDateWindows(windows: TimeWindow[]): TimeWindow[] {
 /** How far in the past a scheduledFor may be and still call immediately — see placeCallHandler. */
 const SCHEDULED_FOR_PAST_GRACE_MS = 5 * 60 * 1000;
 
-function formatInCalendarTimezone(date: Date): string {
-  return date.toLocaleString('en-US', { timeZone: config.CALENDAR_TIMEZONE, dateStyle: 'medium', timeStyle: 'short' });
-}
+const formatInCalendarTimezone = formatLocal;
 
 /**
  * Creates the Task row and hands off to async call orchestration WITHOUT
@@ -148,8 +161,16 @@ function formatInCalendarTimezone(date: Date): string {
  * expected to poll get_task_status for the eventual outcome. With a future
  * scheduledFor, nothing is triggered now: the orchestration poller starts the
  * call once it's due.
+ *
+ * With the agent key (`role: 'agent'`), the task waits for the owner to
+ * approve it from a signed link sent with sendOwnerMessage (src/approvals/),
+ * and nothing is triggered: approving it does. The link never appears in the
+ * result. `overrideCallCap` is the owner's alone.
  */
-export async function placeCallHandler(input: z.infer<typeof placeCallInputSchema>): Promise<PlaceCallResult> {
+export async function placeCallHandler(
+  input: z.infer<typeof placeCallInputSchema>,
+  ctx: { role: McpRole },
+): Promise<PlaceCallResult> {
   // Checked here, not in the schema, so the MCP tool's JSON Schema stays a plain object.
   const asks = modeRules({ mode: input.mode ?? 'booking' }).asks;
   if (asks && !input.questions?.length) {
@@ -173,31 +194,78 @@ export async function placeCallHandler(input: z.infer<typeof placeCallInputSchem
     );
   }
 
+  const agent = ctx.role === 'agent';
+  if (agent && input.overrideCallCap) {
+    throw new Error("overrideCallCap needs the owner's own key: an agent can't lift the call limit.");
+  }
+  const contact = agent || input.overrideCallCap ? await getContact(input.contactId) : undefined;
+  if ((agent || input.overrideCallCap) && !contact) throw new Error(`Contact not found: ${input.contactId}`);
+  if (input.overrideCallCap && !canOverrideCallCap(contact!)) {
+    throw new Error('The call cap can only be overridden for the owner or family.');
+  }
+  const limit = config.MAX_CALLS_PER_NUMBER_PER_DAY * (input.overrideCallCap ? OVERRIDE_CAP_MULTIPLIER : 1);
+
   // At most MAX_CALLS_PER_NUMBER_PER_DAY calls to one number in any 24 hours,
-  // counting calls already queued to dial (tasks/callCap.ts). Refused before
-  // anything is created. A call scheduled for later isn't checked here: today's
+  // counting calls already queued to dial (tasks/callCap.ts). The owner's
+  // check leaves out agent requests they haven't approved, so an agent can't
+  // use up the owner's calls by asking; each is counted again before it dials.
+  // Refused before anything is created. A call scheduled for later isn't checked here: today's
   // calls may have left the window by then, so the orchestrator checks it when
   // it comes due instead.
   const callsNow = !scheduledFor || scheduledFor.getTime() <= Date.now();
   if (callsNow) {
-    const cap = await checkCallCap(input.contactId, new Date(), { includeQueued: true });
+    const cap = await checkCallCap(input.contactId, new Date(), { includeQueued: true, includeAwaitingApproval: agent, limit });
     if (!cap.allowed) throw new Error(describeCallCapRefusal(cap));
   }
 
-  const task = await createTask({
-    contactId: input.contactId,
-    channel: 'phone',
-    goalDescription: input.taskDescription,
-    constraints,
-    mode: input.mode,
-    questions: input.questions,
-    scheduledFor,
-  });
+  const create = () =>
+    createTask({
+      contactId: input.contactId,
+      channel: 'phone',
+      goalDescription: input.taskDescription,
+      constraints,
+      mode: input.mode,
+      questions: input.questions,
+      scheduledFor,
+      ...(agent ? { approvalExpiresAt: new Date(Date.now() + APPROVAL_WINDOW_MS) } : {}),
+      ...(input.overrideCallCap ? { callCapOverride: true } : {}),
+    });
+  // An agent's request is checked against the waiting limit and created under
+  // one lock, so simultaneous requests can't all pass the check.
+  const task = !agent
+    ? await create()
+    : await withApprovalRequestLock(async () => {
+        if ((await countOpenApprovalRequests()) >= MAX_WAITING_APPROVALS) {
+          throw new Error(
+            `${MAX_WAITING_APPROVALS} call requests are already waiting for the owner's approval, or were cancelled less than ` +
+              `${APPROVAL_WINDOW_MS / 60_000} minutes after they were asked for. Wait for one to be approved or for its window to end.`,
+          );
+        }
+        return create();
+      });
+
+  if (agent) {
+    const addressBookName = await addressBookNameFor(contact!);
+    const delivered = await sendOwnerMessage(buildApprovalMessage({ contact: { ...contact!, addressBookName }, task }));
+    if (!delivered) {
+      await cancelPendingTask(task.id);
+      throw new Error("Couldn't reach the owner for approval, so no call will be placed.");
+    }
+    return {
+      taskId: task.id,
+      ackMessage:
+        `Asked the owner to approve a call about "${input.taskDescription}". It will be placed once they approve, or ` +
+        `cancelled if they haven't by ${formatLocal(task.approvalExpiresAt!)} (${config.CALENDAR_TIMEZONE}). Check get_task_status.`,
+    };
+  }
+
+  const overridden = input.overrideCallCap ? `Call cap overridden (up to ${limit} calls in 24 hours). ` : '';
+  if (input.overrideCallCap) logger.warn({ taskId: task.id, contactId: input.contactId, limit }, 'owner overrode the call cap for this call');
 
   if (scheduledFor && scheduledFor.getTime() > Date.now()) {
     return {
       taskId: task.id,
-      ackMessage: `Scheduled a call about "${input.taskDescription}" for ${formatInCalendarTimezone(scheduledFor)} (${config.CALENDAR_TIMEZONE}). I'll let you know how it goes.`,
+      ackMessage: `${overridden}Scheduled a call about "${input.taskDescription}" for ${formatInCalendarTimezone(scheduledFor)} (${config.CALENDAR_TIMEZONE}). I'll let you know how it goes.`,
     };
   }
 
@@ -206,6 +274,6 @@ export async function placeCallHandler(input: z.infer<typeof placeCallInputSchem
 
   return {
     taskId: task.id,
-    ackMessage: `Started calling about "${input.taskDescription}". I'll let you know how it goes.`,
+    ackMessage: `${overridden}Started calling about "${input.taskDescription}". I'll let you know how it goes.`,
   };
 }

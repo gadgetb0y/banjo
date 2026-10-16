@@ -35,7 +35,7 @@ describe('sendPushover', () => {
   it('posts the token, user key, message, title and priority as a form', async () => {
     fetchMock.mockResolvedValueOnce(ok());
 
-    await pushover.sendPushover({ message: 'Booked with Luigi', title: 'Banjo: booked' });
+    await expect(pushover.sendPushover({ message: 'Booked with Luigi', title: 'Banjo: booked' })).resolves.toBe(true);
 
     expect(fetchMock.mock.calls[0]![0]).toBe('https://api.pushover.net/1/messages.json');
     expect(fetchMock.mock.calls[0]![1].method).toBe('POST');
@@ -61,7 +61,7 @@ describe('sendPushover', () => {
     const error = vi.spyOn(logger, 'error').mockImplementation(() => undefined as never);
     fetchMock.mockResolvedValueOnce(new Response(JSON.stringify({ status: 0, errors: ['user identifier is invalid'] }), { status: 400 }));
 
-    await expect(pushover.sendPushover({ message: 'hi' })).resolves.toBeUndefined();
+    await expect(pushover.sendPushover({ message: 'hi' })).resolves.toBe(false);
 
     expect(fetchMock).toHaveBeenCalledTimes(1);
     expect(error).toHaveBeenCalledWith(expect.objectContaining({ status: 400, errors: ['user identifier is invalid'] }), expect.any(String));
@@ -76,7 +76,7 @@ describe('sendPushover', () => {
     await vi.advanceTimersByTimeAsync(pushover.RETRY_DELAY_MS - 1);
     expect(fetchMock).toHaveBeenCalledTimes(1);
     await vi.advanceTimersByTimeAsync(1);
-    await sending;
+    await expect(sending).resolves.toBe(true);
 
     expect(fetchMock).toHaveBeenCalledTimes(2);
   });
@@ -88,7 +88,7 @@ describe('sendPushover', () => {
 
     const sending = pushover.sendPushover({ message: 'hi' });
     await vi.advanceTimersByTimeAsync(pushover.RETRY_DELAY_MS);
-    await expect(sending).resolves.toBeUndefined();
+    await expect(sending).resolves.toBe(false);
     expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 });
@@ -143,7 +143,7 @@ describe('with NOTIFICATION_CHANNEL=pushover', () => {
   it('sends direct messages to the owner through Pushover too', async () => {
     fetchMock.mockResolvedValue(ok());
 
-    await owner.sendOwnerMessage('Inbound call needs your attention', { urgent: true });
+    await expect(owner.sendOwnerMessage('Inbound call needs your attention', { urgent: true })).resolves.toBe(true);
 
     expect(sentForm().get('message')).toBe('Inbound call needs your attention');
     expect(sentForm().get('priority')).toBe('1');

@@ -1,4 +1,4 @@
-import { and, count, desc, eq, gte, inArray, isNull, lte, ne, or, sql } from 'drizzle-orm';
+import { and, count, desc, eq, gt, gte, inArray, isNotNull, isNull, lte, ne, or, sql } from 'drizzle-orm';
 import { db } from '../db/index.js';
 import { logger } from '../lib/logger.js';
 import {
@@ -36,6 +36,10 @@ export async function createTask(input: {
   questions?: string[];
   /** Phone path: place the call no earlier than this instant. Omit to call as soon as possible. */
   scheduledFor?: Date;
+  /** A call an agent asked for: not placed until the owner approves it, and cancelled if they haven't by then. */
+  approvalExpiresAt?: Date;
+  /** The owner let this call past the per-number cap, up to twice it (./callCap.ts). */
+  callCapOverride?: boolean;
 }): Promise<Task> {
   const [row] = await db
     .insert(tasks)
@@ -47,6 +51,8 @@ export async function createTask(input: {
       ...(input.mode ? { mode: input.mode } : {}),
       ...(input.questions ? { questions: input.questions } : {}),
       ...(input.scheduledFor ? { scheduledFor: input.scheduledFor } : {}),
+      ...(input.approvalExpiresAt ? { approvalExpiresAt: input.approvalExpiresAt } : {}),
+      ...(input.callCapOverride ? { callCapOverride: true } : {}),
     })
     .returning();
   if (!row) throw new Error('Failed to insert task');
@@ -72,8 +78,12 @@ function allowedFromStatuses(): Task['status'][] {
   return NON_TERMINAL_STATUSES;
 }
 
-/** transitionTask's compare-and-set: current status in `from`, and (optionally) the row unchanged since `ifUpdatedAt`. */
-export type TransitionGuard = { from: Task['status'][]; ifUpdatedAt?: Date };
+/**
+ * transitionTask's compare-and-set: current status in `from`, and (optionally) the row unchanged since `ifUpdatedAt`.
+ * `unapproved` also requires that the owner hasn't approved the task, so expiring an agent's request can't land
+ * after an approval.
+ */
+export type TransitionGuard = { from: Task['status'][]; ifUpdatedAt?: Date; unapproved?: true };
 
 type TransitionPatch = Partial<{
   candidateWindows: TimeWindow[];
@@ -130,6 +140,7 @@ export async function transitionTask(
         options?.ifUpdatedAt
           ? sql`date_trunc('milliseconds', ${tasks.updatedAt}) = ${options.ifUpdatedAt.toISOString()}::timestamptz`
           : undefined,
+        options?.unapproved ? isNull(tasks.approvedAt) : undefined,
       ),
     )
     .returning();
@@ -229,8 +240,60 @@ export async function listStartableTasks(now: Date = new Date()): Promise<Task[]
       and(
         inArray(tasks.status, ['pending', 'checking_availability']),
         or(isNull(tasks.scheduledFor), lte(tasks.scheduledFor, now)),
+        // An agent's request waits for the owner (isAwaitingApproval).
+        or(isNull(tasks.approvalExpiresAt), isNotNull(tasks.approvedAt)),
       ),
     );
+}
+
+/**
+ * The owner's Approve (src/approvals/routes.ts). Not a status change, so not
+ * transitionTask: a compare-and-set on approved_at. The expiry sweep's own
+ * compare-and-set (from pending, unapproved) conditions on the same row, so
+ * only one of them can win.
+ */
+export async function approveTask(
+  id: string,
+  now: Date = new Date(),
+): Promise<'approved' | 'already_approved' | 'expired' | 'not_waiting' | 'not_found'> {
+  const [row] = await db
+    .update(tasks)
+    .set({ approvedAt: now, updatedAt: sql`greatest(${now.toISOString()}::timestamptz, ${tasks.updatedAt} + interval '1 millisecond')` })
+    .where(and(eq(tasks.id, id), eq(tasks.status, 'pending'), isNull(tasks.approvedAt), gt(tasks.approvalExpiresAt, now)))
+    .returning({ id: tasks.id });
+  if (row) return 'approved';
+  const task = await getTask(id);
+  if (!task) return 'not_found';
+  if (task.approvedAt) return 'already_approved';
+  if (task.status === 'pending' && task.approvalExpiresAt && task.approvalExpiresAt <= now) return 'expired';
+  return 'not_waiting';
+}
+
+/** Cancels agent requests nobody approved in time; returns the ids it cancelled. Run by the orchestration poller. */
+export async function expireApprovalRequests(now: Date = new Date()): Promise<string[]> {
+  const due = await db
+    .select({ id: tasks.id })
+    .from(tasks)
+    .where(and(eq(tasks.status, 'pending'), isNull(tasks.approvedAt), lte(tasks.approvalExpiresAt, now)));
+  const cancelled: string[] = [];
+  for (const { id } of due) {
+    if (await transitionTask(id, 'cancelled', undefined, { from: ['pending'], unapproved: true })) cancelled.push(id);
+  }
+  return cancelled;
+}
+
+/**
+ * Agent requests the owner hasn't approved whose window is still open, in any
+ * status: place_call allows only a few at once. A request the agent cancelled
+ * keeps its slot until its window would have ended, so cancelling and asking
+ * again can't send the owner an endless run of messages.
+ */
+export async function countOpenApprovalRequests(now: Date = new Date()): Promise<number> {
+  const [row] = await db
+    .select({ count: count() })
+    .from(tasks)
+    .where(and(isNull(tasks.approvedAt), gt(tasks.approvalExpiresAt, now)));
+  return row?.count ?? 0;
 }
 
 /**
@@ -274,8 +337,37 @@ export async function withContactAdvisoryLock<T>(contactId: string, work: () => 
   });
 }
 
-/** Phone tasks for a contact that are due and about to dial but haven't yet — counted by place_call's cap check. */
-export async function dueQueuedCallsForContact(contactId: string, now: Date = new Date()): Promise<number> {
+let approvalRequestChain: Promise<unknown> = Promise.resolve();
+
+/**
+ * Runs `work` with no other agent call request between its waiting-limit
+ * check and its insert, so simultaneous requests can't all pass the check
+ * (place_call's MAX_WAITING_APPROVALS). Chained in-process first, so only one
+ * connection here waits on the advisory lock, which covers other processes.
+ */
+export async function withApprovalRequestLock<T>(work: () => Promise<T>): Promise<T> {
+  const run = approvalRequestChain
+    .catch(() => {})
+    .then(() =>
+      db.transaction(async (tx) => {
+        await tx.execute(sql`select pg_advisory_xact_lock(hashtext('approval-requests'))`);
+        return work();
+      }),
+    );
+  approvalRequestChain = run.catch(() => {});
+  return run;
+}
+
+/**
+ * Phone tasks for a contact that are due and about to dial but haven't yet — counted by place_call's cap check.
+ * `includeAwaitingApproval: false` leaves out agent requests the owner hasn't approved, so an agent's requests
+ * can't use up the owner's own calls to a number. The check before dialing still counts every call placed.
+ */
+export async function dueQueuedCallsForContact(
+  contactId: string,
+  now: Date = new Date(),
+  { includeAwaitingApproval = true }: { includeAwaitingApproval?: boolean } = {},
+): Promise<number> {
   const [row] = await db
     .select({ count: count() })
     .from(tasks)
@@ -285,6 +377,7 @@ export async function dueQueuedCallsForContact(contactId: string, now: Date = ne
         eq(tasks.channel, 'phone'),
         inArray(tasks.status, ['pending', 'checking_availability']),
         or(isNull(tasks.scheduledFor), lte(tasks.scheduledFor, now)),
+        includeAwaitingApproval ? undefined : or(isNull(tasks.approvalExpiresAt), isNotNull(tasks.approvedAt)),
       ),
     );
   return row?.count ?? 0;

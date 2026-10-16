@@ -4,13 +4,14 @@ import { getContact } from '../contacts/service.js';
 import { logger } from '../lib/logger.js';
 import { CallSession } from '../session/callSession.js';
 import { createTelephonyProvider } from '../telephony/factory.js';
-import { checkCallCap, describeCallCapRefusal, withContactDialLock } from './callCap.js';
+import { callCapLimit, checkCallCap, describeCallCapRefusal, withContactDialLock } from './callCap.js';
 import { buildOutboundCallSessionOptions, notifyTaskOutcome } from './callSessionAdapter.js';
 import { buildCallFrontendPrompt, buildCallSystemPrompt } from './promptBuilder.js';
 import { readOwnerProfile } from './ownerProfile.js';
 import { getLiveCall, registerLiveCall, unregisterLiveCall } from './liveCalls.js';
 import {
   createCallAttempt,
+  expireApprovalRequests,
   getTask,
   isTaskDue,
   latestCallAttemptFor,
@@ -21,6 +22,7 @@ import {
 } from './service.js';
 import type { TimeWindow } from './schema.js';
 import { modeRules } from './modes.js';
+import { isAwaitingApproval } from './approval.js';
 
 /** Asked for on each use rather than once at import, so the simulator's overrideCalendarProvider() (scripts/sim.ts) takes effect. */
 function getCalendar(): CalendarProvider {
@@ -61,6 +63,11 @@ async function runTask(taskId: string): Promise<void> {
   if (!isTaskDue(task)) {
     // Scheduled for later (place_call's scheduledFor). Left 'pending' — the
     // poller below starts it once it's due.
+    return;
+  }
+  if (isAwaitingApproval(task)) {
+    // An agent's request (MCP_AGENT_API_KEY): placed only once the owner
+    // approves it (src/approvals/), which runs this again.
     return;
   }
 
@@ -120,7 +127,7 @@ async function runTask(taskId: string): Promise<void> {
   // An early, unlocked look at the call cap, so a call that can't be placed
   // fails before spending a calendar lookup. The check that counts is the
   // locked one below.
-  const earlyCap = await checkCallCap(task.contactId, new Date());
+  const earlyCap = await checkCallCap(task.contactId, new Date(), { limit: callCapLimit(task) });
   if (!earlyCap.allowed) {
     await failOverCallCap(task.id, describeCallCapRefusal(earlyCap), stillOurs);
     return;
@@ -137,7 +144,7 @@ async function runTask(taskId: string): Promise<void> {
   // after other calls to the same number. Held under a per-contact lock until
   // the call attempt is recorded, so two due calls can't both pass the check.
   const dial = await withContactDialLock(task.contactId, async () => {
-    const cap = await checkCallCap(task.contactId, new Date());
+    const cap = await checkCallCap(task.contactId, new Date(), { limit: callCapLimit(task) });
     if (!cap.allowed) return { kind: 'refused', reason: describeCallCapRefusal(cap) } as const;
     const calling = await transitionTask(task.id, 'calling', { candidateWindows }, stillOurs);
     if (!calling) return { kind: 'stopped' } as const;
@@ -353,7 +360,8 @@ export async function sweepStaleCalls(): Promise<void> {
  *
  * It's also what starts a scheduled call (place_call's scheduledFor): a task
  * isn't picked up until isTaskDue, so it starts within POLL_INTERVAL_MS of
- * its scheduled time.
+ * its scheduled time. And it cancels the calls agents asked for that the owner
+ * didn't approve in time.
  */
 export function startOrchestrationPoller(): void {
   setInterval(() => {
@@ -364,5 +372,11 @@ export function startOrchestrationPoller(): void {
       .catch((err) => logger.error({ err }, 'Orchestration poller failed'));
 
     sweepStaleCalls().catch((err) => logger.error({ err }, 'Stale-call sweep failed'));
+
+    expireApprovalRequests()
+      .then((ids) => {
+        if (ids.length) logger.info({ taskIds: ids }, 'cancelled call requests the owner did not approve in time');
+      })
+      .catch((err) => logger.error({ err }, 'Approval expiry sweep failed'));
   }, POLL_INTERVAL_MS);
 }
