@@ -11,7 +11,8 @@ vi.mock('twilio', () => ({
 }));
 vi.mock('../../src/lib/logger.js', () => ({ logger: fakeLog, childLogger: () => fakeLog }));
 
-const { TwilioSmsNotificationChannel, DELIVERY_CHECK_DELAY_MS } = await import('../../src/notifications/twilioSms.js');
+const { TwilioSmsNotificationChannel, DELIVERY_CHECK_DELAY_MS, sendOwnerSms } = await import('../../src/notifications/twilioSms.js');
+const { config } = await import('../../src/config/index.js');
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -67,5 +68,21 @@ describe('SMS length', () => {
     const body = (create.mock.calls[0] as unknown as [{ body: string }])[0].body;
     expect(body).toHaveLength(1600);
     expect(body.endsWith('…')).toBe(true);
+  });
+});
+
+describe('sendOwnerSms reports whether Twilio took the message', () => {
+  it('true when Twilio accepted it, false when it refused or SMS is not the channel', async () => {
+    const original = config.NOTIFICATION_CHANNEL;
+    config.NOTIFICATION_CHANNEL = 'twilio_sms';
+    try {
+      expect(await sendOwnerSms('Approve a call?')).toBe(true);
+      create.mockRejectedValueOnce(new Error('21211 invalid To'));
+      expect(await sendOwnerSms('Approve a call?')).toBe(false);
+      config.NOTIFICATION_CHANNEL = 'none';
+      expect(await sendOwnerSms('Approve a call?')).toBe(false);
+    } finally {
+      config.NOTIFICATION_CHANNEL = original;
+    }
   });
 });

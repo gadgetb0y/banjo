@@ -50,12 +50,12 @@ async function attempt(body: URLSearchParams): Promise<Attempt> {
 }
 
 /**
- * Sends one Pushover notification. Never throws: a notification problem
+ * Sends one Pushover notification, resolving whether Pushover accepted it. Never throws: a notification problem
  * must not reach the call. Retries once after RETRY_DELAY_MS on a network
  * error or 5xx, per Pushover's API guidance; a 4xx is a configuration
  * problem and is logged, not retried.
  */
-export async function sendPushover(msg: PushoverMessage, logContext: Record<string, unknown> = {}): Promise<void> {
+export async function sendPushover(msg: PushoverMessage, logContext: Record<string, unknown> = {}): Promise<boolean> {
   const body = formBody(msg);
   let result = await attempt(body);
   if (!result.ok && result.retryable) {
@@ -63,6 +63,7 @@ export async function sendPushover(msg: PushoverMessage, logContext: Record<stri
     result = await attempt(body);
   }
   if (!result.ok) logger.error({ ...logContext, ...result.detail }, 'Failed to send Pushover notification');
+  return result.ok;
 }
 
 const TITLES: Record<TaskOutcome['kind'], string> = {

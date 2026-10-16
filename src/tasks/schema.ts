@@ -90,6 +90,14 @@ export const tasks = pgTable('tasks', {
   // Phone path: the orchestrator won't place the call before this instant
   // (see isTaskDue in ./service.ts). Null means call as soon as possible.
   scheduledFor: timestamp('scheduled_for', { withTimezone: true }),
+  // Set only on a call an agent asked for (MCP_AGENT_API_KEY): it isn't
+  // placed until the owner approves it from the signed link (src/approvals/),
+  // and the orchestrator's poller cancels it once this passes unapproved.
+  approvalExpiresAt: timestamp('approval_expires_at', { withTimezone: true }),
+  approvedAt: timestamp('approved_at', { withTimezone: true }),
+  // The owner let this call past MAX_CALLS_PER_NUMBER_PER_DAY, up to twice it
+  // (tasks/callCap.ts): their own number or family only, never from the agent key.
+  callCapOverride: boolean('call_cap_override').notNull().default(false),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
 });

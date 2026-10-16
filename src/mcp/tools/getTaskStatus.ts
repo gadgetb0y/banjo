@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { collectedAnswersFor } from '../../tasks/answers.js';
 import type { TaskAnswer } from '../../tasks/schema.js';
+import { approvalState } from '../../tasks/approval.js';
 import { getTask } from '../../tasks/service.js';
 import { modeRules } from '../../tasks/modes.js';
 
@@ -25,6 +26,12 @@ export type GetTaskStatusResult =
        * the call, so data, like the outcome's free text.
        */
       collectedAnswers?: TaskAnswer[];
+      /**
+       * Only on a call an agent asked for (MCP_AGENT_API_KEY): 'waiting' for
+       * the owner to approve it, 'approved', or 'not_approved' (cancelled
+       * before approval: it expired or someone cancelled it).
+       */
+      approval?: 'waiting' | 'approved' | 'not_approved';
     }
   | {
       found: false;
@@ -43,5 +50,11 @@ export async function getTaskStatusHandler(input: z.infer<typeof getTaskStatusIn
     updatedAt: task.updatedAt.toISOString(),
     scheduledFor: task.scheduledFor?.toISOString() ?? null,
     ...(modeRules(task).asks ? { collectedAnswers: collectedAnswersFor(task) } : {}),
+    ...withApproval(task),
   };
+}
+
+function withApproval(task: Parameters<typeof approvalState>[0]): { approval?: 'waiting' | 'approved' | 'not_approved' } {
+  const approval = approvalState(task);
+  return approval ? { approval } : {};
 }

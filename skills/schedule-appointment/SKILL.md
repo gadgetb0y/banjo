@@ -110,6 +110,13 @@ answers lead to a booking, that's a second request.
   set up), and that they can ask "how did that go?" later and you'll check `get_task_status` or
   `list_recent_tasks`.
 - Do not block or poll waiting for the outcome.
+- If `ackMessage` says the call is waiting for the principal's approval, tell them to approve it from
+  the message Banjo sent them. It won't be placed until they do, and it's cancelled after 30 minutes.
+
+**Call limit.** Banjo places at most a few calls to one number a day and refuses more. Only when the
+principal is testing calls to themselves or a family member, and has said yes in this conversation to
+going past the limit for that contact, pass `overrideCallCap: true`. Tell them first how many calls that
+contact has had today. Never set it on your own initiative, and never for anyone else.
 
 ## 6. Status checks
 

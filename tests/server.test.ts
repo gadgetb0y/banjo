@@ -555,3 +555,12 @@ describe('transfer screening routes (#74)', () => {
     },
   );
 });
+
+describe('the request log', () => {
+  it("never writes an approval link's signature", async () => {
+    await app.request('/health?sig=' + 'a'.repeat(64) + '&x=1');
+    const logged = fakeLog.info.mock.calls.find((call) => (call as unknown[])[1] === 'http request') as unknown[] | undefined;
+    expect(logged?.[0]).toMatchObject({ path: '/health', query: { sig: '[redacted]', x: '1' } });
+    expect(JSON.stringify(fakeLog.info.mock.calls)).not.toContain('a'.repeat(64));
+  });
+});

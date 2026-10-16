@@ -1,4 +1,4 @@
-import { ilike, sql } from 'drizzle-orm';
+import { and, eq, ilike, sql } from 'drizzle-orm';
 import { syncCardDavContacts } from '../carddavContacts/sync.js';
 import { config } from '../config/index.js';
 import { db } from '../db/index.js';
@@ -6,6 +6,7 @@ import { withTimeout as raceWithTimeout } from '../lib/withTimeout.js';
 import { logGoogleContactsError } from './googleApiErrors.js';
 import { fetchGroupLabels, upsertGoogleContact } from './sync.js';
 import { createPeopleClient } from './googlePeopleClient.js';
+import type { Contact } from '../contacts/schema.js';
 import { googleContacts, type GoogleContact } from './schema.js';
 
 export interface GoogleContactMatch {
@@ -147,4 +148,26 @@ export async function findByName(query: string, timeoutMs = OUTBOUND_LOOKUP_TIME
   if (config.CONTACTS_PROVIDER === 'carddav') return (await withTimeout(refreshThen(() => findCachedByName(query)), timeoutMs)) ?? [];
   const live = await withTimeout(liveSearch(query), timeoutMs);
   return live ?? [];
+}
+
+/**
+ * The address book's own name for a contact linked to it, from the cache
+ * only: the name the owner's approval page can vouch for (src/approvals/).
+ * A linked contact can keep a name typed in through add_contact, since
+ * reconcile.ts never overwrites displayName, so that name isn't vouched for.
+ * Undefined unless the cached entry still has the contact's number.
+ */
+export async function addressBookNameFor(contact: Pick<Contact, 'googleResourceName' | 'phoneNumber'>): Promise<string | undefined> {
+  if (!contact.googleResourceName) return undefined;
+  const [row] = await db
+    .select({ displayName: googleContacts.displayName })
+    .from(googleContacts)
+    .where(
+      and(
+        eq(googleContacts.googleResourceName, contact.googleResourceName),
+        sql`${googleContacts.phoneNumbers} @> ${JSON.stringify([{ e164: contact.phoneNumber }])}::jsonb`,
+      ),
+    )
+    .limit(1);
+  return row?.displayName;
 }

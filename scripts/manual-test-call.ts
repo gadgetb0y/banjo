@@ -132,7 +132,7 @@ async function main() {
   const contactId = await resolveContactId(values);
 
   // The same handler as place_call, so the per-number call cap applies.
-  const { taskId, ackMessage } = await placeCallHandler({ contactId, ...input });
+  const { taskId, ackMessage } = await placeCallHandler({ contactId, ...input }, { role: 'owner' });
 
   console.log(`\nTask created: ${taskId}`);
   console.log(`${ackMessage}\n`);

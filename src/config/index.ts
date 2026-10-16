@@ -238,6 +238,10 @@ const envSchema = z
     MCP_API_KEY: z
       .string()
       .min(32, 'MCP_API_KEY must be at least 32 characters — the MCP endpoint is internet-reachable'),
+    // A second key for always-on agents (Hermes, OpenClaw). A call placed
+    // with it waits for the owner to approve it from a signed link
+    // (src/approvals/). Unset: there's no agent role.
+    MCP_AGENT_API_KEY: optionalSetting(z.string().min(32, 'MCP_AGENT_API_KEY must be at least 32 characters')),
 
     TOOL_TIMEOUT_MS: z.coerce.number().int().positive().default(8000),
 
@@ -404,6 +408,18 @@ const envSchema = z
   .refine((v) => !v.TASK_WEBHOOK_URL || !!v.TASK_WEBHOOK_SECRET, {
     message: 'TASK_WEBHOOK_SECRET is required when TASK_WEBHOOK_URL is set',
     path: ['TASK_WEBHOOK_SECRET'],
+  })
+  .refine((v) => !v.MCP_AGENT_API_KEY || v.MCP_AGENT_API_KEY !== v.MCP_API_KEY, {
+    message: 'MCP_AGENT_API_KEY must differ from MCP_API_KEY: the agent key is what makes a call wait for approval',
+    path: ['MCP_AGENT_API_KEY'],
+  })
+  .refine((v) => !v.MCP_AGENT_API_KEY || !!v.PUBLIC_HOSTNAME, {
+    message: 'PUBLIC_HOSTNAME is required when MCP_AGENT_API_KEY is set: approval links point at it',
+    path: ['PUBLIC_HOSTNAME'],
+  })
+  .refine((v) => !v.MCP_AGENT_API_KEY || v.NOTIFICATION_CHANNEL !== 'none', {
+    message: "NOTIFICATION_CHANNEL can't be none when MCP_AGENT_API_KEY is set: approval requests go to the owner through it",
+    path: ['NOTIFICATION_CHANNEL'],
   })
   .refine((v) => !v.TRANSFER_ENABLED || !!v.TRANSFER_TO_PHONE_NUMBER, {
     message: 'TRANSFER_TO_PHONE_NUMBER is required when TRANSFER_ENABLED=true',

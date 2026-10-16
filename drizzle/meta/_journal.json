@@ -50,6 +50,13 @@
       "when": 1791931535754,
       "tag": "0006_chief_thunderbolts",
       "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1792030205121,
+      "tag": "0007_freezing_scourge",
+      "breakpoints": true
     }
   ]
 }
