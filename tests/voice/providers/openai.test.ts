@@ -293,6 +293,72 @@ describe("OpenAIRealtimeProvider.sendToolResult, respond: 'if-silent' (#148 revi
   });
 });
 
+describe('OpenAIRealtimeProvider.sendToolResult while another response is open', () => {
+  // Sim warm-transfer runs: the other party spoke while the transfer was
+  // pending, so a reply to them was open when the "owner declined" result
+  // arrived. Its response.create was rejected (conversation_already_has_active_response)
+  // and the result never got a reply: Banjo said the stale "I'm still trying
+  // to reach Steve." and then nothing until they spoke again.
+  async function openProvider() {
+    const provider = new OpenAIRealtimeProvider();
+    const connectPromise = provider.connect(sessionConfig);
+    const ws = wsInstances[wsInstances.length - 1]!;
+    ws.readyState = FakeWs.OPEN;
+    ws.emit('open');
+    await connectPromise;
+    ws.sent = [];
+    const server = (msg: Record<string, unknown>) => ws.emit('message', Buffer.from(JSON.stringify(msg)));
+    const events: VoiceAIEvent[] = [];
+    provider.on('event', (event) => events.push(event));
+    return { provider, ws, server, events };
+  }
+
+  it('waits for the open response to finish before prompting a reply to the result', async () => {
+    const { provider, ws, server } = await openProvider();
+    server({ type: 'response.created', response: { id: 'resp-reply' } });
+    provider.sendToolResult('call-1', { ok: false, error: 'owner_unavailable' }, true);
+    expect(sentTypes(ws)).toEqual(['conversation.item.create']);
+    server({ type: 'response.done', response: { id: 'resp-reply', output: [] } });
+    expect(sentTypes(ws)).toEqual(['conversation.item.create', 'response.create']);
+  });
+
+  it('prompts once, however many results were waiting', async () => {
+    const { provider, ws, server } = await openProvider();
+    server({ type: 'response.created', response: { id: 'resp-reply' } });
+    provider.sendToolResult('call-1', { ok: true });
+    provider.sendToolResult('call-2', { ok: true });
+    server({ type: 'response.done', response: { id: 'resp-reply', output: [] } });
+    expect(sentTypes(ws).filter((t) => t === 'response.create')).toHaveLength(1);
+  });
+
+  it("re-sends a result's prompt the server rejected because a response had just started", async () => {
+    const { provider, ws, server, events } = await openProvider();
+    provider.sendToolResult('call-1', { ok: true });
+    const create = ws.sent.map((m) => JSON.parse(m)).find((m) => m.type === 'response.create');
+    expect(create.event_id).toEqual(expect.any(String));
+    server({ type: 'response.created', response: { id: 'resp-reply' } });
+    server({ type: 'error', error: { code: 'conversation_already_has_active_response', message: 'busy', event_id: create.event_id } });
+    ws.sent = [];
+    server({ type: 'response.done', response: { id: 'resp-reply', output: [] } });
+
+    expect(sentTypes(ws)).toEqual(['response.create']);
+    // Handled here, so it isn't reported as an error.
+    expect(events.filter((e) => e.type === 'error')).toEqual([]);
+  });
+
+  it("doesn't re-send someone else's rejected prompt", async () => {
+    const { provider, ws, server, events } = await openProvider();
+    provider.triggerResponse();
+    server({ type: 'response.created', response: { id: 'resp-reply' } });
+    server({ type: 'error', error: { code: 'conversation_already_has_active_response', message: 'busy' } });
+    ws.sent = [];
+    server({ type: 'response.done', response: { id: 'resp-reply', output: [] } });
+
+    expect(sentTypes(ws)).toEqual([]);
+    expect(events.filter((e) => e.type === 'error')).toHaveLength(1);
+  });
+});
+
 // The simulator (scripts/sim.ts, ROADMAP 4.5): same adapter, text in and out.
 describe('OpenAIRealtimeProvider: text-only mode', () => {
   async function open(options?: { textOnly?: boolean }) {

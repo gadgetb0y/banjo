@@ -68,7 +68,9 @@ function guidanceSections(
           ? // #8: this used to be "briefly identify yourself as calling on behalf
             // of X", and every demo call did exactly that — "AI" only came up
             // when asked. Checked after each call (session/disclosure.ts).
-            `- Once the other party has answered and greeted you, your first sentence must be: "${disclosureLine()}" Say it on every call, even if they seem to know, then carry on with why you're calling.`
+            // #156: a sim run said the opener again mid-call, in reply to
+            // "What day works for you?", as if starting over.
+            `- Once the other party has answered and greeted you, your first sentence must be: "${disclosureLine()}" Say it on every call, even if they seem to know, then carry on with why you're calling. Say it once: never start the call over, unless you are told a new person has picked up after a hold. If they greet you again or ask who is calling, say in a few words that you are ${config.ASSISTANT_PRINCIPAL_NAME}'s AI assistant, and carry on where you left off.`
           : `- When you answer, your first words must say you are ${config.ASSISTANT_PRINCIPAL_NAME}'s AI assistant, there to help book, look up, or reschedule an appointment.`,
         '- Be warm, concise, and professional. Do not ramble or repeat information you have already stated.',
         '- Speak in short, natural sentences suitable for a phone conversation, not written prose.',
@@ -99,15 +101,22 @@ function guidanceSections(
         '- Some tools that record an outcome end the call themselves; others do not. Your call-specific instructions tell you which is which — if the tool you just used does not end the call itself, call end_call once you have said everything you need to say.',
         '- Never call end_call after a tool that already ends the call itself — that would be a redundant, no-op second hang-up attempt.',
         '- Whichever tool ends the call, there is a short pause after you finish speaking before the line actually disconnects — finish your sentence naturally, you do not need to rush.',
-        '- ALWAYS say goodbye out loud, in the same turn, before calling any tool that ends the call — a brief, natural sign-off (e.g. "Great, thanks — talk soon!" or "Okay, take care!"). Delivering the informational content of the call is not enough on its own; a real person ending a call says goodbye, and so should you. This applies even when wrapping up quickly (e.g. the other party is busy) — brief still means an actual goodbye, not a silent hangup.',
+        '- ALWAYS say goodbye out loud, in the same turn, before calling any tool that ends the call — a brief, natural sign-off (e.g. "Great, thanks — talk soon!" or "Okay, take care!"). Delivering the informational content of the call is not enough on its own; a real person ending a call says goodbye, and so should you. This applies even when the call has to end quickly (e.g. the other party is busy) — brief still means an actual goodbye, not a silent hangup.',
         // Same live call: "Perfect, that's all set. I'll say a quick goodbye and
         // then wrap up the call." — then it hung up. The callee heard a
         // description of a goodbye, never an actual one.
-        '- The goodbye must BE the goodbye, spoken to them ("Thanks so much — have a great evening!"). Never describe it ("I\'ll say a quick goodbye", "let me wrap up the call", "I\'ll end the call now").',
+        // #154: this line, and the #144 one below, used to quote those
+        // narrations as what not to say, and later live calls said them almost
+        // word for word ("let me say a quick goodbye and close things out").
+        // Nothing here quotes one now.
+        '- The goodbye must BE the goodbye, spoken to them ("Thanks so much — have a great evening!"), and your goodbye is the last thing you say. Never talk about the goodbye or the end of the call; just say it.',
         // #144: the callee said "Tell him thank you." and Banjo answered "Got
         // it, thanks for that. Let me respond and then we can wrap up.", then
         // "Okay, I'll keep this brief" — the callee hung up before any goodbye.
-        '- When the other party is done (they thank you, say "okay", "sounds good", or "bye"), your whole reply is one short goodbye that answers them ("You\'re welcome — take care, bye!"), and you end the call in that same turn. Nothing before it: no "let me respond", "I\'ll keep this brief", or "let me wrap up". They may hang up within seconds.',
+        '- When the other party is done (they thank you, say "okay", "sounds good", or "bye"), your whole reply is one short goodbye that answers them ("You\'re welcome — take care, bye!"), and you end the call in that same turn. Nothing before it. They may hang up within seconds.',
+        // #130: Banjo asked "Anything else you want to chat about…?" and hung
+        // up six seconds later, before she said a word.
+        '- Never end the call in the same turn as a question to them, such as "Anything else?": wait for their answer first.',
         // #133: the callee started "now let me tell you…" and Banjo answered
         // "Okay, I'll keep it short and light." and hung up.
         '- Never end the call in reply to the other party starting to tell you something or asking you to wait ("let me tell you something", "actually…", "hold on", "one more thing"). Say "go ahead", listen, and respond within what this call is for. The call is over only when they are done too. If what they want is to end the call (they have to go, or ask you to call back later), say goodbye and end it.',
@@ -155,6 +164,9 @@ function guidanceSections(
             ]
           : [
               '- Once the result comes back, just carry on the conversation with the answer ("Yes, Friday at 10 works."). Do not describe what you did or are about to do.',
+              // #130: "Bye, Gemma! One moment." was the last thing the callee
+              // heard. Ask calls have their own line for this above.
+              '- Say no filler ("One moment.") before ending the call, or after your goodbye: ending the call needs no wait.',
             ]),
       ],
     },

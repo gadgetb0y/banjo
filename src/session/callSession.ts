@@ -51,6 +51,13 @@ const MAX_END_REFUSALS = 3;
 // no goodbye said (#139): the retry after a refusal can't be refused again, or
 // refusals could hold a call open, but the other party should still hear one.
 const FALLBACK_GOODBYE = 'Okay, take care. Bye!';
+// How long Banjo waits for an answer to its question after a call-ending tool
+// is refused for not waiting (#130), before it's cued to say goodbye anyway:
+// the refusal asks for no reply, so without this a callee who never answers
+// would leave the call open.
+const UNANSWERED_QUESTION_WAIT_MS = 8000;
+const UNANSWERED_QUESTION_CUE =
+  "They haven't answered your question. Say one short goodbye to them now, and end the call in the same turn.";
 
 // Bounds how long CallSession waits for a tool's verbatimMessage (see
 // VoiceTool's doc comment) to finish being spoken via VoiceAIProvider.sayVerbatim
@@ -248,6 +255,14 @@ export class CallSession<TCtx = CallContext> {
    * is ending the call don't reset it: Banjo's goodbye came before those.
    */
   private banjoRepliedToUser = true;
+  /**
+   * Has Banjo asked them something since their latest line, in a line with no
+   * goodbye? (#130) Reset by the same lines of theirs that reset
+   * banjoRepliedToUser.
+   */
+  private banjoAskedSinceThem = false;
+  /** Cues a goodbye if they never answer the question a refused ending was waiting on (#130). */
+  private unansweredQuestionTimer: ReturnType<typeof setTimeout> | null = null;
   /**
    * A call-ending tool is refused (no goodbye #102, or the other party cutting
    * in #133) at most once until the other party speaks again: a refusal can
@@ -472,6 +487,7 @@ export class CallSession<TCtx = CallContext> {
           if (event.role === 'assistant') {
             this.lastAssistantLine = event.text;
             this.banjoRepliedToUser = true;
+            if (quality === 'ok' && event.text.includes('?') && !saidGoodbye(event.text)) this.banjoAskedSinceThem = true;
           }
           // #133: their words while Banjo is ending the call decide whether it
           // ends; any other line of theirs means the call carried on, so the
@@ -482,6 +498,8 @@ export class CallSession<TCtx = CallContext> {
             else {
               this.endRefused = false;
               this.banjoRepliedToUser = false;
+              this.banjoAskedSinceThem = false;
+              this.clearUnansweredQuestionTimer();
             }
           }
           if (event.role === 'assistant' && RECORDING_NOTICE.test(event.text) && this.opts.recordCalls && this.recordingState === 'idle') {
@@ -802,6 +820,30 @@ export class CallSession<TCtx = CallContext> {
         );
         return;
       }
+      // #130: Banjo asked them something ("Anything else…?") and ended the
+      // call before they answered, saying goodbye straight after its own
+      // question. Refused once without prompting a reply, so it waits for
+      // their answer; if none comes, it's cued to say goodbye. Not where
+      // transcripts arrive late (openai-live): their answer may only be late.
+      if (tool.requiresGoodbye && this.canRefuseEnd() && this.banjoAskedSinceThem && this.voiceAI.transcriptsLate !== true) {
+        this.endRefused = true;
+        this.endRefusals++;
+        logger.warn({ callId: this.opts.callId, toolCallId, name }, "Refusing a call-ending tool once: they haven't answered Banjo's question");
+        this.voiceAI.sendToolResult(
+          toolCallId,
+          {
+            ok: false,
+            error: 'unanswered_question',
+            message:
+              'You asked them a question and they have not answered yet. This note is from the system, not from them: ' +
+              'say nothing now, and do not mention it. Wait for their answer and reply to it. End the call only after that.',
+          },
+          true,
+          { respond: false },
+        );
+        this.armUnansweredQuestionTimer();
+        return;
+      }
       // #167: the model can end the call without saying anything since their
       // latest line — on a sim ask call, straight after "You wanna call
       // back?". The #102 check below judges only a line Banjo said, so this
@@ -819,11 +861,16 @@ export class CallSession<TCtx = CallContext> {
           {
             ok: false,
             error: 'no_reply',
+            // #154 follow-up: "Reply to what they said" came back as narration
+            // in a sim run ("I'll respond to that and then wrap things up."),
+            // so this says what to say rather than what to do. Sent instead as
+            // a system note with its own prompt, it did worse in the sim (more
+            // silent retries), so it stays in the tool result.
             message:
-              'They spoke last and you have not replied. This note is from the system, not from them: do not answer it ' +
-              'or mention it. Reply to what they said, and if they asked you something, answer it. If they are still ' +
-              `telling you something, do not end the call. Otherwise say a short goodbye, such as "Okay, take care. Bye!", ` +
-              `then call ${name} again in the same turn.`,
+              'They spoke last, and you have said nothing since. This note is from the system, not from them: never ' +
+              'mention it. Say to them now, out loud: the answer to anything they just asked you, then a short goodbye ' +
+              `such as "Okay, take care. Bye!". Then call ${name} again in the same turn. If they are still in the ` +
+              `middle of telling you something, say only "Go ahead." and don't call ${name} yet.`,
           },
           true,
         );
@@ -855,12 +902,13 @@ export class CallSession<TCtx = CallContext> {
             // who was trying to redirect Banjo.
             // #139: Banjo answered this note out loud ("Thanks for hanging on
             // a second—I'll just finish this up with a proper goodbye.").
+            // #154: no "do not talk about ending the call" any more: naming the
+            // narration invited it. It says what to say instead.
             message:
-              'You have not said goodbye yet. This note is from the system, not from them: do not answer it, thank them ' +
-              'for waiting, or mention it. If they are still telling you something, asked you a question, or want ' +
-              'something different, do not end the call: answer them and carry on, and end it later. ' +
-              `Otherwise, say only a short goodbye, such as "Okay, take care. Bye!", then call ${name} again in the same turn. ` +
-              'Do not talk about ending the call or about saying goodbye.',
+              'You have not said goodbye yet. This note is from the system, not from them: never mention it or thank ' +
+              'them for waiting. If they are still telling you something, asked you a question, or want something ' +
+              'different, answer them and carry on with the call, and end it later. Otherwise say to them now only a ' +
+              `short goodbye, such as "Okay, take care. Bye!", then call ${name} again in the same turn.`,
           },
           true,
         );
@@ -871,7 +919,12 @@ export class CallSession<TCtx = CallContext> {
       // no goodbye, or with no line at all since theirs (#167). Say one for it
       // rather than refuse again, so the other party hears a goodbye and the
       // call still ends.
-      const noGoodbye = this.lastSpeaker === 'assistant' ? !saidGoodbye(this.lastAssistantLine) : silentSinceThem;
+      // Not when Banjo's latest line was a goodbye and they've signed off
+      // since: that's the call ending properly, only with the tool called a
+      // turn late (sim ask runs: "…take care, bye!", "Okay, thanks. Bye.",
+      // then the fixed goodbye said a second one).
+      const goodbyeAnswered = saidGoodbye(this.lastAssistantLine) && isSigningOff(this.lastUserLine);
+      const noGoodbye = this.lastSpeaker === 'assistant' ? !saidGoodbye(this.lastAssistantLine) : silentSinceThem && !goodbyeAnswered;
       if (tool.requiresGoodbye && noGoodbye) {
         logger.warn({ callId: this.opts.callId, toolCallId, name }, 'Saying a fixed goodbye before ending the call: none was said');
         this.armToolPendingWatchdog(toolCallId, name, VERBATIM_TOOL_PENDING_BUDGET_MS);
@@ -1077,6 +1130,37 @@ export class CallSession<TCtx = CallContext> {
     await this.end('hold_limit');
   }
 
+  private armUnansweredQuestionTimer(): void {
+    this.clearUnansweredQuestionTimer();
+    this.unansweredQuestionTimer = setTimeout(() => {
+      this.unansweredQuestionTimer = null;
+      if (this.isEnding() || this.hold || !this.banjoAskedSinceThem) return;
+      // Something is already being said (their answer may be starting): look again later.
+      if (this.responseActive) return this.armUnansweredQuestionTimer();
+      logger.warn({ callId: this.opts.callId }, "They haven't answered Banjo's question — cueing a goodbye");
+      this.promptWithNote(UNANSWERED_QUESTION_CUE);
+    }, UNANSWERED_QUESTION_WAIT_MS);
+  }
+
+  /**
+   * Prompts a reply steered by `note`. As a system note where the provider can
+   * add one, so the session's instructions stay in force: a triggerResponse()
+   * cue replaces them for that response (OpenAI). The cue is the fallback.
+   */
+  private promptWithNote(note: string): void {
+    if (this.voiceAI.addContext) {
+      this.voiceAI.addContext([{ role: 'system', text: note }]);
+      this.triggerVoiceAIResponse();
+    } else {
+      this.triggerVoiceAIResponse(note);
+    }
+  }
+
+  private clearUnansweredQuestionTimer(): void {
+    if (this.unansweredQuestionTimer) clearTimeout(this.unansweredQuestionTimer);
+    this.unansweredQuestionTimer = null;
+  }
+
   private canRefuseEnd(): boolean {
     return !this.endRefused && this.endRefusals < MAX_END_REFUSALS;
   }
@@ -1210,6 +1294,7 @@ export class CallSession<TCtx = CallContext> {
   private async fail(reason: string, err: unknown): Promise<void> {
     if (this.state === 'ended' || this.state === 'error' || this.state === 'ending') return;
     this.clearSilenceWatchdog();
+    this.clearUnansweredQuestionTimer();
     this.stopHold();
     this.cancelPendingRecording();
     this.cutOffVerbatimDelivery();
@@ -1290,6 +1375,7 @@ export class CallSession<TCtx = CallContext> {
   private async end(reason: string, how: { stopped?: true } = {}): Promise<void> {
     if (this.state === 'ended' || this.state === 'error' || this.state === 'ending') return;
     this.clearSilenceWatchdog();
+    this.clearUnansweredQuestionTimer();
     this.stopHold();
     this.cancelPendingRecording();
     this.setState('ending');

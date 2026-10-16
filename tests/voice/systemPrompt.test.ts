@@ -37,6 +37,17 @@ describe('buildBaseSystemPromptGuidance', () => {
     expect(prompt).toMatch(/every call, even if they seem to know/i);
   });
 
+  // #156: a sim transfer run said the disclosure opener again mid-call, as if
+  // starting over. Once at the start; "who is this?" still gets an honest answer.
+  it("direction='outbound': the disclosure is said once, and a later greeting gets a short honest answer, not a new opener (#156)", () => {
+    for (const prompt of [buildBaseSystemPromptGuidance('outbound'), buildFrontendSystemPromptGuidance('outbound')]) {
+      expect(prompt).toMatch(/say it once/i);
+      // The hold flow (#151) opens again, disclosure first, to whoever picks up.
+      expect(prompt).toMatch(/say it once[^\n]*unless you are told a new person has picked up after a hold/i);
+      expect(prompt).toMatch(/greet you again or ask who is calling[^\n]*AI assistant/i);
+    }
+  });
+
   it("direction='inbound' opens by saying it's Alex's AI assistant, and doesn't say it is calling", () => {
     const prompt = buildBaseSystemPromptGuidance('inbound');
     expect(prompt).toMatch(/first words must say you are Alex's AI assistant/);
@@ -174,12 +185,12 @@ describe('the goodbye is said, not announced', () => {
   // hung up. The callee never heard a goodbye, only a description of one.
   it('tells the model the goodbye must be the goodbye itself', () => {
     const prompt = buildBaseSystemPromptGuidance('outbound');
-    expect(prompt).toMatch(/never describe it/i);
-    expect(prompt).toContain("I'll say a quick goodbye");
+    expect(prompt).toMatch(/The goodbye must BE the goodbye/);
+    expect(prompt).toMatch(/never talk about the goodbye/i);
   });
 
   it('carries that into the voice layer', () => {
-    expect(buildFrontendSystemPromptGuidance('outbound')).toMatch(/never describe it/i);
+    expect(buildFrontendSystemPromptGuidance('outbound')).toMatch(/never talk about the goodbye/i);
   });
 
   // #144: "Tell him thank you." got two narrating lines, and the callee hung up first.
@@ -187,9 +198,36 @@ describe('the goodbye is said, not announced', () => {
     for (const prompt of [buildBaseSystemPromptGuidance('outbound'), buildFrontendSystemPromptGuidance('outbound')]) {
       expect(prompt).toContain('When the other party is done');
       expect(prompt).toContain("You're welcome — take care, bye!");
-      expect(prompt).toContain("I'll keep this brief");
+      expect(prompt).toMatch(/nothing before it/i);
     }
   });
+
+  // #154: after v0.1.8 a live call still narrated ("Let me wrap up with a quick
+  // note.", "let me say a quick goodbye and close things out"), in the words
+  // the prompt quoted as what not to say. It quotes none now.
+  for (const build of [buildBaseSystemPromptGuidance, buildFrontendSystemPromptGuidance]) {
+    for (const [label, direction, options] of [
+      ['booking', 'outbound', {}],
+      ['ask', 'outbound', { purpose: 'ask' }],
+      ['inbound', 'inbound', {}],
+    ] as const) {
+      it(`${build.name} (${label}): quotes no narrated ending for the model to copy`, () => {
+        expect(build(direction, options)).not.toMatch(/wrap(ping)? up|quick goodbye|keep this brief|let me respond|end the call now/i);
+      });
+    }
+
+    // #130: "Bye, Gemma! One moment." was the last thing the callee heard.
+    it(`${build.name}: no filler before ending the call or after the goodbye, on a booking call too`, () => {
+      const prompt = build('outbound');
+      expect(prompt).toMatch(/no filler[^\n]*before ending the call/i);
+      expect(prompt).toMatch(/goodbye is the last thing you say/i);
+    });
+
+    // #130: Banjo asked "Anything else…?" and hung up without an answer.
+    it(`${build.name}: never ends the call in the same turn as a question to them`, () => {
+      expect(build('outbound')).toMatch(/never end the call in the same turn as a question/i);
+    });
+  }
 });
 
 describe('the call stays open while the other party is redirecting it (#133)', () => {
