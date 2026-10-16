@@ -760,6 +760,10 @@ The LiveKit `TelephonyProvider` adapter (`src/telephony/providers/livekit.ts` â€
 
     **Still not done:** live calls covering a question before the goodbye, an ending after a booking, and the end of an ask call.
 
+32. **[FIXED, not yet re-verified against a live call]** A voicemail left blank (#177). On a live call (2026-10-15, v0.1.12), the first `leave_voicemail_and_end_call` arrived with its arguments cut off at 200 characters, most likely because server VAD cancelled the response on the beep. The model sent it again, as designed. The retry's `sayVerbatim()` `response.create` then hit `conversation_already_has_active_response`, because another response was open. Nothing re-sent it, and `deliverVerbatim()` took that other response's `turn_end` as the message's. So it read "nothing spoken", escalated, and hung up a second after the beep.
+
+    **Fix:** `OpenAIRealtimeProvider` holds a `sayVerbatim()` message until no response is open, sends it with an `event_id` and `metadata.banjo_verbatim`, and re-sends it if the server rejects it for an active response. A tool-result reply waits behind the message. The adapter now has `verbatimDeliveryReport()`, built from that response's own transcript, and marks its `turn_end` with `verbatim: true` (`VoiceAIProvider.marksVerbatimTurns`). `CallSession` then waits for that `turn_end` and ignores other responses'. The #139 fixed goodbye goes through the same path. The cut-off first attempt isn't changed: rejecting it and having the model send it again worked.
+
 ### Operational, not a code fix
 
 7. IVR navigation reliability â€” genuinely the least deterministic part of the system; no IVR-specific logic exists to patch. Track the real rate of `escalated` outcomes on IVR-heavy contacts over time; improves only with prompt tuning against real usage, not a bug to find.

@@ -68,6 +68,7 @@ import type {
   AudioChunk,
   NormalizedToolCall,
   ToolDefinition,
+  VerbatimDeliveryReport,
   VoiceAIAudioFormat,
   VoiceAIEvent,
   VoiceAIEventListener,
@@ -75,6 +76,7 @@ import type {
   VoiceAISessionConfig,
 } from '../types.js';
 import { VoiceAIError } from '../types.js';
+import { verbatimMatches } from '../verbatimMatch.js';
 
 const log = childLogger({ module: 'voice.provider.openai' });
 
@@ -199,6 +201,17 @@ export class OpenAIRealtimeProvider implements VoiceAIProvider {
   /** event_ids of the response.create messages sent for tool results, so a rejection of one can be told apart. */
   private readonly toolReplyEventIds = new Set<string>();
   private toolReplySeq = 0;
+  /**
+   * The latest sayVerbatim() message (#177). Sent as its own response once
+   * none is open, and re-sent if the server rejects it for one that had just
+   * started: on a live call the message's response.create lost that race, and
+   * the voicemail was left blank. `eventId` is set once sent; `responseId`
+   * once the server starts it; `done` once that response is done. Dropped
+   * when its delivery report is read.
+   */
+  private verbatim: { text: string; eventId?: string; responseId?: string; spoken: string[]; done: boolean } | undefined;
+  private verbatimSeq = 0;
+  readonly marksVerbatimTurns = true;
   /** The rate we negotiated for output audio (session.audio.output.format.rate) — used to tag emitted audio_chunks correctly instead of assuming a fixed rate. */
   private outputSampleRate = 24000;
   /** A triggerResponse() that arrived before the socket opened: false for none, else its cue (undefined for none). */
@@ -381,7 +394,9 @@ export class OpenAIRealtimeProvider implements VoiceAIProvider {
   }
 
   private flushToolReply(): void {
-    if (!this.toolReplyWaiting || this.openResponseIds.size > 0 || this.ws?.readyState !== WebSocket.OPEN) return;
+    // A verbatim message still to be said goes first: a reply prompted now would talk over it or delay it.
+    const verbatimPending = this.verbatim !== undefined && !this.verbatim.done;
+    if (!this.toolReplyWaiting || verbatimPending || this.openResponseIds.size > 0 || this.ws?.readyState !== WebSocket.OPEN) return;
     this.toolReplyWaiting = false;
     const eventId = `banjo_tool_reply_${++this.toolReplySeq}`;
     this.toolReplyEventIds.add(eventId);
@@ -514,6 +529,26 @@ export class OpenAIRealtimeProvider implements VoiceAIProvider {
       log.warn({ textLength: text.length }, 'sayVerbatim called with no open connection — message was dropped');
       return;
     }
+    this.verbatim = { text, spoken: [], done: false };
+    this.flushVerbatim();
+  }
+
+  /** What the latest sayVerbatim() response said, from its own transcript only; ends that delivery (#177). */
+  verbatimDeliveryReport(): VerbatimDeliveryReport | undefined {
+    const verbatim = this.verbatim;
+    if (!verbatim) return undefined;
+    this.verbatim = undefined;
+    const spoken = verbatim.spoken.join(' ');
+    // A reply to a tool result may have been held back for the message.
+    this.flushToolReply();
+    return { intended: verbatim.text, spoken, matched: verbatim.done && verbatimMatches(verbatim.text, spoken) };
+  }
+
+  /** Sends the queued verbatim message once no response is open (#177). */
+  private flushVerbatim(): void {
+    const verbatim = this.verbatim;
+    if (!verbatim || verbatim.eventId !== undefined || this.openResponseIds.size > 0 || this.ws?.readyState !== WebSocket.OPEN) return;
+    verbatim.eventId = `banjo_verbatim_${++this.verbatimSeq}`;
     // response.create's `response` object OVERRIDES the session's
     // `instructions` for this one response only (CONFIRMED against OpenAI's
     // Realtime API docs, 2026-09-01: "These fields will override the
@@ -525,8 +560,10 @@ export class OpenAIRealtimeProvider implements VoiceAIProvider {
     this.ws.send(
       JSON.stringify({
         type: 'response.create',
+        event_id: verbatim.eventId,
         response: {
-          instructions: `Say exactly the following, word for word, and nothing else — no preamble, no additions, no acknowledgement: "${text}"`,
+          instructions: `Say exactly the following, word for word, and nothing else — no preamble, no additions, no acknowledgement: "${verbatim.text}"`,
+          metadata: { banjo_verbatim: verbatim.eventId },
         },
       }),
     );
@@ -602,6 +639,7 @@ export class OpenAIRealtimeProvider implements VoiceAIProvider {
       case 'response.audio_transcript.done':
       case 'response.output_audio_transcript.done': {
         if (typeof msg.transcript === 'string') {
+          this.recordVerbatimSpeech(msg.response_id, msg.transcript);
           this.emitEvent({ type: 'transcript', role: 'assistant', text: msg.transcript, isFinal: true });
         }
         return;
@@ -611,6 +649,7 @@ export class OpenAIRealtimeProvider implements VoiceAIProvider {
       case 'response.output_text.done': {
         if (this.outOfBandResponseIds.has(msg.response_id)) return;
         if (typeof msg.text === 'string') {
+          this.recordVerbatimSpeech(msg.response_id, msg.text);
           this.emitEvent({ type: 'transcript', role: 'assistant', text: msg.text, isFinal: true });
         }
         return;
@@ -636,6 +675,8 @@ export class OpenAIRealtimeProvider implements VoiceAIProvider {
           this.outOfBandResponseIds.add(msg.response.id);
         } else if (typeof msg.response?.id === 'string') {
           this.openResponseIds.add(msg.response.id);
+          const verbatim = this.verbatim;
+          if (verbatim?.eventId !== undefined && msg.response.metadata?.banjo_verbatim === verbatim.eventId) verbatim.responseId = msg.response.id;
         }
         return;
       }
@@ -691,12 +732,16 @@ export class OpenAIRealtimeProvider implements VoiceAIProvider {
             this.emitToolCall(item.call_id, item.name ?? 'unknown_tool', item.arguments ?? '{}', item);
           }
         }
-        this.emitEvent({ type: 'turn_end' });
+        const verbatim = this.verbatim;
+        const isVerbatim = responseId !== undefined && verbatim?.responseId === responseId;
+        if (isVerbatim) verbatim.done = true;
+        this.emitEvent(isVerbatim ? { type: 'turn_end', verbatim: true } : { type: 'turn_end' });
         if (responseId) {
           this.openResponseIds.delete(responseId);
           const waiting = this.afterResponseDone.get(responseId) ?? [];
           this.afterResponseDone.delete(responseId);
           for (const decide of waiting) decide();
+          this.flushVerbatim();
           this.flushToolReply();
           // Only recent responses: a tool result asks about its own, moments later.
           for (const old of this.spokenResponseIds) {
@@ -722,6 +767,12 @@ export class OpenAIRealtimeProvider implements VoiceAIProvider {
           this.toolReplyWaiting = true;
           return;
         }
+        // The same race for a verbatim message (#177): send it again once that response is done.
+        const verbatim = this.verbatim;
+        if (errPayload.code === 'conversation_already_has_active_response' && verbatim && errPayload.event_id !== undefined && verbatim.eventId === errPayload.event_id) {
+          verbatim.eventId = undefined;
+          return;
+        }
         this.emitEvent({
           type: 'error',
           error: new VoiceAIError(errPayload.message ?? 'Unknown OpenAI Realtime error', true, errPayload.code),
@@ -733,6 +784,10 @@ export class OpenAIRealtimeProvider implements VoiceAIProvider {
         // Unhandled event types are expected (session.updated, rate_limits.updated, etc.) — ignore silently.
         return;
     }
+  }
+
+  private recordVerbatimSpeech(responseId: unknown, text: string): void {
+    if (this.verbatim?.responseId !== undefined && responseId === this.verbatim.responseId) this.verbatim.spoken.push(text);
   }
 
   private emitToolCall(callId: string, name: string, argsStr: string, raw: unknown): void {

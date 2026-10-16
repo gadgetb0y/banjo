@@ -100,7 +100,8 @@ export type VoiceAIEvent =
       answered?: boolean;
     }
   | { type: 'tool_call'; call: NormalizedToolCall }
-  | { type: 'turn_end' }
+  /** `verbatim`: this turn was a sayVerbatim() message's own response, on a provider with `marksVerbatimTurns`. */
+  | { type: 'turn_end'; verbatim?: boolean }
   | { type: 'interrupted' } // caller/callee barge-in — telephony must flush its playback buffer
   | { type: 'error'; error: VoiceAIError }
   | { type: 'disconnected'; reason: string };
@@ -158,6 +159,14 @@ export interface VoiceAIProvider {
    * Absent means Banjo's lines are transcribed by the time the turn ends.
    */
   readonly transcriptsLate?: boolean;
+  /**
+   * Optional; true for a provider that may hold a sayVerbatim() message until
+   * another response is done (openai: a second response.create is rejected
+   * while one is open, #177), and so marks the message's own turn_end with
+   * `verbatim: true`. CallSession then waits for that turn_end, not the next
+   * one. Absent means the next turn_end is the message's.
+   */
+  readonly marksVerbatimTurns?: boolean;
   sayVerbatim(text: string): void;
   /**
    * Optional. A provider that cannot guarantee verbatim delivery (openai-live
