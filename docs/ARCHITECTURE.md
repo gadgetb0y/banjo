@@ -760,6 +760,17 @@ The LiveKit `TelephonyProvider` adapter (`src/telephony/providers/livekit.ts` �
 
     **Still not done:** live calls covering a question before the goodbye, an ending after a booking, and the end of an ask call.
 
+33. **[FIXED in the sim, not yet re-verified against a live call]** Conversation calls that wouldn't let go (#179). A live check-in call (2026-10-16, v0.1.12) asked a tired callee about her day. She said it was "exhausting", that she was "trying to concentrate", and that she'd "rather not talk about work". Banjo kept asking new questions, offered to brainstorm her work, and replied to a funny story with three paragraphs ending in another question. She went quiet for 48s and hung up. Banjo said nothing during the silence, and the task was recorded `failed`, with no summary.
+
+    - **Prompt:** the conversation-mode guidance told the model to "stay on the call until" a natural close and never said when to stop. It now says to say a warm goodbye in the next turn if they sound tired, busy or trying to focus, turn down a topic, or give two very short answers in a row. It also says to keep turns to one or two short sentences with at most one question, and to give advice or help only when asked. It still says not to end the call for lack of a booking, or right after the opener.
+    - **Silence after a question:** `CallSession` arms a timer when Banjo's turn ends on a question (`banjoAskedSinceThem`). After 12s of silence, counted once the audio has played, Banjo is cued to ask once whether they're still there. After another 12s it's cued to say goodbye. Speech from them clears it. It doesn't run on hold, while the call is ending, while #130's timer runs, or on `transcriptsLate`.
+    - **Record:** a conversation call that ends on its own (`ended`, not stopped) after they replied at least once (`theirReplies` on the status patch) is `conversation_completed`, with a Banjo-written summary saying it ended before a goodbye. The stale-call sweep still fails it, since the reply count died with the process.
+
+    **Sim check** (`npm run sim`, real OpenAI, 5 runs each, before → after):
+    - **Tired-callee script** (the live call's lines): a goodbye by Banjo's 3rd turn went from 0/5 to 5/5. Before, it came at turn 8–9 or never. Ending with `end_conversation_call` went from 2/5 to 5/5. Before, 3/5 ran out the script and were recorded `failed`. The longest turn went from 4 sentences to 2–4, and turns with two questions from 8 to 0.
+    - **Björk story call** (regression): 5/5 still ended with `end_conversation_call` after their sign-off. The longest turn went from 6–8 sentences to 5–6; the story turn is long by nature.
+    - The silence timer isn't exercised by the sim, whose script ends 15s after its last line. It's covered by `CallSession` tests.
+
 ### Operational, not a code fix
 
 7. IVR navigation reliability — genuinely the least deterministic part of the system; no IVR-specific logic exists to patch. Track the real rate of `escalated` outcomes on IVR-heavy contacts over time; improves only with prompt tuning against real usage, not a bug to find.

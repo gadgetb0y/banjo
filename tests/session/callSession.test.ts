@@ -2686,3 +2686,120 @@ describe('CallSession: a call-ending tool needs a spoken goodbye first (#102)', 
     expect(fakeVoiceAI.sayVerbatim).not.toHaveBeenCalled();
   });
 });
+
+describe('CallSession: a question of Banjo met with silence (#179)', () => {
+  // Live conversation call, 2026-10-16: Banjo ended a long turn on a question,
+  // she said nothing for 48 seconds, then hung up. Banjo said nothing in between.
+  beforeEach(() => {
+    voiceAIEmitter.removeAllListeners('event');
+  });
+
+  const emit = (event: VoiceAIEvent) => voiceAIEmitter.emit('event', event);
+  const say = (role: 'user' | 'assistant', text: string) => emit({ type: 'transcript', role, text, isFinal: true });
+
+  async function started() {
+    const telephony = makeFakeTelephony();
+    const options = makeFakeCallSessionOptions(telephony.provider);
+    const session = new CallSession(options);
+    await session.start();
+    return { telephony, options, session };
+  }
+
+  it('checks once that they are still there, then cues a goodbye, and stops there', async () => {
+    vi.useFakeTimers();
+    try {
+      await started();
+      say('user', 'Hello?');
+      say('assistant', "Hi, I'm an AI assistant calling on behalf of Steve. How's your day going?");
+      emit({ type: 'turn_end' });
+
+      await vi.advanceTimersByTimeAsync(11_000);
+      expect(fakeVoiceAI.triggerResponse).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(2_000);
+      expect(fakeVoiceAI.triggerResponse).toHaveBeenCalledTimes(1);
+      expect(vi.mocked(fakeVoiceAI.triggerResponse).mock.lastCall?.[0]).toMatch(/still there/i);
+
+      say('assistant', 'Are you still there?');
+      emit({ type: 'turn_end' });
+      await vi.advanceTimersByTimeAsync(13_000);
+      expect(fakeVoiceAI.triggerResponse).toHaveBeenCalledTimes(2);
+      expect(vi.mocked(fakeVoiceAI.triggerResponse).mock.lastCall?.[0]).toMatch(/goodbye/i);
+
+      say('assistant', 'Okay, take care. Bye!');
+      emit({ type: 'turn_end' });
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(fakeVoiceAI.triggerResponse).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('waits for the question to finish playing before it starts counting', async () => {
+    vi.useFakeTimers();
+    try {
+      await started();
+      say('user', 'Hello?');
+      emit({ type: 'audio_chunk', chunk: { data: Buffer.alloc(5000 * 8), sampleRate: 8000 } }); // ~5s of speech queued
+      say('assistant', "How's your day going?");
+      emit({ type: 'turn_end' });
+
+      await vi.advanceTimersByTimeAsync(13_000);
+      expect(fakeVoiceAI.triggerResponse).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(5_000);
+      expect(fakeVoiceAI.triggerResponse).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('cues nothing when they answer, or start to, and starts over after their reply', async () => {
+    vi.useFakeTimers();
+    try {
+      await started();
+      say('assistant', "How's your day going?");
+      emit({ type: 'turn_end' });
+      await vi.advanceTimersByTimeAsync(5_000);
+      emit({ type: 'interrupted' });
+      await vi.advanceTimersByTimeAsync(20_000);
+      expect(fakeVoiceAI.triggerResponse).not.toHaveBeenCalled();
+
+      say('user', 'Long, honestly.');
+      say('assistant', 'Sorry to hear it.');
+      emit({ type: 'turn_end' });
+      await vi.advanceTimersByTimeAsync(60_000);
+      // No question, nothing to wait for. (The silence watchdog's nudge is for a user turn Banjo didn't answer.)
+      expect(fakeVoiceAI.triggerResponse).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('cues nothing after a question that came with a goodbye', async () => {
+    vi.useFakeTimers();
+    try {
+      await started();
+      say('user', 'Okay.');
+      say('assistant', 'Talk soon? Bye!');
+      emit({ type: 'turn_end' });
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(fakeVoiceAI.triggerResponse).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('reports how many times they replied after Banjo first spoke', async () => {
+    const { telephony, options } = await started();
+    say('user', 'Hello?');
+    say('assistant', "Hi, how's your day going?");
+    say('user', 'Exhausting.');
+    say('assistant', 'Sorry to hear it.');
+    say('user', 'Ви...'); // suspect (#25): not a reply
+    say('user', 'Trying to concentrate.');
+    telephony.emit({ callId: callAttempt.id, type: 'ended', reason: 'stop' });
+
+    await vi.waitFor(() =>
+      expect(options.onStatusChange).toHaveBeenCalledWith(expect.objectContaining({ kind: 'ended', theirReplies: 2 })),
+    );
+  });
+});
