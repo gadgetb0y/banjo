@@ -36,13 +36,19 @@ export interface TaskModeRules {
    * recorded as (the far end hung up, the process died mid-call), or
    * undefined to record it 'failed' as before. Not used when the owner
    * stopped the call or the session failed: those keep their reason (r2). `task` is the row as it
-   * stands once the call is over.
+   * stands once the call is over; `call.theirReplies` is how many lines they said after Banjo first spoke.
    */
-  unfinishedCallOutcome(task: Task): { status: Task['status']; outcome: TaskOutcome } | undefined;
+  unfinishedCallOutcome(task: Task, call: { theirReplies: number }): { status: Task['status']; outcome: TaskOutcome } | undefined;
 }
 
 /** The summary of an ask call recorded from answers saved mid-call. Banjo's own words, never the model's. */
 export const UNFINISHED_ASK_SUMMARY = 'The call ended before Banjo could wrap it up. These are the answers it saved as it went.';
+
+/** The summary of a conversation call they hung up on after replying (#179). Banjo's own words, never the model's. */
+export function unfinishedConversationSummary(theirReplies: number): string {
+  const replied = theirReplies === 1 ? 'once' : `${theirReplies} times`;
+  return `The call ended before Banjo said goodbye: they hung up, or the line dropped. They had replied ${replied}, but no summary was recorded on the call.`;
+}
 
 export const taskModes: Record<Task['mode'], TaskModeRules> = {
   booking: {
@@ -64,7 +70,13 @@ export const taskModes: Record<Task['mode'], TaskModeRules> = {
       status: 'conversation_completed',
       outcome: { kind: 'conversation_completed', summary: summary ?? 'Call ended without an explicit summary being recorded.' },
     }),
-    unfinishedCallOutcome: () => undefined,
+    // They talked, then hung up before Banjo's goodbye (#179): a live check-in
+    // like that was recorded failed, and the agent reported a failed call.
+    // A hang-up before they said anything back is still a failure.
+    unfinishedCallOutcome: (_task, { theirReplies }) =>
+      theirReplies > 0
+        ? { status: 'conversation_completed', outcome: { kind: 'conversation_completed', summary: unfinishedConversationSummary(theirReplies) } }
+        : undefined,
   },
   // Books nothing and agrees to nothing. Ending with end_call is still the
   // end of an ask call, so it's recorded as one, with every question present

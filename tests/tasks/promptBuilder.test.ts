@@ -25,9 +25,25 @@ describe('buildCallSystemPrompt: mode-aware branch', () => {
   it('conversation mode: includes guidance not to end the call early for lack of a booking outcome', () => {
     const prompt = buildCallSystemPrompt(conversationTask, contact, []);
     expect(prompt.toLowerCase()).toContain('no booking or negotiation goal');
-    expect(prompt.toLowerCase()).toContain('do not treat that as a reason to end the call quickly');
+    expect(prompt.toLowerCase()).toContain("don't end the call just because there's nothing to book");
     expect(prompt).toContain('end_conversation_call');
   });
+
+  // #179: a live check-in call kept asking a tired callee new questions, in
+  // ever longer turns, until she went quiet and hung up. The guidance told it
+  // to stay on the call and never said when to stop.
+  for (const [name, build] of [
+    ['backend', () => buildCallSystemPrompt(conversationTask, contact, [])],
+    ['frontend', () => buildCallFrontendPrompt(conversationTask, contact)],
+  ] as const) {
+    it(`conversation mode (${name}): says when to say goodbye, and to keep turns short (#179)`, () => {
+      const prompt = build();
+      expect(prompt).toMatch(/tired,\s+busy\s+or\s+trying\s+to\s+focus/);
+      expect(prompt).toMatch(/two\s+very\s+short\s+answers\s+in\s+a\s+row/);
+      expect(prompt).toMatch(/one\s+or\s+two\s+short\s+sentences,\s+with\s+at\s+most\s+one\s+question/);
+      expect(prompt).not.toMatch(/stay\s+on\s+the\s+call\s+until/i);
+    });
+  }
 
   it('conversation mode: booking tools remain mentioned too — unified toolset, not a separate restricted path', () => {
     const prompt = buildCallSystemPrompt(conversationTask, contact, []);
@@ -64,7 +80,7 @@ describe('buildCallFrontendPrompt: voice-layer prompt for a split provider (open
 
   it('conversation mode: tells the voice layer not to end the call early, without naming backend tools', () => {
     const prompt = buildCallFrontendPrompt(conversationTask, contact);
-    expect(prompt.toLowerCase()).toContain('do not treat that as a reason to end the call quickly');
+    expect(prompt.toLowerCase()).toContain("don't end the call just because there's nothing to book");
     expect(prompt).not.toContain('end_conversation_call');
   });
 });
