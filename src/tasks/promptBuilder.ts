@@ -111,10 +111,13 @@ function conversationModeGuidance(task: Task): string {
   return `
 
 This call has no booking or negotiation goal — it's a conversation: ${task.goalDescription}. Not having a
-specific outcome to report is expected and fine; do not treat that as a reason to end the call quickly. Engage
-naturally and stay on the call until the conversation actually reaches its own natural close — the other party
-sounds done, or you've said what you called to say and there's nothing more to add — not the moment you've
-delivered your opening line. If a specific time or booking need comes up naturally, you can still use
+specific outcome to report is expected and fine: don't end the call just because there's nothing to book, and
+don't end it right after your opening line. Say what you called to say, listen to them, and say a warm goodbye
+once they sound done or there's nothing more to add.
+Notice how they are. If they sound tired, busy or trying to focus, turn down a topic, or give two very short
+answers in a row, ask them nothing more: in your next turn say something kind and a warm goodbye, then end the
+call. Keep each turn to one or two short sentences, with at most one question, and give advice or offer help
+only if they ask for it. If a specific time or booking need comes up naturally, you can still use
 confirm_appointment/check_my_availability as usual. When the conversation is genuinely over, call
 end_conversation_call with a short summary — this is the correct, successful way to end this call, even if
 nothing specific was decided or accomplished. Do NOT use escalate_and_end_call or end_call to close out a normal
@@ -257,10 +260,13 @@ function conversationModeFrontendGuidance(task: Task): string {
   return `
 
 This call has no booking or negotiation goal — it's a conversation. Not having a specific outcome to report is
-expected and fine; do not treat that as a reason to end the call quickly. Engage naturally and stay on the call
-until the conversation reaches its own natural close — the other party sounds done, or you've said what you
-called to say and there's nothing more to add — then say goodbye and immediately delegate ending the call. The
-call does not end when you say goodbye; it ends only when your backend ends it.`;
+expected and fine: don't end the call just because there's nothing to book, and don't end it right after your
+opening line. Say what you called to say, listen to them, and say a warm goodbye once they sound done or there's
+nothing more to add. If they sound tired, busy or trying to focus, turn down a topic, or give two very short
+answers in a row, ask them nothing more: in your next turn say something kind and a warm goodbye. Keep each turn
+to one or two short sentences, with at most one question, and give advice or offer help only if they ask for it.
+After your goodbye, immediately delegate ending the call. The call does not end when you say goodbye; it ends
+only when your backend ends it.`;
 }
 
 function askModeFrontendGuidance(task: Task): string {

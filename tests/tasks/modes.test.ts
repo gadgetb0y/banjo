@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { modeRules } from '../../src/tasks/modes.js';
 import type { Task } from '../../src/tasks/schema.js';
 
+const NO_REPLIES = { theirReplies: 0 };
 const QUESTIONS = ['What time do you close on Saturday?', 'Do you take walk-ins?'];
 
 function askTask(collectedAnswers: Task['collectedAnswers'] = null): Task {
@@ -27,7 +28,7 @@ describe('modeRules: ask (#148 review)', () => {
 
   it('records a call that ended early with saved answers as answered, saying so', () => {
     const task = askTask({ '2': { question: 2, answered: true, answer: 'No.' } });
-    expect(modeRules(task).unfinishedCallOutcome(task)).toEqual({
+    expect(modeRules(task).unfinishedCallOutcome(task, NO_REPLIES)).toEqual({
       status: 'answered',
       outcome: {
         kind: 'answered',
@@ -41,13 +42,13 @@ describe('modeRules: ask (#148 review)', () => {
   });
 
   it('leaves a call that ended early with nothing saved to fail as before', () => {
-    expect(modeRules(askTask()).unfinishedCallOutcome(askTask())).toBeUndefined();
-    expect(modeRules(askTask({})).unfinishedCallOutcome(askTask({}))).toBeUndefined();
+    expect(modeRules(askTask()).unfinishedCallOutcome(askTask(), NO_REPLIES)).toBeUndefined();
+    expect(modeRules(askTask({})).unfinishedCallOutcome(askTask({}), NO_REPLIES)).toBeUndefined();
   });
 
   it("doesn't count a question saved as unanswered: a call that broke after one 'no idea' isn't answered (#148 review r2)", () => {
     const task = askTask({ '1': { question: 1, answered: false } });
-    expect(modeRules(task).unfinishedCallOutcome(task)).toBeUndefined();
+    expect(modeRules(task).unfinishedCallOutcome(task, NO_REPLIES)).toBeUndefined();
   });
 
   it('end_call with no answer saved is escalated, keeping its summary, rather than an urgent "no answers" (#148 review r2)', () => {
@@ -66,10 +67,28 @@ describe('modeRules: ask (#148 review)', () => {
 });
 
 describe('modeRules: booking and conversation', () => {
-  it('fail a call that ended early, as before', () => {
+  it('fail a call that ended early, as before, when they never replied', () => {
     for (const mode of ['booking', 'conversation'] as const) {
       const task = { id: 'task-1', mode, status: 'negotiating' } as Task;
-      expect(modeRules(task).unfinishedCallOutcome(task)).toBeUndefined();
+      expect(modeRules(task).unfinishedCallOutcome(task, { theirReplies: 0 })).toBeUndefined();
     }
+  });
+
+  it('a booking call that ended early still fails: nothing was booked (#179)', () => {
+    const task = { id: 'task-1', mode: 'booking', status: 'negotiating' } as Task;
+    expect(modeRules(task).unfinishedCallOutcome(task, { theirReplies: 5 })).toBeUndefined();
+  });
+
+  it('records a conversation they hung up on after replying as completed, in Banjo\'s words (#179)', () => {
+    const task = { id: 'task-1', mode: 'conversation', status: 'negotiating' } as Task;
+    expect(modeRules(task).unfinishedCallOutcome(task, { theirReplies: 3 })).toEqual({
+      status: 'conversation_completed',
+      outcome: {
+        kind: 'conversation_completed',
+        summary:
+          'The call ended before Banjo said goodbye: they hung up, or the line dropped. They had replied 3 times, ' +
+          'but no summary was recorded on the call.',
+      },
+    });
   });
 });

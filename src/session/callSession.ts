@@ -58,6 +58,12 @@ const FALLBACK_GOODBYE = 'Okay, take care. Bye!';
 const UNANSWERED_QUESTION_WAIT_MS = 8000;
 const UNANSWERED_QUESTION_CUE =
   "They haven't answered your question. Say one short goodbye to them now, and end the call in the same turn.";
+// How long a question of Banjo's can go unanswered, counted from when it has
+// finished playing, before Banjo checks they're still there and then, after
+// as long again, says goodbye (#179). A live call's callee went quiet for 48s
+// after a question and hung up, with Banjo silent throughout.
+const QUIET_AFTER_QUESTION_MS = 12_000;
+const STILL_THERE_CUE = "They haven't said anything for a while. Ask them once, in a few words, whether they're still there. Say nothing else.";
 
 // Bounds how long CallSession waits for a tool's verbatimMessage (see
 // VoiceTool's doc comment) to finish being spoken via VoiceAIProvider.sayVerbatim
@@ -139,8 +145,11 @@ type AnsweredBy = Extract<TelephonyEvent, { type: 'answering_machine_detected' }
 export type CallSessionStatusPatch =
   | { kind: 'started'; providerCallId: string }
   | { kind: 'answering_machine_detected'; answeredBy: AnsweredBy }
-  /** `stopped`: ended from outside the session (CallSession.stop, e.g. stop_call), not by either party. */
-  | { kind: 'ended'; reason: string; disclosure: DisclosureResult; stopped?: true }
+  /**
+   * `stopped`: ended from outside the session (CallSession.stop, e.g. stop_call), not by either party.
+   * `theirReplies`: lines they said after Banjo first spoke (not suspect, #25); absent means none (#179).
+   */
+  | { kind: 'ended'; reason: string; disclosure: DisclosureResult; stopped?: true; theirReplies?: number }
   | { kind: 'failed'; reason: string; disclosure: DisclosureResult }
   | { kind: 'recording_started'; recordingId: string };
 
@@ -263,6 +272,12 @@ export class CallSession<TCtx = CallContext> {
   private banjoAskedSinceThem = false;
   /** Cues a goodbye if they never answer the question a refused ending was waiting on (#130). */
   private unansweredQuestionTimer: ReturnType<typeof setTimeout> | null = null;
+  /** Checks they're still there, then cues a goodbye, when Banjo's question meets silence (#179). */
+  private quietAfterQuestionTimer: ReturnType<typeof setTimeout> | null = null;
+  /** Cues sent since their latest line for silence after a question: 1 = asked if they're there, 2 = cued the goodbye. */
+  private quietCues = 0;
+  /** Lines they said after Banjo first spoke (#179): a call they hung up on after replying was still a conversation. */
+  private theirReplies = 0;
   /**
    * A call-ending tool is refused (no goodbye #102, or the other party cutting
    * in #133) at most once until the other party speaks again: a refusal can
@@ -310,6 +325,8 @@ export class CallSession<TCtx = CallContext> {
   /** The tool call whose budget toolPendingWatchdog is timing; only it may clear the watchdog. */
   private toolPendingWatchdogOwner: string | null = null;
   private turnEndWaiters: Array<() => void> = [];
+  /** Whether the latest turn_end was a verbatim message's own (VoiceAIProvider.marksVerbatimTurns, #177). */
+  private lastTurnEndVerbatim = false;
   private silenceWatchdog: ReturnType<typeof setTimeout> | null = null;
   private silenceNudgeSent = false;
   // Tracks whether a response is currently believed to be in flight — set
@@ -494,6 +511,9 @@ export class CallSession<TCtx = CallContext> {
           // ending checks apply afresh.
           if (event.role === 'user' && quality === 'ok') {
             this.lastUserLine = event.text;
+            if (this.firstAssistantLine !== undefined) this.theirReplies++;
+            this.quietCues = 0;
+            this.clearQuietAfterQuestionTimer();
             if (this.callEndingToolCallId !== null) this.calleeSpokeDuringEnd = event.text;
             else {
               this.endRefused = false;
@@ -530,6 +550,8 @@ export class CallSession<TCtx = CallContext> {
         if (event.role === 'user' && !event.answered) this.armSilenceWatchdogIfNeeded();
         break;
       case 'interrupted':
+        // They've started talking: no silence to wait out (#179).
+        this.clearQuietAfterQuestionTimer();
         // #8: cut off before its turn ended, the recording notice may never
         // have reached the other party. Wait for Banjo to say it again.
         if (this.recordingState === 'awaiting_turn_end') this.recordingState = 'idle';
@@ -585,7 +607,9 @@ export class CallSession<TCtx = CallContext> {
         this.responseActive = false;
         if (this.recordingState === 'awaiting_turn_end') this.scheduleRecordingStart();
         this.turnAudioMs = 0;
+        this.lastTurnEndVerbatim = event.verbatim === true;
         this.turnEndWaiters.splice(0).forEach((resolve) => resolve());
+        this.armQuietAfterQuestionTimer();
         break;
     }
   };
@@ -1143,6 +1167,43 @@ export class CallSession<TCtx = CallContext> {
   }
 
   /**
+   * Banjo's turn ended on a question (#179): if they say nothing for
+   * QUIET_AFTER_QUESTION_MS once it has played, check they're still there,
+   * then say goodbye. Not on hold, while the call is ending, while #130's own
+   * timer is waiting, or where Banjo's transcripts arrive late (openai-live),
+   * since banjoAskedSinceThem reads them.
+   */
+  private armQuietAfterQuestionTimer(): void {
+    if (this.quietAfterQuestionTimer || !this.banjoAskedSinceThem || this.quietCues >= 2) return;
+    if (this.hold || this.isEnding() || this.callEndingToolCallId !== null || this.unansweredQuestionTimer) return;
+    if (this.voiceAI.transcriptsLate === true) return;
+    const stillPlayingMs = Math.max(0, this.audioPlaybackTracker.estimatedDoneAt() - Date.now());
+    this.quietAfterQuestionTimer = setTimeout(() => this.handleQuietAfterQuestion(), stillPlayingMs + QUIET_AFTER_QUESTION_MS);
+  }
+
+  private handleQuietAfterQuestion(): void {
+    this.quietAfterQuestionTimer = null;
+    if (this.hold || this.isEnding() || this.callEndingToolCallId !== null || this.unansweredQuestionTimer) return;
+    // Their answer may be starting, or Banjo is already saying something: that turn's end re-arms this.
+    if (!this.banjoAskedSinceThem || this.responseActive) return;
+    this.quietCues++;
+    if (this.quietCues === 1) {
+      logger.warn({ callId: this.opts.callId }, "No reply to Banjo's question — checking they're still there");
+      this.promptWithNote(STILL_THERE_CUE);
+      return;
+    }
+    logger.warn({ callId: this.opts.callId }, "Still no reply to Banjo's question — cueing a goodbye");
+    // They've had their chance to answer: the goodbye isn't refused as a goodbye before their answer (#130).
+    this.banjoAskedSinceThem = false;
+    this.promptWithNote(UNANSWERED_QUESTION_CUE);
+  }
+
+  private clearQuietAfterQuestionTimer(): void {
+    if (this.quietAfterQuestionTimer) clearTimeout(this.quietAfterQuestionTimer);
+    this.quietAfterQuestionTimer = null;
+  }
+
+  /**
    * Prompts a reply steered by `note`. As a system note where the provider can
    * add one, so the session's instructions stay in force: a triggerResponse()
    * cue replaces them for that response (OpenAI). The cue is the fallback.
@@ -1212,7 +1273,7 @@ export class CallSession<TCtx = CallContext> {
         if (delivery.cutOff || this.isEnding() || Date.now() >= deadline) break;
         delivery.spoken = [];
         this.voiceAI.sayVerbatim(part);
-        await this.waitForTurnEnd(deadline - Date.now(), stopped);
+        await this.waitForVerbatimTurnEnd(deadline, delivery, stopped);
         const spoken = delivery.spoken.join(' ');
         reports.push(this.voiceAI.verbatimDeliveryReport?.() ?? { intended: part, spoken, matched: verbatimMatches(part, spoken) });
         delivery.openerPlayedAt ??= this.audioPlaybackTracker.estimatedDoneAt();
@@ -1226,6 +1287,29 @@ export class CallSession<TCtx = CallContext> {
     } finally {
       this.verbatimDelivery = null;
     }
+  }
+
+  /**
+   * Waits for the verbatim message's own turn to end. On a provider that
+   * marks it (VoiceAIProvider.marksVerbatimTurns), a turn_end without the
+   * mark is another response's: the message may be queued behind it. Taking
+   * that one as the message's left a voicemail blank on a live call (#177).
+   */
+  private async waitForVerbatimTurnEnd(deadline: number, delivery: VerbatimDelivery, stopped: Promise<void>): Promise<void> {
+    // Registered before the first wait, so it is set by the time that wait returns on `stopped`.
+    let isStopped = false;
+    void stopped.then(() => (isStopped = true));
+    do {
+      this.lastTurnEndVerbatim = false;
+      await this.waitForTurnEnd(deadline - Date.now(), stopped);
+    } while (
+      this.voiceAI.marksVerbatimTurns === true &&
+      !this.lastTurnEndVerbatim &&
+      !isStopped &&
+      !delivery.cutOff &&
+      !this.isEnding() &&
+      Date.now() < deadline
+    );
   }
 
   /** True once everything sent has played; false if cut off first, or still playing after VERBATIM_PLAYBACK_WAIT_MS. */
@@ -1295,6 +1379,7 @@ export class CallSession<TCtx = CallContext> {
     if (this.state === 'ended' || this.state === 'error' || this.state === 'ending') return;
     this.clearSilenceWatchdog();
     this.clearUnansweredQuestionTimer();
+    this.clearQuietAfterQuestionTimer();
     this.stopHold();
     this.cancelPendingRecording();
     this.cutOffVerbatimDelivery();
@@ -1376,12 +1461,19 @@ export class CallSession<TCtx = CallContext> {
     if (this.state === 'ended' || this.state === 'error' || this.state === 'ending') return;
     this.clearSilenceWatchdog();
     this.clearUnansweredQuestionTimer();
+    this.clearQuietAfterQuestionTimer();
     this.stopHold();
     this.cancelPendingRecording();
     this.setState('ending');
     this.cutOffVerbatimDelivery();
     await this.waitForInFlightToolHandlers();
-    await this.opts.onStatusChange({ kind: 'ended', reason, disclosure: checkDisclosure(this.firstAssistantLine), ...how });
+    await this.opts.onStatusChange({
+      kind: 'ended',
+      reason,
+      disclosure: checkDisclosure(this.firstAssistantLine),
+      ...how,
+      ...(this.theirReplies > 0 && { theirReplies: this.theirReplies }),
+    });
     await this.voiceAI.disconnect().catch(() => {});
     await this.hangUpTelephony();
     this.setState('ended');

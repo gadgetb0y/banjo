@@ -193,13 +193,17 @@ export function buildOutboundCallSessionOptions(params: {
   // already ran) from logging transitionTask's ignored-transition warning.
   //
   // An ask call with answers saved by record_answer is recorded 'answered'
-  // from them instead (tasks/modes.ts's unfinishedCallOutcome, #148 review).
-  async function failTaskIfStillNonTerminal(reason: string, { endedOnItsOwn }: { endedOnItsOwn: boolean }): Promise<void> {
+  // from them instead (tasks/modes.ts's unfinishedCallOutcome, #148 review),
+  // and a conversation they'd replied in 'conversation_completed' (#179).
+  async function failTaskIfStillNonTerminal(
+    reason: string,
+    { endedOnItsOwn, theirReplies = 0 }: { endedOnItsOwn: boolean; theirReplies?: number },
+  ): Promise<void> {
     const current = await getTask(task.id);
     if (current && !isTerminalStatus(current.status)) {
       // A call the owner stopped, or whose session failed, keeps its reason:
       // stop_call promises "recorded as failed with that reason" (#148 review r2).
-      const unfinished = endedOnItsOwn ? modeRules(current).unfinishedCallOutcome(current) : undefined;
+      const unfinished = endedOnItsOwn ? modeRules(current).unfinishedCallOutcome(current, { theirReplies }) : undefined;
       if (unfinished) await transitionTask(task.id, unfinished.status, { outcome: unfinished.outcome });
       else await transitionTask(task.id, 'failed', { outcome: { kind: 'failed', reason } });
     }
@@ -296,7 +300,7 @@ export function buildOutboundCallSessionOptions(params: {
           unregisterLiveCall(task.id);
           disclosure = recordDisclosure(patch.disclosure);
           await updateCallAttempt(callAttempt.id, { status: 'ended', endedAt: new Date(), disclosed: disclosedColumn(patch.disclosure) });
-          await failTaskIfStillNonTerminal(patch.reason, { endedOnItsOwn: !patch.stopped });
+          await failTaskIfStillNonTerminal(patch.reason, { endedOnItsOwn: !patch.stopped, theirReplies: patch.theirReplies });
           break;
         case 'failed':
           unregisterLiveCall(task.id);

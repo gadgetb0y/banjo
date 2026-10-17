@@ -243,6 +243,36 @@ describe('buildOutboundCallSessionOptions', () => {
     });
   });
 
+  // #179: a live conversation call ended with her hanging up after a real
+  // exchange, and was recorded failed, with no summary.
+  for (const [theirReplies, stopped, status] of [
+    [2, false, 'conversation_completed'],
+    [0, false, 'failed'],
+    [2, true, 'failed'],
+  ] as const) {
+    it(`records a conversation call that ended with ${theirReplies} replies from them${stopped ? ', stopped by the owner,' : ''} as ${status} (#179)`, async () => {
+      getTask.mockResolvedValueOnce({ id: 'task-1', mode: 'conversation', status: 'negotiating' } as unknown as Task);
+      const options = buildOutboundCallSessionOptions({
+        task: { ...fakeTask, mode: 'conversation' } as Task,
+        callAttempt: fakeCallAttempt,
+        contact: fakeContact,
+        telephony: fakeTelephony,
+        calendar: fakeCalendar,
+        systemPrompt: 'irrelevant for this test',
+      });
+
+      await options.onStatusChange({ kind: 'ended', reason: 'stop', disclosure: 'disclosed', theirReplies, ...(stopped ? { stopped: true } : {}) });
+
+      if (status === 'failed') {
+        expect(transitionTask).toHaveBeenCalledWith('task-1', 'failed', { outcome: { kind: 'failed', reason: 'stop' } });
+      } else {
+        expect(transitionTask).toHaveBeenCalledWith('task-1', 'conversation_completed', {
+          outcome: { kind: 'conversation_completed', summary: expect.stringContaining('ended before Banjo said goodbye') },
+        });
+      }
+    });
+  }
+
   it("gives an ask task record_answer, which doesn't end the call (#148 review)", () => {
     const options = buildOutboundCallSessionOptions({
       task: { ...fakeTask, mode: 'ask' } as Task,

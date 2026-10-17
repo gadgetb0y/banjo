@@ -298,8 +298,9 @@ export async function sweepStaleCalls(): Promise<void> {
     }
 
     // An ask call that saved answers before it died reports them, as one
-    // that ended early on a live process does (#148 review).
-    const unfinished = modeRules(task).unfinishedCallOutcome(task);
+    // that ended early on a live process does (#148 review). How many times
+    // they replied died with the process, so a conversation still fails here (#179).
+    const unfinished = modeRules(task).unfinishedCallOutcome(task, { theirReplies: 0 });
 
     if (booked) {
       logger.warn(
