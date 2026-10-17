@@ -552,6 +552,50 @@ describe('CallSession: audio-aware hang-up wiring', () => {
     }
   });
 
+  // #177: on a live call the voicemail's response.create lost a race with another
+  // response, and that response's turn_end was taken as the message's: blank voicemail.
+  it("on a provider that marks verbatim turns, waits for the message's own turn_end, not another response's", async () => {
+    const report = { intended: 'Hi, please call back at 555-1234.', spoken: 'Hi, please call back at 555-1234.', matched: true };
+    const verbatimDeliveryReport = vi.fn(() => report);
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const voiceAI = fakeVoiceAI as any;
+    voiceAI.verbatimDeliveryReport = verbatimDeliveryReport;
+    voiceAI.marksVerbatimTurns = true;
+    try {
+      const telephony = makeFakeTelephony();
+      const options = makeFakeCallSessionOptions(telephony.provider);
+      options.tools = [
+        {
+          name: 'leave_voicemail_and_end_call',
+          description: 'test-only voicemail tool',
+          schema: z.object({ message: z.string() }),
+          handler: vi.fn(async () => ({ ok: true })),
+          endsCall: true,
+          verbatimMessage: (input: { message: string }) => [input.message],
+        },
+      ];
+      const session = new CallSession(options);
+      await session.start();
+
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const handleToolCallPromise = (session as any).handleToolCall('call-1', 'leave_voicemail_and_end_call', { message: report.intended });
+      voiceAIEmitter.emit('event', { type: 'turn_end' } satisfies VoiceAIEvent); // the pre-existing endsCall wait
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      voiceAIEmitter.emit('event', { type: 'turn_end' } satisfies VoiceAIEvent); // another response, finishing first
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(verbatimDeliveryReport).not.toHaveBeenCalled();
+
+      voiceAIEmitter.emit('event', { type: 'turn_end', verbatim: true } satisfies VoiceAIEvent); // the message itself
+      await handleToolCallPromise;
+
+      expect(verbatimDeliveryReport).toHaveBeenCalledTimes(1);
+      expect(vi.mocked(options.buildToolContext).mock.calls[0]![1]).toEqual(report);
+    } finally {
+      delete voiceAI.verbatimDeliveryReport;
+      delete voiceAI.marksVerbatimTurns;
+    }
+  });
+
   it('for a tool with verbatimMessage on a provider without verbatimDeliveryReport, passes a report built from its own transcript (#71)', async () => {
     const telephony = makeFakeTelephony();
     const options = makeFakeCallSessionOptions(telephony.provider);
