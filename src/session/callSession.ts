@@ -325,6 +325,8 @@ export class CallSession<TCtx = CallContext> {
   /** The tool call whose budget toolPendingWatchdog is timing; only it may clear the watchdog. */
   private toolPendingWatchdogOwner: string | null = null;
   private turnEndWaiters: Array<() => void> = [];
+  /** Whether the latest turn_end was a verbatim message's own (VoiceAIProvider.marksVerbatimTurns, #177). */
+  private lastTurnEndVerbatim = false;
   private silenceWatchdog: ReturnType<typeof setTimeout> | null = null;
   private silenceNudgeSent = false;
   // Tracks whether a response is currently believed to be in flight — set
@@ -605,6 +607,7 @@ export class CallSession<TCtx = CallContext> {
         this.responseActive = false;
         if (this.recordingState === 'awaiting_turn_end') this.scheduleRecordingStart();
         this.turnAudioMs = 0;
+        this.lastTurnEndVerbatim = event.verbatim === true;
         this.turnEndWaiters.splice(0).forEach((resolve) => resolve());
         this.armQuietAfterQuestionTimer();
         break;
@@ -1270,7 +1273,7 @@ export class CallSession<TCtx = CallContext> {
         if (delivery.cutOff || this.isEnding() || Date.now() >= deadline) break;
         delivery.spoken = [];
         this.voiceAI.sayVerbatim(part);
-        await this.waitForTurnEnd(deadline - Date.now(), stopped);
+        await this.waitForVerbatimTurnEnd(deadline, delivery, stopped);
         const spoken = delivery.spoken.join(' ');
         reports.push(this.voiceAI.verbatimDeliveryReport?.() ?? { intended: part, spoken, matched: verbatimMatches(part, spoken) });
         delivery.openerPlayedAt ??= this.audioPlaybackTracker.estimatedDoneAt();
@@ -1284,6 +1287,29 @@ export class CallSession<TCtx = CallContext> {
     } finally {
       this.verbatimDelivery = null;
     }
+  }
+
+  /**
+   * Waits for the verbatim message's own turn to end. On a provider that
+   * marks it (VoiceAIProvider.marksVerbatimTurns), a turn_end without the
+   * mark is another response's: the message may be queued behind it. Taking
+   * that one as the message's left a voicemail blank on a live call (#177).
+   */
+  private async waitForVerbatimTurnEnd(deadline: number, delivery: VerbatimDelivery, stopped: Promise<void>): Promise<void> {
+    // Registered before the first wait, so it is set by the time that wait returns on `stopped`.
+    let isStopped = false;
+    void stopped.then(() => (isStopped = true));
+    do {
+      this.lastTurnEndVerbatim = false;
+      await this.waitForTurnEnd(deadline - Date.now(), stopped);
+    } while (
+      this.voiceAI.marksVerbatimTurns === true &&
+      !this.lastTurnEndVerbatim &&
+      !isStopped &&
+      !delivery.cutOff &&
+      !this.isEnding() &&
+      Date.now() < deadline
+    );
   }
 
   /** True once everything sent has played; false if cut off first, or still playing after VERBATIM_PLAYBACK_WAIT_MS. */

@@ -551,3 +551,87 @@ describe('OpenAIRealtimeProvider: waiting on hold (#151)', () => {
     ]);
   });
 });
+
+// #177: a live voicemail's response.create was rejected (conversation_already_has_active_response)
+// because another response was open, nothing re-sent it, and the voicemail was left blank.
+describe('OpenAIRealtimeProvider.sayVerbatim while another response is open', () => {
+  async function openProvider() {
+    const provider = new OpenAIRealtimeProvider();
+    const connectPromise = provider.connect(sessionConfig);
+    const ws = wsInstances[wsInstances.length - 1]!;
+    ws.readyState = FakeWs.OPEN;
+    ws.emit('open');
+    await connectPromise;
+    ws.sent = [];
+    const server = (msg: Record<string, unknown>) => ws.emit('message', Buffer.from(JSON.stringify(msg)));
+    const events: VoiceAIEvent[] = [];
+    provider.on('event', (event) => events.push(event));
+    const creates = () => ws.sent.map((m) => JSON.parse(m)).filter((m) => m.type === 'response.create');
+    return { provider, ws, server, events, creates };
+  }
+
+  it('waits for the open response to finish before sending the message', async () => {
+    const { provider, server, creates } = await openProvider();
+    server({ type: 'response.created', response: { id: 'resp-other' } });
+    provider.sayVerbatim('Hi, please call back.');
+    expect(creates()).toEqual([]);
+    server({ type: 'response.done', response: { id: 'resp-other', output: [] } });
+    expect(creates()).toHaveLength(1);
+    expect(creates()[0].response.instructions).toContain('"Hi, please call back."');
+  });
+
+  it('re-sends the message when the server rejects it for a response that had just started', async () => {
+    const { provider, ws, server, events, creates } = await openProvider();
+    provider.sayVerbatim('Hi, please call back.');
+    const first = creates()[0];
+    expect(first.event_id).toEqual(expect.any(String));
+    server({ type: 'response.created', response: { id: 'resp-other' } });
+    server({ type: 'error', error: { code: 'conversation_already_has_active_response', message: 'busy', event_id: first.event_id } });
+    ws.sent = [];
+    server({ type: 'response.done', response: { id: 'resp-other', output: [] } });
+
+    expect(creates()).toHaveLength(1);
+    expect(events.filter((e) => e.type === 'error')).toEqual([]);
+  });
+
+  it("marks only the message's own turn_end, and reports only what that response said", async () => {
+    const { provider, server, events, creates } = await openProvider();
+    server({ type: 'response.created', response: { id: 'resp-other' } });
+    provider.sayVerbatim('Hi, please call back.');
+    server({ type: 'response.output_audio_transcript.done', response_id: 'resp-other', transcript: 'Sure thing.' });
+    server({ type: 'response.done', response: { id: 'resp-other', output: [] } });
+    const { event_id, response } = creates()[0];
+    server({ type: 'response.created', response: { id: 'resp-verbatim', metadata: response.metadata } });
+    server({ type: 'response.output_audio_transcript.done', response_id: 'resp-verbatim', transcript: 'Hi, please call back.' });
+    server({ type: 'response.done', response: { id: 'resp-verbatim', output: [] } });
+
+    expect(event_id).toEqual(response.metadata.banjo_verbatim);
+    expect(events.filter((e) => e.type === 'turn_end')).toEqual([{ type: 'turn_end' }, { type: 'turn_end', verbatim: true }]);
+    expect(provider.verbatimDeliveryReport()).toEqual({ intended: 'Hi, please call back.', spoken: 'Hi, please call back.', matched: true });
+    expect(provider.verbatimDeliveryReport()).toBeUndefined();
+  });
+
+  it('reports a message never said as not matched, and drops it', async () => {
+    const { provider, server, creates } = await openProvider();
+    server({ type: 'response.created', response: { id: 'resp-other' } });
+    provider.sayVerbatim('Hi, please call back.');
+    expect(provider.verbatimDeliveryReport()).toEqual({ intended: 'Hi, please call back.', spoken: '', matched: false });
+    server({ type: 'response.done', response: { id: 'resp-other', output: [] } });
+    expect(creates()).toEqual([]);
+  });
+
+  it('holds a tool-result reply until the message has been said', async () => {
+    const { provider, server, creates } = await openProvider();
+    server({ type: 'response.created', response: { id: 'resp-other' } });
+    provider.sayVerbatim('Hi, please call back.');
+    provider.sendToolResult('call-1', { ok: false, error: 'cut_off' }, true);
+    server({ type: 'response.done', response: { id: 'resp-other', output: [] } });
+    expect(creates()).toHaveLength(1);
+    expect(creates()[0].response.metadata.banjo_verbatim).toEqual(expect.any(String));
+
+    server({ type: 'response.created', response: { id: 'resp-verbatim', metadata: creates()[0].response.metadata } });
+    server({ type: 'response.done', response: { id: 'resp-verbatim', output: [] } });
+    expect(creates()).toHaveLength(2);
+    expect(creates()[1].response).toBeUndefined();
+  });
+});
