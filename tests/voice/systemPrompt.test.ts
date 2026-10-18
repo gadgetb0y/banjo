@@ -402,6 +402,17 @@ describe('phone menu and hold guidance (#151)', () => {
     expect(buildBaseSystemPromptGuidance('inbound')).not.toContain('wait_on_hold');
   });
 
+  // A live Xfinity call: Banjo went on hold at "...otherwise, please remain on
+  // the line" and never answered the menu's spoken questions after that, and
+  // spoke filler ("One moment") into a menu that listens for speech.
+  it('treats a menu as something that may listen for speech, and waiting at "remain on the line" as a hold', () => {
+    const guidance = buildBaseSystemPromptGuidance('outbound');
+    expect(guidance).toContain('listen for speech');
+    expect(guidance).toContain('remain on the line');
+    expect(guidance).toMatch(/agent or operator option[^.]*before/);
+    expect(guidance).not.toContain('A recording never hears you');
+  });
+
   it('is left out where the voice provider cannot hold', async () => {
     const { config } = await import('../../src/config/index.js');
     try {

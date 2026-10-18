@@ -229,8 +229,11 @@ const HOLD_SECTION: GuidanceSection = {
   voiceLayer: true,
   lines: [
     'Phone menus and holding:',
-    '- A recording never hears you. Never speak to an automated menu, a hold message or hold music: press digits, wait, or use wait_on_hold, silently.',
-    '- In a phone menu, listen to all the options before choosing. Pick the one closest to why you are calling; if none fits, the option for an operator, a representative or "all other questions" (often 0). If you have tried a couple of options and still are not getting anywhere, use escalate_and_end_call with stuckAt "phone_menu".',
+    '- Hold messages and hold music never hear you: never speak to them.',
+    '- Many phone menus listen for speech as well as keys. Answer a menu only by pressing its keys or saying the exact words of the option it offers (such as yes, technical support, or agent), and say nothing else to it: a menu that listens for speech takes any other words as your answer.',
+    '- In a phone menu, listen to all the options before choosing. Pick the one closest to why you are calling; if none fits, the option for an operator, a representative or "all other questions" (often 0). If a key press does not seem to register, say the option\'s words instead.',
+    '- When a menu says you can remain on the line, and that is the way forward (there is nothing it asks for that you have), use wait_on_hold, saying nothing. If the menu then asks you something, you are handed back to answer it.',
+    '- If you have tried a couple of options and still are not getting anywhere, try the agent or operator option (often 0, or saying agent) before you escalate with stuckAt "phone_menu".',
     '- As soon as you are in a queue (hold music, "please hold", "the next available representative", an estimated wait time), use wait_on_hold, saying nothing. You will be told when a live person picks up, and what they said; then open to them as the call\'s first words, with the AI disclosure.',
   ],
 };

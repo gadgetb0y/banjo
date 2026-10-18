@@ -32,6 +32,7 @@ const ALL_CONFIG_KEYS = [
   'INBOUND_BOOKING_ENABLED', 'BUSINESS_HOURS_DAYS', 'BUSINESS_HOURS_START', 'BUSINESS_HOURS_END',
   'INBOUND_DEFAULT_DURATION_MINUTES', 'INBOUND_MAX_LOOKAHEAD_DAYS', 'ASSISTANT_PRINCIPAL_NAME', 'DISCLOSURE_LINE', 'RECORD_CALLS', 'RECORDING_RETENTION_DAYS',
   'TRANSFER_ENABLED', 'TRANSFER_TO_PHONE_NUMBER', 'TRANSFER_FALLBACK_MESSAGE', 'TRANSFER_MODE', 'HOLD_MAX_MINUTES',
+  'MAX_CALLS_PER_NUMBER_PER_DAY', 'CALL_CAP_BUSINESS_NUMBERS', 'CALL_CAP_BUSINESS_MAX',
 ];
 
 function setEnv(overrides: Record<string, string | undefined>) {
@@ -132,6 +133,35 @@ describe('config: env schema', () => {
   it('still rejects a non-empty phone number that is not E.164', async () => {
     setEnv({ NOTIFY_TO_PHONE_NUMBER: '5551234567' });
     await expect(import('../src/config/index.js')).rejects.toThrow(/E\.164/);
+  });
+
+  describe('CALL_CAP_BUSINESS_NUMBERS / CALL_CAP_BUSINESS_MAX (support lines with a higher daily cap)', () => {
+    it('defaults to no business numbers and a business cap of 10', async () => {
+      setEnv({});
+      const { config } = await import('../src/config/index.js');
+      expect(config.CALL_CAP_BUSINESS_NUMBERS).toEqual([]);
+      expect(config.CALL_CAP_BUSINESS_MAX).toBe(10);
+    });
+
+    it('parses a comma-separated list of E.164 numbers, ignoring spaces and blanks', async () => {
+      setEnv({ CALL_CAP_BUSINESS_NUMBERS: ' +18005550100, +18885550101 ,', CALL_CAP_BUSINESS_MAX: '8' });
+      const { config } = await import('../src/config/index.js');
+      expect(config.CALL_CAP_BUSINESS_NUMBERS).toEqual(['+18005550100', '+18885550101']);
+      expect(config.CALL_CAP_BUSINESS_MAX).toBe(8);
+    });
+
+    it('rejects a number that is not E.164', async () => {
+      setEnv({ CALL_CAP_BUSINESS_NUMBERS: '+18005550100,800-555-0101' });
+      await expect(import('../src/config/index.js')).rejects.toThrow(/CALL_CAP_BUSINESS_NUMBERS/);
+    });
+
+    it('rejects a business cap below the normal cap, or above 20', async () => {
+      setEnv({ MAX_CALLS_PER_NUMBER_PER_DAY: '5', CALL_CAP_BUSINESS_MAX: '4' });
+      await expect(import('../src/config/index.js')).rejects.toThrow(/CALL_CAP_BUSINESS_MAX/);
+      vi.resetModules();
+      setEnv({ CALL_CAP_BUSINESS_MAX: '21' });
+      await expect(import('../src/config/index.js')).rejects.toThrow();
+    });
   });
 
   it('an empty value does not satisfy a setting the chosen channel requires', async () => {

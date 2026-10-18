@@ -6,7 +6,7 @@ import { getContact } from '../../contacts/service.js';
 import { addressBookNameFor } from '../../googleContacts/lookup.js';
 import { logger } from '../../lib/logger.js';
 import { sendOwnerMessage } from '../../notifications/owner.js';
-import { canOverrideCallCap, checkCallCap, describeCallCapRefusal, OVERRIDE_CAP_MULTIPLIER } from '../../tasks/callCap.js';
+import { callCapLimit, canOverrideCallCap, checkCallCap, describeCallCapRefusal, OVERRIDE_CAP_MULTIPLIER } from '../../tasks/callCap.js';
 import { cancelPendingTask, countOpenApprovalRequests, createTask, withApprovalRequestLock } from '../../tasks/service.js';
 import type { McpRole } from '../role.js';
 import { triggerOrchestration } from '../../tasks/orchestrator.js';
@@ -198,12 +198,12 @@ export async function placeCallHandler(
   if (agent && input.overrideCallCap) {
     throw new Error("overrideCallCap needs the owner's own key: an agent can't lift the call limit.");
   }
-  const contact = agent || input.overrideCallCap ? await getContact(input.contactId) : undefined;
-  if ((agent || input.overrideCallCap) && !contact) throw new Error(`Contact not found: ${input.contactId}`);
-  if (input.overrideCallCap && !canOverrideCallCap(contact!)) {
+  const contact = await getContact(input.contactId);
+  if (!contact) throw new Error(`Contact not found: ${input.contactId}`);
+  if (input.overrideCallCap && !canOverrideCallCap(contact)) {
     throw new Error('The call cap can only be overridden for the owner or family.');
   }
-  const limit = config.MAX_CALLS_PER_NUMBER_PER_DAY * (input.overrideCallCap ? OVERRIDE_CAP_MULTIPLIER : 1);
+  const limit = callCapLimit({ callCapOverride: input.overrideCallCap ?? false }, contact);
 
   // At most MAX_CALLS_PER_NUMBER_PER_DAY calls to one number in any 24 hours,
   // counting calls already queued to dial (tasks/callCap.ts). The owner's
@@ -245,8 +245,8 @@ export async function placeCallHandler(
       });
 
   if (agent) {
-    const addressBookName = await addressBookNameFor(contact!);
-    const delivered = await sendOwnerMessage(buildApprovalMessage({ contact: { ...contact!, addressBookName }, task }));
+    const addressBookName = await addressBookNameFor(contact);
+    const delivered = await sendOwnerMessage(buildApprovalMessage({ contact: { ...contact, addressBookName }, task }));
     if (!delivered) {
       await cancelPendingTask(task.id);
       throw new Error("Couldn't reach the owner for approval, so no call will be placed.");

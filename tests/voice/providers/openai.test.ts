@@ -476,7 +476,7 @@ describe('OpenAIRealtimeProvider: waiting on hold (#151)', () => {
       tool_choice: 'none',
       metadata: { banjo_hold_check: expect.any(String) },
     });
-    expect(request.response.instructions).toContain('PERSON or RECORDING');
+    expect(request.response.instructions).toContain('PERSON, MENU or RECORDING');
     const input = request.response.input[0].content[0].text as string;
     expect(input).toContain('"This is Dana, how can I help?"');
     expect(input).toContain('"Please hold."');
@@ -492,7 +492,7 @@ describe('OpenAIRealtimeProvider: waiting on hold (#151)', () => {
     expect(events).toEqual([]);
   });
 
-  it('a RECORDING verdict is a recording; anything unclear, or no answer in time, counts as a person', async () => {
+  it('a RECORDING verdict is a recording, MENU a menu; anything unclear, or no answer in time, counts as a person', async () => {
     const { provider, ws, receive } = await connected();
     const answer = (text: string) => {
       const request = sent(ws).at(-1)!;
@@ -501,6 +501,13 @@ describe('OpenAIRealtimeProvider: waiting on hold (#151)', () => {
     const recording = provider.judgeHoldLine('Your call is important to us.', []);
     answer('RECORDING');
     await expect(recording).resolves.toBe('recording');
+    const menu = provider.judgeHoldLine("I found an account at street number 42. Is this the account you're calling about?", []);
+    answer('MENU');
+    await expect(menu).resolves.toBe('menu');
+    // A person outranks the rest: an answer naming both is a person.
+    const both = provider.judgeHoldLine('Hi, this is Dana. Press 1 if you want to keep holding.', []);
+    answer('PERSON or MENU');
+    await expect(both).resolves.toBe('person');
     const unclear = provider.judgeHoldLine('Hmm.', []);
     answer('Not sure.');
     await expect(unclear).resolves.toBe('person');

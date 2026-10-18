@@ -333,6 +333,17 @@ const envSchema = z
     // purpose: nothing the model or an MCP client sends can raise it. Five
     // test calls to one friend in one evening is how this came about.
     MAX_CALLS_PER_NUMBER_PER_DAY: z.coerce.number().int().min(1).default(3),
+    // Big companies' support lines (an IVR and a call centre, not a person's
+    // phone), allowed CALL_CAP_BUSINESS_MAX calls a day instead: getting
+    // through a long phone menu can take more tries than three. Operator
+    // settings only, like the cap itself: nothing an MCP client or a call
+    // sends can add a number here. Comma-separated E.164.
+    CALL_CAP_BUSINESS_NUMBERS: z
+      .string()
+      .default('')
+      .transform((v) => v.split(',').map((n) => n.trim()).filter(Boolean))
+      .pipe(z.array(z.string().regex(/^\+[1-9]\d{1,14}$/, 'each number must be in E.164 format, e.g. +18005551234'))),
+    CALL_CAP_BUSINESS_MAX: z.coerce.number().int().min(1).max(20).default(10),
 
     // Cold call transfer to the principal's phone (#7). Off by default: when
     // on, both the outbound and inbound tool lists gain transfer_to_owner and
@@ -420,6 +431,10 @@ const envSchema = z
   .refine((v) => !v.MCP_AGENT_API_KEY || v.NOTIFICATION_CHANNEL !== 'none', {
     message: "NOTIFICATION_CHANNEL can't be none when MCP_AGENT_API_KEY is set: approval requests go to the owner through it",
     path: ['NOTIFICATION_CHANNEL'],
+  })
+  .refine((v) => v.CALL_CAP_BUSINESS_MAX >= v.MAX_CALLS_PER_NUMBER_PER_DAY, {
+    message: 'CALL_CAP_BUSINESS_MAX must be at least MAX_CALLS_PER_NUMBER_PER_DAY: it raises the cap for support lines, never lowers it',
+    path: ['CALL_CAP_BUSINESS_MAX'],
   })
   .refine((v) => !v.TRANSFER_ENABLED || !!v.TRANSFER_TO_PHONE_NUMBER, {
     message: 'TRANSFER_TO_PHONE_NUMBER is required when TRANSFER_ENABLED=true',

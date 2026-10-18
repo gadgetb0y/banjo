@@ -173,6 +173,8 @@ export function buildOutboundCallSessionOptions(params: {
   frontendSystemPrompt?: string;
 }): CallSessionOptions<CallContext> {
   const { task, callAttempt, contact, telephony, calendar, systemPrompt, frontendSystemPrompt } = params;
+  /** Whether the owner has been told about the hold Banjo is in, or stepping in and out of (onHoldChange). */
+  let toldOwnerOnHold = false;
 
   // Shared by onFailure and onStatusChange's 'ended' case below: if the call
   // is over and the task never reached a terminal status, nothing else will
@@ -235,13 +237,19 @@ export function buildOutboundCallSessionOptions(params: {
     ...(task.constraints?.maxHoldMinutes ? { maxHoldMs: task.constraints.maxHoldMinutes * 60_000 } : {}),
 
     // #151: the owner hears when a hold starts and when someone picks up. A
-    // hold that runs out ends the call, and its outcome says so.
+    // hold that runs out ends the call, and its outcome says so. A phone menu
+    // can take Banjo off hold and back on at each step: that's one hold to the
+    // owner, until someone picks up.
     async onHoldChange(change) {
-      const message =
-        change.kind === 'started'
-          ? `Banjo is on hold with ${contact.displayName} and will wait up to ${minutes(change.maxMs)}.`
-          : `Someone picked up at ${contact.displayName} after ${minutes(change.waitedMs)} on hold. Banjo is talking to them now.`;
-      await sendOwnerMessage(message);
+      if (change.kind === 'menu') return;
+      if (change.kind === 'started') {
+        if (toldOwnerOnHold) return;
+        toldOwnerOnHold = true;
+        await sendOwnerMessage(`Banjo is on hold with ${contact.displayName} and will wait up to ${minutes(change.maxMs)}.`);
+        return;
+      }
+      toldOwnerOnHold = false;
+      await sendOwnerMessage(`Someone picked up at ${contact.displayName} after ${minutes(change.waitedMs)} on hold. Banjo is talking to them now.`);
     },
 
     async onHoldLimit(waitedMs) {

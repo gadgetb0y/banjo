@@ -11,7 +11,7 @@ import { negotiateAudioFormats, resolveAudioPipeline, type AudioPipeline } from 
 import type { CallContext } from './types.js';
 import { checkDisclosure, type DisclosureResult } from './disclosure.js';
 import { isCuttingIn, isSigningOff, saidGoodbye } from './goodbye.js';
-import { holdBudgetMs, isRepeatOnHold, personPickedUpNote } from './hold.js';
+import { holdBudgetMs, isRepeatOnHold, menuPromptNote, personPickedUpNote } from './hold.js';
 import { classifyTranscript } from './transcriptQuality.js';
 
 export type CallSessionState = 'connecting' | 'active' | 'tool-pending' | 'ending' | 'ended' | 'error';
@@ -215,7 +215,7 @@ export interface CallSessionOptions<TCtx = CallContext> {
   /** How long this call may wait on hold (#151). Defaults to HOLD_MAX_MINUTES; always cut short to fit the voice session. */
   maxHoldMs?: number;
   /** A hold started (with how long it may last) or ended because a person picked up (#151). Must not throw into the call. */
-  onHoldChange?(change: { kind: 'started'; maxMs: number } | { kind: 'person'; waitedMs: number }): Promise<void>;
+  onHoldChange?(change: { kind: 'started'; maxMs: number } | { kind: 'person'; waitedMs: number } | { kind: 'menu' }): Promise<void>;
   /** The hold ran out with no person (#151): record it. The call then ends. */
   onHoldLimit?(waitedMs: number): Promise<void>;
 }
@@ -1122,6 +1122,10 @@ export class CallSession<TCtx = CallContext> {
       this.personPickedUp(line);
       return;
     }
+    if (verdict === 'menu') {
+      this.menuAskedOnHold(line);
+      return;
+    }
     const next = hold.nextLine;
     hold.nextLine = undefined;
     if (next !== undefined) this.considerHoldLine(next);
@@ -1139,6 +1143,22 @@ export class CallSession<TCtx = CallContext> {
     // in instruction position.
     this.voiceAI.addContext!([
       { role: 'system', text: personPickedUpNote(this.opts.pickupLine) },
+      { role: 'user', text: line },
+    ]);
+    this.triggerVoiceAIResponse();
+  }
+
+  /**
+   * An automated menu asked for input on hold: off hold, and Banjo answers it.
+   * Like a person picking up, the menu's words go in as a user line after a
+   * fixed note, never as instructions.
+   */
+  private menuAskedOnHold(line: string): void {
+    if (!this.stopHold()) return;
+    logger.info({ callId: this.opts.callId }, 'a phone menu asked for input on hold');
+    void this.opts.onHoldChange?.({ kind: 'menu' }).catch((err: unknown) => logger.warn({ err, callId: this.opts.callId }, 'onHoldChange failed'));
+    this.voiceAI.addContext!([
+      { role: 'system', text: menuPromptNote() },
       { role: 'user', text: line },
     ]);
     this.triggerVoiceAIResponse();

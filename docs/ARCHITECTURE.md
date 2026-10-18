@@ -102,6 +102,12 @@ are normalized at startup (`normalizeStoredPhoneNumbers`). A row whose normalize
 already holds is left alone and logged, not merged. Without normalization,
 "+14155551234" and "415-555-1234" would be two contacts, each with its own calls.
 
+A support line the operator lists in `CALL_CAP_BUSINESS_NUMBERS` (`.env` only) gets
+`CALL_CAP_BUSINESS_MAX` (default 10, at most 20) instead. That came from a cable company's support
+line, where two calls in a row died in its phone menu and three tries weren't enough to file a
+ticket. A business line is an IVR and a call centre, not someone's own phone, which is what the cap
+protects. The list can't be set through MCP, for the same reason as `relationshipTier`.
+
 It's enforced in two places:
 
 - **`place_call`**, for a call that should start now. It checks before creating anything, and it also

@@ -4,9 +4,9 @@ import { z } from 'zod';
 import type { CallSessionOptions } from '../../src/session/callSession.js';
 import type { CallContext } from '../../src/session/types.js';
 import type { TelephonyEvent, TelephonyProvider } from '../../src/telephony/providers/types.js';
-import type { VoiceAIEvent, VoiceAIProvider } from '../../src/voice/types.js';
+import type { HoldVerdict, VoiceAIEvent, VoiceAIProvider } from '../../src/voice/types.js';
 import { defineVoiceTool } from '../../src/voice/tools/defineVoiceTool.js';
-import { holdBudgetMs, isRepeatOnHold, personPickedUpNote } from '../../src/session/hold.js';
+import { holdBudgetMs, isRepeatOnHold, menuPromptNote, personPickedUpNote } from '../../src/session/hold.js';
 
 // Waiting on hold (#151), at the VoiceAIProvider/TelephonyProvider boundary,
 // like tests/session/callSession.test.ts, with a voice provider that can hold.
@@ -22,7 +22,7 @@ const fakeVoiceAI = {
   sayVerbatim: vi.fn(),
   setHold: vi.fn(),
   addContext: vi.fn(),
-  judgeHoldLine: vi.fn(async (_line: string, _earlier: string[]) => 'recording' as 'person' | 'recording'),
+  judgeHoldLine: vi.fn(async (_line: string, _earlier: string[]) => 'recording' as HoldVerdict),
   disconnect: vi.fn(async () => {}),
   on: vi.fn((_event: 'event', listener: (e: VoiceAIEvent) => void) => voiceAIEmitter.on('event', listener)),
   off: vi.fn((_event: 'event', listener: (e: VoiceAIEvent) => void) => voiceAIEmitter.off('event', listener)),
@@ -132,6 +132,16 @@ describe('personPickedUpNote', () => {
   });
 });
 
+describe('menuPromptNote', () => {
+  it('hands the turn back to answer a phone menu, with no disclosure, and is fixed text', () => {
+    const note = menuPromptNote();
+    expect(note).toContain('press_digits');
+    expect(note).toContain('wait_on_hold');
+    expect(note).not.toContain('AI assistant');
+    expect(note).not.toMatch(/"[^"]+"/); // quotes nothing for the model to repeat (#154)
+  });
+});
+
 describe('CallSession on hold (#151)', () => {
   it('goes on hold silently: no reply to the tool result, and the owner is told the limit', async () => {
     const { options } = await onHold();
@@ -160,7 +170,7 @@ describe('CallSession on hold (#151)', () => {
   });
 
   it('judges only the latest of the lines that arrive while a judgment is out', async () => {
-    let finish!: (v: 'person' | 'recording') => void;
+    let finish!: (v: HoldVerdict) => void;
     fakeVoiceAI.judgeHoldLine.mockImplementationOnce(() => new Promise((resolve) => (finish = resolve)));
     await onHold();
     heard('Please hold.');
@@ -190,6 +200,36 @@ describe('CallSession on hold (#151)', () => {
     expect(fakeVoiceAI.judgeHoldLine).toHaveBeenCalledTimes(1);
   });
 
+  it('a phone menu asking for input: off hold, and Banjo answers it, with no reopening and no owner message', async () => {
+    const { options } = await onHold();
+    fakeVoiceAI.judgeHoldLine.mockImplementationOnce(async () => 'menu');
+    heard("I found an account at street number 42. Is this the account you're calling about?");
+
+    await vi.waitFor(() => expect(fakeVoiceAI.setHold).toHaveBeenCalledWith(false));
+    expect(fakeVoiceAI.addContext).toHaveBeenCalledWith([
+      { role: 'system', text: menuPromptNote() },
+      { role: 'user', text: "I found an account at street number 42. Is this the account you're calling about?" },
+    ]);
+    expect(fakeVoiceAI.triggerResponse).toHaveBeenCalledTimes(1);
+    expect(fakeVoiceAI.triggerResponse).toHaveBeenCalledWith();
+    expect(options.onHoldChange).toHaveBeenCalledWith({ kind: 'menu' });
+    expect(options.onHoldChange).not.toHaveBeenCalledWith(expect.objectContaining({ kind: 'person' }));
+    // Off hold, lines go to the model as usual, not to the judge.
+    heard('Say yes or no.');
+    expect(fakeVoiceAI.judgeHoldLine).toHaveBeenCalledTimes(1);
+  });
+
+  it('after a menu hands the turn back, Banjo can wait on hold again', async () => {
+    await onHold();
+    fakeVoiceAI.judgeHoldLine.mockImplementationOnce(async () => 'menu');
+    heard('If this is not the account, say no or press 2. Otherwise, please remain on the line.');
+    await vi.waitFor(() => expect(fakeVoiceAI.setHold).toHaveBeenCalledWith(false));
+
+    voice({ type: 'tool_call', call: { id: 'hold-2', name: 'wait_on_hold', arguments: {} } });
+    await vi.waitFor(() => expect(fakeVoiceAI.sendToolResult).toHaveBeenCalledWith('hold-2', { ok: true }, false, { respond: false }));
+    expect(fakeVoiceAI.setHold).toHaveBeenLastCalledWith(true);
+  });
+
   it('the limit runs out: recorded, then the call ends', async () => {
     vi.useFakeTimers();
     const { options, telephony } = await onHold({ maxHoldMs: 60_000 });
@@ -202,7 +242,7 @@ describe('CallSession on hold (#151)', () => {
   });
 
   it('the other party hanging up ends the hold, and a late judgment changes nothing', async () => {
-    let finish!: (v: 'person' | 'recording') => void;
+    let finish!: (v: HoldVerdict) => void;
     fakeVoiceAI.judgeHoldLine.mockImplementationOnce(() => new Promise((resolve) => (finish = resolve)));
     const { options, emitTelephony } = await onHold();
     heard('Please hold.');
@@ -256,12 +296,12 @@ describe('recording consent on hold: nothing is recorded after a hold (#151, #8)
     return s;
   }
 
-  /** On hold, a person picks up, and Banjo says the notice to them, twice for good measure. */
-  async function holdThenNoticeAgain() {
+  /** On hold, a person picks up (or a menu asks for input), and Banjo says the notice, twice for good measure. */
+  async function holdThenNoticeAgain(verdict: HoldVerdict = 'person') {
     voice({ type: 'tool_call', call: { id: 'hold-1', name: 'wait_on_hold', arguments: {} } });
     await vi.advanceTimersByTimeAsync(1_000);
-    fakeVoiceAI.judgeHoldLine.mockImplementationOnce(async () => 'person');
-    heard('This is Dana.');
+    fakeVoiceAI.judgeHoldLine.mockImplementationOnce(async () => verdict);
+    heard(verdict === 'person' ? 'This is Dana.' : 'Is this the account you are calling about?');
     await vi.advanceTimersByTimeAsync(0);
     for (let i = 0; i < 2; i++) {
       voice({ type: 'transcript', role: 'assistant', text: NOTICE_LINE, isFinal: true });
@@ -277,6 +317,13 @@ describe('recording consent on hold: nothing is recorded after a hold (#151, #8)
     expect((s.telephony.stopRecording as ReturnType<typeof vi.fn>).mock.invocationCallOrder[0]).toBeLessThan(
       fakeVoiceAI.setHold.mock.invocationCallOrder[0]!,
     );
+    expect(s.telephony.startRecording).toHaveBeenCalledTimes(1);
+  });
+
+  it('a menu handing the turn back never restarts the recording either', async () => {
+    const s = await recordedCall();
+    await holdThenNoticeAgain('menu');
+    expect(s.telephony.stopRecording).toHaveBeenCalledTimes(1);
     expect(s.telephony.startRecording).toHaveBeenCalledTimes(1);
   });
 
