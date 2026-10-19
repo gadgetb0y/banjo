@@ -13,6 +13,8 @@ import { logger } from './lib/logger.js';
 import { registerMcpRoutes } from './mcp/server.js';
 import { healthRoutes } from './routes/health.js';
 import { approvalRoutes, redactQuery } from './approvals/routes.js';
+import { ownerQuestionRoutes } from './ownerQuestions/routes.js';
+import { saveTransferLeg } from './transcripts/transferLeg.js';
 import { CallSession } from './session/callSession.js';
 import { createTelephonyProvider } from './telephony/factory.js';
 import type { TransferResult } from './tasks/schema.js';
@@ -41,6 +43,8 @@ interface TwilioHttpHooks {
   takeTransferAccepted(callId: string): boolean;
   acceptLoopIn(callId: string, digits: string): Promise<string>;
   handleLoopInStatus(callId: string, callStatus: string): void;
+  fetchRecordingWav(recordingId: string): Promise<Buffer>;
+  deleteRecording(recordingId: string): Promise<void>;
 }
 
 /**
@@ -85,6 +89,7 @@ app.use('*', async (c, next) => {
 
 app.route('/', healthRoutes);
 app.route('/', approvalRoutes);
+app.route('/', ownerQuestionRoutes);
 registerMcpRoutes(app);
 
 const telephony = createTelephonyProvider() as unknown as TwilioHttpHooks;
@@ -180,6 +185,32 @@ app.post('/telephony/twilio/transfer-callback', async (c) => {
     logger.error({ err, callId, result }, 'could not record the transfer result');
   }
   return c.body(telephony.buildTransferCallbackTwiml(result), 200, { 'Content-Type': 'text/xml' });
+});
+
+/**
+ * A transfer's recording is ready (TRANSCRIBE_TRANSFERS): transcribed into the
+ * call's transcript and then deleted, in the background, so Twilio gets its
+ * answer at once.
+ */
+app.post('/telephony/twilio/transfer-recording', async (c) => {
+  const body = await c.req.parseBody();
+  if (!isValidTwilioSignature(c, body as Record<string, string>)) {
+    logger.warn({ path: c.req.path }, 'rejected Twilio webhook with invalid or missing signature');
+    return c.body(null, 403);
+  }
+  const callId = c.req.query('callId') ?? '';
+  const recordingId = typeof body.RecordingSid === 'string' ? body.RecordingSid : '';
+  if (body.RecordingStatus !== 'completed' || !recordingId) {
+    logger.warn({ callId, status: body.RecordingStatus }, 'a transfer recording did not complete');
+    if (recordingId) void telephony.deleteRecording(recordingId).catch((err: unknown) => logger.error({ err, callId }, 'could not delete a transfer recording'));
+    return c.body(null, 204);
+  }
+  const started = typeof body.RecordingStartTime === 'string' ? new Date(body.RecordingStartTime) : new Date();
+  void saveTransferLeg(
+    { callId, recordingId, startedAt: Number.isNaN(started.getTime()) ? new Date() : started },
+    { fetchRecordingWav: (id) => telephony.fetchRecordingWav(id), deleteRecording: (id) => telephony.deleteRecording(id) },
+  );
+  return c.body(null, 204);
 });
 
 /** The <Number url> of a transfer (#74): the screening prompt, run on the principal's leg once it picks up. */

@@ -14,6 +14,8 @@ type CallDirection = 'outbound' | 'inbound';
 // from there — this module deliberately depends only on config, and
 // transfer.ts imports callTools.ts, which pulls in the task service and DB.
 const TRANSFER_TOOL_NAME = 'transfer_to_owner';
+// Must match ownerQuestions/tool.ts's ASK_OWNER_TOOL_NAME, not imported for the same reason.
+const ASK_OWNER_TOOL_NAME = 'ask_owner';
 
 /**
  * One blank-line-separated block of the base guidance. `voiceLayer` marks
@@ -198,6 +200,13 @@ function guidanceSections(
           : `- Never promise a callback, follow-up, or that you will "check with ${config.ASSISTANT_PRINCIPAL_NAME} and call you back" — you cannot place outbound calls, and this call ends with nothing carried forward to any future call. If something cannot be resolved right now (an unavailable time, a request outside what your tools support), resolve it live on this call — offer alternatives, or use your escalation tool — never leave it as something you will get back to the caller about.`,
         '- Stay focused on the goal of the call. Do not volunteer unrelated information.',
         ...(ask ? [] : ['- If the other party offers a time, restate it back clearly before confirming.']),
+        // 2026-10-19 sim: a support agent offered "tomorrow between one and
+        // five" and Banjo kept asking for a start time it was never going to get.
+        ...(ask || direction !== 'outbound'
+          ? []
+          : [
+              '- A visit offered as an arrival window (a technician or a delivery arriving "between one and five") is a time you can book: the window\'s start is the start time, and the whole window is the length. Check and confirm it that way, and don\'t ask them for an exact arrival time they don\'t give.',
+            ]),
         // #44: a real booking went through and the model went straight to
         // "that's all set, have a great day" — the one sentence that would
         // catch a wrong booking on the spot, for both sides, never got said.
@@ -219,9 +228,44 @@ function guidanceSections(
     },
   ];
 
+  if (direction === 'outbound') sections.push(workingWithThemSection(transfer));
   if (transfer) sections.push(transferSection(direction));
   if (direction === 'outbound' && config.VOICE_AI_PROVIDER === 'openai') sections.push(HOLD_SECTION);
   return sections;
+}
+
+/** Whether outbound calls get ask_owner: it needs the answer added mid-call (VoiceAIProvider.addContext), which only OpenAI Realtime has. */
+export function canAskOwner(): boolean {
+  return config.ASK_OWNER_ENABLED && config.VOICE_AI_PROVIDER === 'openai';
+}
+
+/**
+ * The back-and-forth with a person who is helping (2026-10-18): a support
+ * agent asked questions and ran their script, and the call was handed to the
+ * principal at the first thing Banjo couldn't answer. Banjo answers what it
+ * can, asks the principal what it can't (ask_owner, when on), and gets the
+ * result on record before anyone leaves the call. Outbound only.
+ */
+function workingWithThemSection(transfer: boolean): GuidanceSection {
+  const principal = config.ASSISTANT_PRINCIPAL_NAME;
+  const askOwner = canAskOwner();
+  return {
+    voiceLayer: true,
+    lines: [
+      'Working with the person helping you:',
+      askOwner
+        ? `- Answer their questions from your instructions and what you've been told about the task. If something ${principal} would know isn't there, don't guess: tell them you'll check with ${principal}, which may take a minute or two, and use ${ASK_OWNER_TOOL_NAME}. Carry on with anything else meanwhile. When the answer comes, give them what they need from it.`
+        : `- Answer their questions from your instructions and what you've been told about the task. If the answer isn't there, say plainly that you don't have it rather than guess.`,
+      '- As soon as they say they have opened a ticket, case or order, ask for its number before anything else, and ask them to note the details you gave them on it. Before the call ends, make sure you know what happens next and when.',
+      "- If the steps they offer don't address what you've described, say so politely and ask whether someone more specialized can take it, before you accept a plan that won't fix it.",
+      '- If their process gets in the way, keep it about the process, never them: thank them for their help, and ask what they can do from here.',
+      ...(transfer
+        ? [
+            `- Hand the call to ${principal} only for what needs them personally, never because the conversation is long or difficult. Before you do, make sure any ticket or reference number is already settled.`,
+          ]
+        : []),
+    ],
+  };
 }
 
 /**

@@ -370,6 +370,24 @@ const envSchema = z
       .string()
       .min(1)
       .default("Sorry, they couldn't be reached right now. They'll get back to you soon. Goodbye."),
+    // When the other party asks something the task doesn't cover, Banjo asks
+    // the owner mid-call (ask_owner, src/ownerQuestions/): a message through
+    // NOTIFICATION_CHANNEL with a signed link to a page where the owner types
+    // the answer, which is relayed into the call. Off by default.
+    ASK_OWNER_ENABLED: z
+      .enum(['true', 'false'])
+      .default('false')
+      .transform((v) => v === 'true'),
+    // How long Banjo waits for the owner's answer before it's told none came.
+    ASK_OWNER_TIMEOUT_SECONDS: z.coerce.number().int().min(30).max(600).default(120),
+    // Transcribe what's said after a cold transfer, between the principal and
+    // the other party. Off by default. Both hear a recording notice before
+    // they're bridged; the recording is transcribed into the call's
+    // transcript once the call ends, then deleted from Twilio.
+    TRANSCRIBE_TRANSFERS: z
+      .enum(['true', 'false'])
+      .default('false')
+      .transform((v) => v === 'true'),
   })
   .refine((v) => v.VOICE_AI_PROVIDER !== 'openai' || !!v.OPENAI_API_KEY, {
     message: 'OPENAI_API_KEY is required when VOICE_AI_PROVIDER=openai',
@@ -439,6 +457,14 @@ const envSchema = z
   .refine((v) => !v.TRANSFER_ENABLED || !!v.TRANSFER_TO_PHONE_NUMBER, {
     message: 'TRANSFER_TO_PHONE_NUMBER is required when TRANSFER_ENABLED=true',
     path: ['TRANSFER_TO_PHONE_NUMBER'],
+  })
+  .refine((v) => !v.ASK_OWNER_ENABLED || (v.NOTIFICATION_CHANNEL !== 'none' && !!v.PUBLIC_HOSTNAME), {
+    message: "ASK_OWNER_ENABLED needs a NOTIFICATION_CHANNEL other than none and PUBLIC_HOSTNAME: questions reach the owner as a link through it",
+    path: ['ASK_OWNER_ENABLED'],
+  })
+  .refine((v) => !v.TRANSCRIBE_TRANSFERS || (v.PERSIST_TRANSCRIPTS && !!v.OPENAI_API_KEY), {
+    message: 'TRANSCRIBE_TRANSFERS needs PERSIST_TRANSCRIPTS=true and OPENAI_API_KEY: the transcript is saved with the call, transcribed by OpenAI',
+    path: ['TRANSCRIBE_TRANSFERS'],
   })
   .refine((v) => v.BUSINESS_HOURS_START < v.BUSINESS_HOURS_END, {
     message: 'BUSINESS_HOURS_START must be earlier than BUSINESS_HOURS_END',

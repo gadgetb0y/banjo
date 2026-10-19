@@ -50,8 +50,15 @@ vi.mock('../src/telephony/factory.js', () => ({
     buildTransferScreenTwiml,
     acceptTransferScreen,
     takeTransferAccepted,
+    fetchRecordingWav,
+    deleteRecording,
   }),
 }));
+
+const fetchRecordingWav = vi.fn(async (_id: string) => Buffer.alloc(0));
+const deleteRecording = vi.fn(async (_id: string) => {});
+const saveTransferLeg = vi.fn(async (..._args: unknown[]) => 0);
+vi.mock('../src/transcripts/transferLeg.js', () => ({ saveTransferLeg: (...args: unknown[]) => saveTransferLeg(...args) }));
 
 const recordTransferResult = vi.fn(async (_callId: string, _result: string) => true);
 const buildTransferScreenTwiml = vi.fn((_callId: string) => '<Response><Gather/><Hangup/></Response>');
@@ -428,6 +435,37 @@ describe('Twilio webhook signature validation on /telephony/twilio/inbound', () 
       `https://${config.PUBLIC_HOSTNAME}/telephony/twilio/inbound`,
       expect.objectContaining({ CallSid: 'CA-inbound-1', From: '+15555550100' }),
     );
+  });
+});
+
+describe('POST /telephony/twilio/transfer-recording (TRANSCRIBE_TRANSFERS)', () => {
+  const post = (body: Record<string, string>, signature = 'valid-signature') =>
+    app.request('/telephony/twilio/transfer-recording?callId=attempt-1', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'X-Twilio-Signature': signature },
+      body: new URLSearchParams(body).toString(),
+    });
+  const RE = 'RE' + 'b'.repeat(32);
+
+  it('hands a completed recording to be transcribed, with when it started', async () => {
+    const res = await post({ RecordingSid: RE, RecordingStatus: 'completed', RecordingStartTime: 'Mon, 19 Oct 2026 01:17:30 +0000' });
+    expect(res.status).toBe(204);
+    expect(saveTransferLeg).toHaveBeenCalledWith(
+      { callId: 'attempt-1', recordingId: RE, startedAt: new Date('2026-10-19T01:17:30Z') },
+      expect.objectContaining({ fetchRecordingWav: expect.any(Function), deleteRecording: expect.any(Function) }),
+    );
+  });
+
+  it('deletes a recording that did not complete, transcribing nothing', async () => {
+    await post({ RecordingSid: RE, RecordingStatus: 'failed' });
+    expect(saveTransferLeg).not.toHaveBeenCalled();
+    expect(deleteRecording).toHaveBeenCalledWith(RE);
+  });
+
+  it('rejects a request without a valid Twilio signature', async () => {
+    validateRequest.mockReturnValueOnce(false);
+    expect((await post({ RecordingSid: RE, RecordingStatus: 'completed' })).status).toBe(403);
+    expect(saveTransferLeg).not.toHaveBeenCalled();
   });
 });
 

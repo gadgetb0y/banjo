@@ -21,6 +21,8 @@ import {
   waitOnHoldTool,
 } from '../voice/tools/callTools.js';
 import { modeRules } from './modes.js';
+import { askOwnerTool } from '../ownerQuestions/tool.js';
+import { canAskOwner } from '../voice/systemPrompt.js';
 import type { VoiceTool } from '../voice/tools/defineVoiceTool.js';
 import { unregisterLiveCall } from './liveCalls.js';
 import { getTask, isTerminalStatus, transitionTask, updateCallAttempt } from './service.js';
@@ -129,6 +131,7 @@ function outboundToolsFor(task: Task): VoiceTool<any, CallContext>[] {
   const base: VoiceTool<any, CallContext>[] = [...shared, pressDigitsTool];
   if (config.TRANSFER_ENABLED) base.push(transferToOwnerTool);
   if (canWaitOnHold()) base.push(waitOnHoldTool);
+  if (canAskOwner()) base.push(askOwnerTool);
   return [...base, ...(MODE_TOOLS[task.mode] ?? [])];
 }
 

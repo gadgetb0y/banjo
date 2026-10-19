@@ -612,6 +612,63 @@ This replaced a pause-and-resume design that re-established consent with the new
 - **Real queues.** The judge's accuracy on them is unmeasured: the sim covers the flow (`~` lines in a `--script` play like a recording), not real hold audio.
 
 
+## Working through a problem with a person (2026-10-18)
+
+**Why.** On 2026-10-18 Banjo got through Xfinity's phone menu and reached an agent, who asked for verification digits Banjo didn't have. Banjo transferred the call to the owner. What followed was long and frustrating:
+- the frontline script couldn't take in the evidence;
+- the call ended without a clear plan for what the technician visit would check.
+
+None of it was captured: a cold transfer drops Banjo off the line, and `transferCall` stops any recording. Two changes came out of it.
+
+### Asking the owner mid-call (`ask_owner`, `ASK_OWNER_ENABLED`)
+**When Banjo uses it.** When the other party asks something the task doesn't cover, Banjo says it'll check, which may take a minute or two, and uses `ask_owner`. It never guesses.
+
+**The tool.**
+- It's offered on outbound calls on OpenAI Realtime only, because the answer comes back through `VoiceAIProvider.addContext`.
+- It returns as soon as the question is sent, so the tool budget never covers the wait.
+
+**The message and the link** (`src/ownerQuestions/`):
+- The question is saved in `owner_questions`, at most 3 open per call.
+- It's sent through `sendOwnerMessage()` as urgent, with a signed `/answer/:id` link. Banjo's words and the link come first, ahead of the model-written question.
+- The link's signature is keyed from `MCP_API_KEY` under its own label (`banjo-answer-v1`), so an approval signature can't answer a question and an answer signature can't approve a call.
+
+**The answer page.**
+- GET only shows the question, so a link preview can't answer anything.
+- POST saves the answer once, at most 500 characters, before the question expires.
+
+**Getting the answer back into the call.**
+- The answer reaches the call through the live-call registry, as a fixed note (`answerNote`) with the question and answer quoted, via `CallSession.relayOwnerNote`.
+- It waits for any reply in progress to finish first. On hold, it's held until the hold ends.
+- If no answer comes within `ASK_OWNER_TIMEOUT_SECONDS`, a fixed note says so: don't guess; carry on, offer to connect them if transfers are on, or escalate.
+- Questions and answers are deleted along with transcripts (`TRANSCRIPT_RETENTION_DAYS`).
+
+**Conduct rules for every outbound call** (`workingWithThemSection` in `voice/systemPrompt.ts`). These apply whether or not `ask_owner` is on:
+- answer from the task;
+- get any ticket or case number, and ask them to note the details on it;
+- ask for someone more specialized when their steps don't fit the problem;
+- keep it about the process, never the person;
+- with transfers on, hand the call over only for what needs the principal, and only once any ticket is settled.
+
+### The transcript after a transfer (`TRANSCRIBE_TRANSFERS`)
+**Consent, by fixed audio.** Banjo is off the call by then, so consent can't depend on what the model says. Both notices are fixed:
+- the other party hears a `<Say>` before the `<Dial>`: "This call will be recorded.";
+- the principal's press-1 screen says "This call is recorded." first.
+
+**Recording.** The `<Dial>` records `record-from-answer-dual`: channel 1 is the original call (the other party), channel 2 the principal.
+
+**Transcribing** (`transcripts/transferLeg.ts`):
+- The recording-status callback, with its Twilio signature checked, hands the recording sid to `saveTransferLeg`.
+- It fetches the WAV by sid from the account's own API path, never from a URL in the webhook, and splits the channels.
+- It transcribes each channel with `whisper-1`, which gives segment timestamps, and merges them by time.
+- The merged lines are appended after Banjo's lines as leg `transferred`, with role `owner` for the principal.
+- Then the recording is deleted from Twilio. That happens even when transcription fails, after 3 tries: recording retention only knows the recordings in `call_attempts.recording_sid`.
+- `get_call_transcript` marks those lines `afterTransfer`, with speaker `owner`.
+
+**Not covered yet:**
+- **Warm transfers.** A conference recording is mixed to mono, so the two sides can't be told apart.
+- **The screening prompt.** It may show up as text on the owner's channel.
+- **A live call.** This hasn't been tested on one yet.
+
 ## Text-mode simulator (`src/sim/`, `scripts/sim.ts`)
 
 `npm run sim` places a call that's real everywhere except the phone line: the `place_call` handler,

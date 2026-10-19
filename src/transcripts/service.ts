@@ -2,6 +2,7 @@ import { asc, eq, inArray, lt } from 'drizzle-orm';
 import { config } from '../config/index.js';
 import { db } from '../db/index.js';
 import { logger } from '../lib/logger.js';
+import { deleteExpiredOwnerQuestions } from '../ownerQuestions/service.js';
 import { callAttempts, type CallAttempt } from '../tasks/schema.js';
 import { callTranscriptTurns, type CallTranscriptTurn } from './schema.js';
 
@@ -10,7 +11,8 @@ export type TranscriptCall = { callAttemptId: string; inboundCallId?: never } | 
 
 export interface TranscriptTurnInput {
   seq: number;
-  role: 'user' | 'assistant';
+  role: 'user' | 'assistant' | 'owner';
+  leg?: 'banjo' | 'transferred';
   text: string;
   quality: 'ok' | 'suspect';
   voiceProvider: string;
@@ -72,12 +74,14 @@ export async function deleteExpiredTranscripts(
 /**
  * Retention runs at boot and then daily — even with PERSIST_TRANSCRIPTS off,
  * so switching saving off doesn't leave what was already saved forever.
+ * ask_owner questions and answers go with the transcripts they belong to.
  */
 export function startTranscriptRetentionSweeper(): void {
   const sweep = () =>
-    deleteExpiredTranscripts()
-      .then((count) => {
+    Promise.all([deleteExpiredTranscripts(), deleteExpiredOwnerQuestions()])
+      .then(([count, questions]) => {
         if (count > 0) logger.info({ count, retentionDays: config.TRANSCRIPT_RETENTION_DAYS }, 'deleted expired transcript lines');
+        if (questions > 0) logger.info({ count: questions, retentionDays: config.TRANSCRIPT_RETENTION_DAYS }, 'deleted expired owner questions');
       })
       .catch((err) => logger.error({ err }, 'transcript retention sweep failed'));
   void sweep();

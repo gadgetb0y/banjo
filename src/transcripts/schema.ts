@@ -3,7 +3,13 @@ import { check, index, integer, pgEnum, pgTable, text, timestamp, uniqueIndex, u
 import { inboundCalls } from '../inbound/schema.js';
 import { callAttempts } from '../tasks/schema.js';
 
-export const transcriptRoleEnum = pgEnum('transcript_role', ['user', 'assistant']);
+// 'owner': the principal, on the part of a call after a transfer (leg 'transferred').
+export const transcriptRoleEnum = pgEnum('transcript_role', ['user', 'assistant', 'owner']);
+
+// Which part of the call a line is from: Banjo's own, or what the principal and
+// the other party said after a cold transfer (TRANSCRIBE_TRANSFERS), transcribed
+// from a recording once the call ended (transcripts/transferLeg.ts).
+export const transcriptLegEnum = pgEnum('transcript_leg', ['banjo', 'transferred']);
 
 // From session/transcriptQuality.ts. 'empty' turns are never stored, so it
 // isn't a value here. 'suspect' means the transcriber may have invented the
@@ -33,6 +39,7 @@ export const callTranscriptTurns = pgTable(
     // order lines were finalised, not strictly the order they were spoken.
     seq: integer('seq').notNull(),
     role: transcriptRoleEnum('role').notNull(),
+    leg: transcriptLegEnum('leg').notNull().default('banjo'),
     text: text('text').notNull(),
     quality: transcriptQualityEnum('quality').notNull(),
     // Which VoiceAIProvider handled the call. Gemini transcribes only the

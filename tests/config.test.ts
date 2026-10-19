@@ -33,6 +33,7 @@ const ALL_CONFIG_KEYS = [
   'INBOUND_DEFAULT_DURATION_MINUTES', 'INBOUND_MAX_LOOKAHEAD_DAYS', 'ASSISTANT_PRINCIPAL_NAME', 'DISCLOSURE_LINE', 'RECORD_CALLS', 'RECORDING_RETENTION_DAYS',
   'TRANSFER_ENABLED', 'TRANSFER_TO_PHONE_NUMBER', 'TRANSFER_FALLBACK_MESSAGE', 'TRANSFER_MODE', 'HOLD_MAX_MINUTES',
   'MAX_CALLS_PER_NUMBER_PER_DAY', 'CALL_CAP_BUSINESS_NUMBERS', 'CALL_CAP_BUSINESS_MAX',
+  'ASK_OWNER_ENABLED', 'ASK_OWNER_TIMEOUT_SECONDS', 'TRANSCRIBE_TRANSFERS', 'PERSIST_TRANSCRIPTS',
 ];
 
 function setEnv(overrides: Record<string, string | undefined>) {
@@ -161,6 +162,41 @@ describe('config: env schema', () => {
       vi.resetModules();
       setEnv({ CALL_CAP_BUSINESS_MAX: '21' });
       await expect(import('../src/config/index.js')).rejects.toThrow();
+    });
+  });
+
+  describe('ASK_OWNER_ENABLED (questions to the owner mid-call)', () => {
+    it('is off by default, with a 120s wait', async () => {
+      setEnv({});
+      const { config } = await import('../src/config/index.js');
+      expect(config.ASK_OWNER_ENABLED).toBe(false);
+      expect(config.ASK_OWNER_TIMEOUT_SECONDS).toBe(120);
+    });
+
+    it('needs a notification channel and a public hostname, since the question is a link sent through it', async () => {
+      setEnv({ ASK_OWNER_ENABLED: 'true' });
+      await expect(import('../src/config/index.js')).rejects.toThrow(/ASK_OWNER_ENABLED/);
+      vi.resetModules();
+      setEnv({ ASK_OWNER_ENABLED: 'true', PUBLIC_HOSTNAME: 'banjo.example.com', NOTIFICATION_CHANNEL: 'pushover', PUSHOVER_APP_TOKEN: 'app-token', PUSHOVER_USER_KEY: 'user-key' });
+      const { config } = await import('../src/config/index.js');
+      expect(config.ASK_OWNER_ENABLED).toBe(true);
+    });
+  });
+
+  describe('TRANSCRIBE_TRANSFERS (the part of a call after a transfer)', () => {
+    it('is off by default', async () => {
+      setEnv({});
+      const { config } = await import('../src/config/index.js');
+      expect(config.TRANSCRIBE_TRANSFERS).toBe(false);
+    });
+
+    it('needs PERSIST_TRANSCRIPTS, since the transcript is saved with the call', async () => {
+      setEnv({ TRANSCRIBE_TRANSFERS: 'true' });
+      await expect(import('../src/config/index.js')).rejects.toThrow(/TRANSCRIBE_TRANSFERS/);
+      vi.resetModules();
+      setEnv({ TRANSCRIBE_TRANSFERS: 'true', PERSIST_TRANSCRIPTS: 'true' });
+      const { config } = await import('../src/config/index.js');
+      expect(config.TRANSCRIBE_TRANSFERS).toBe(true);
     });
   });
 

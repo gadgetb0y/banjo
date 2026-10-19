@@ -411,3 +411,42 @@ describe('waiting on hold needs every hold method', () => {
     }
   });
 });
+
+describe('relayOwnerNote: an answer from the owner during the call (ask_owner)', () => {
+  it('adds the note and prompts a reply, once any reply in progress has finished', async () => {
+    const s = setup();
+    const session = new CallSession(s.options);
+    await session.start();
+    s.emitTelephony({ callId: 'call-1', type: 'connected', meta: { callId: 'call-1', providerCallId: 'CA-1', toNumber: '+15555550100' } });
+    // Banjo is mid-reply.
+    voice({ type: 'audio_chunk', chunk: { data: Buffer.alloc(80), sampleRate: 8000 } });
+    const relayed = session.relayOwnerNote('Alex answered: the gate code is 1234.');
+    await new Promise((r) => setTimeout(r, 10));
+    expect(fakeVoiceAI.addContext).not.toHaveBeenCalled();
+    voice({ type: 'turn_end' });
+    expect(await relayed).toBe(true);
+    expect(fakeVoiceAI.addContext).toHaveBeenCalledWith([{ role: 'system', text: 'Alex answered: the gate code is 1234.' }]);
+    expect(fakeVoiceAI.triggerResponse).toHaveBeenCalledTimes(1);
+  });
+
+  it('on hold, keeps the note silent until the hold ends, then adds it before the pickup note', async () => {
+    const { options, session } = await onHold();
+    expect(await session.relayOwnerNote('Alex answered: yes.')).toBe(true);
+    expect(fakeVoiceAI.addContext).not.toHaveBeenCalled();
+    expect(fakeVoiceAI.triggerResponse).not.toHaveBeenCalled();
+    fakeVoiceAI.judgeHoldLine.mockImplementationOnce(async () => 'person');
+    heard('Hi, this is Dana.');
+    await vi.waitFor(() => expect(fakeVoiceAI.addContext).toHaveBeenCalled());
+    expect(fakeVoiceAI.addContext).toHaveBeenCalledWith([
+      { role: 'system', text: 'Alex answered: yes.' },
+      { role: 'system', text: personPickedUpNote(options.pickupLine) },
+      { role: 'user', text: 'Hi, this is Dana.' },
+    ]);
+  });
+
+  it('reports false once the call has ended', async () => {
+    const { session } = await onHold();
+    await session.stop('owner stopped it');
+    expect(await session.relayOwnerNote('too late')).toBe(false);
+  });
+});

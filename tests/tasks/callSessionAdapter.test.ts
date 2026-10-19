@@ -533,6 +533,17 @@ describe('waiting on hold (#151)', () => {
     expect(build().tools.some((t) => t.name === 'wait_on_hold')).toBe(true);
   });
 
+  it('offers ask_owner only when ASK_OWNER_ENABLED is on', async () => {
+    const { config } = await import('../../src/config/index.js');
+    expect(build().tools.some((t) => t.name === 'ask_owner')).toBe(false);
+    try {
+      config.ASK_OWNER_ENABLED = true;
+      expect(build().tools.some((t) => t.name === 'ask_owner')).toBe(true);
+    } finally {
+      config.ASK_OWNER_ENABLED = false;
+    }
+  });
+
   it("uses the task's own hold limit when it sets one", () => {
     expect(build().maxHoldMs).toBeUndefined();
     expect(build({ constraints: { maxHoldMinutes: 30 } }).maxHoldMs).toBe(30 * 60_000);

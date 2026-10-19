@@ -83,6 +83,9 @@ const SPEAK_VERBATIM_TIMEOUT_MS = 20_000;
 // this is not verified: the hang-up that follows would cut it off.
 const VERBATIM_PLAYBACK_WAIT_MS = 40_000;
 
+/** How long an owner note (relayOwnerNote) waits for a reply in progress to finish before it's added anyway. */
+const OWNER_NOTE_WAIT_MS = 15_000;
+
 // toolPendingWatchdog's normal budget (below) comfortably covers a fast tool
 // handler, but a tool with verbatimMessage additionally waits through (in
 // sequence) the pre-existing TURN_END_WAIT_MS, then up to
@@ -350,6 +353,8 @@ export class CallSession<TCtx = CallContext> {
   private callEndingToolCallId: string | null = null;
   /** Waiting on hold (#151), or null. While set, the silence watchdog stays off and the model is never prompted. */
   private hold: Hold | null = null;
+  /** Owner notes (ask_owner answers) that arrived on hold, added when the hold ends. */
+  private heldOwnerNotes: string[] = [];
   /** When the voice session connected: a hold must end in time to leave the session room to talk (#151). */
   private voiceConnectedAt: number | undefined;
 
@@ -1142,6 +1147,7 @@ export class CallSession<TCtx = CallContext> {
     // the session's instructions for the reply, and would put what they said
     // in instruction position.
     this.voiceAI.addContext!([
+      ...this.takeHeldOwnerNotes(),
       { role: 'system', text: personPickedUpNote(this.opts.pickupLine) },
       { role: 'user', text: line },
     ]);
@@ -1158,6 +1164,7 @@ export class CallSession<TCtx = CallContext> {
     logger.info({ callId: this.opts.callId }, 'a phone menu asked for input on hold');
     void this.opts.onHoldChange?.({ kind: 'menu' }).catch((err: unknown) => logger.warn({ err, callId: this.opts.callId }, 'onHoldChange failed'));
     this.voiceAI.addContext!([
+      ...this.takeHeldOwnerNotes(),
       { role: 'system', text: menuPromptNote() },
       { role: 'user', text: line },
     ]);
@@ -1472,6 +1479,36 @@ export class CallSession<TCtx = CallContext> {
    * Safe to call on a session that is already ending or ended — `end` is a
    * no-op in those states.
    */
+  /**
+   * A fixed note from outside the call, such as the owner's answer to an
+   * ask_owner question, followed by a reply steered by it. Waits for a reply
+   * in progress to finish first, so the two don't collide. On hold, it's kept
+   * until the hold ends, so it can't break the silence. False if the call is
+   * over and the note never reached it.
+   */
+  async relayOwnerNote(note: string): Promise<boolean> {
+    if (this.isEnding()) return false;
+    if (this.hold) {
+      this.heldOwnerNotes.push(note);
+      return true;
+    }
+    if (this.responseActive) await this.waitForTurnEnd(OWNER_NOTE_WAIT_MS);
+    if (this.isEnding()) return false;
+    if (this.hold) {
+      this.heldOwnerNotes.push(note);
+      return true;
+    }
+    this.promptWithNote(note);
+    return true;
+  }
+
+  /** The owner notes kept during a hold that just ended, as system items to go before the note that ends it. */
+  private takeHeldOwnerNotes(): { role: 'system'; text: string }[] {
+    const notes = this.heldOwnerNotes.map((text) => ({ role: 'system' as const, text }));
+    this.heldOwnerNotes = [];
+    return notes;
+  }
+
   async stop(reason: string): Promise<void> {
     logger.info({ callId: this.opts.callId, reason }, 'call stopped from outside the session');
     await this.end(reason, { stopped: true });

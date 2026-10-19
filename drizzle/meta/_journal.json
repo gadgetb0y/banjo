@@ -57,6 +57,13 @@
       "when": 1792030205121,
       "tag": "0007_freezing_scourge",
       "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1792415389035,
+      "tag": "0008_swift_champions",
+      "breakpoints": true
     }
   ]
 }

@@ -17,7 +17,8 @@ import type { CallSession } from '../session/callSession.js';
 export interface LiveCall {
   taskId: string;
   callAttemptId: string;
-  session: Pick<CallSession, 'stop'>;
+  // relayOwnerNote: ask_owner's answers (src/ownerQuestions/). Optional so a stub can leave it out.
+  session: Pick<CallSession, 'stop'> & Partial<Pick<CallSession, 'relayOwnerNote'>>;
   startedAt: Date;
 }
 
