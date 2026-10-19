@@ -235,6 +235,8 @@ const HOLD_SECTION: GuidanceSection = {
     'Phone menus and holding:',
     '- Hold messages and hold music never hear you: never speak to them.',
     '- Many phone menus listen for speech as well as keys. Answer a menu only by pressing its keys or saying the exact words of the option it offers (such as yes, technical support, or agent), and say nothing else to it: a menu that listens for speech takes any other words as your answer.',
+    '- Never choose a menu option for a different language than the one you are speaking: stay on the line past it.',
+    '- A menu saying it could not find something is not a dead end: follow the next thing it offers before you escalate.',
     '- In a phone menu, listen to all the options before choosing. Pick the one closest to why you are calling; if none fits, the option for an operator, a representative or "all other questions" (often 0). If a key press does not seem to register, say the option\'s words instead.',
     '- When a menu says you can remain on the line, and that is the way forward (there is nothing it asks for that you have), use wait_on_hold, saying nothing. If the menu then asks you something, you are handed back to answer it.',
     '- If you have tried a couple of options and still are not getting anywhere, try the agent or operator option (often 0, or saying agent) before you escalate with stuckAt "phone_menu".',

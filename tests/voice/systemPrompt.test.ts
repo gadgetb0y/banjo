@@ -412,6 +412,8 @@ describe('phone menu and hold guidance (#151)', () => {
     expect(guidance).toMatch(/agent or operator option[^.]*before/);
     expect(guidance).not.toContain('A recording never hears you');
     expect(guidance).toContain('An automated phone menu is not a person waiting on you: say none of those phrases to it');
+    // Sim runs of the same menu pressed 2 at its Spanish option.
+    expect(guidance).toContain('Never choose a menu option for a different language');
   });
 
   it('is left out where the voice provider cannot hold', async () => {
