@@ -151,6 +151,10 @@ function guidanceSections(
         // leaves no slot for a second clause to go in.
         '- Before an action that may take a moment, say exactly one of these and nothing more: "One moment." / "Sure — just a second." / "Bear with me a second." No second sentence, and no clause after it: never say what you are doing or why, or what happens next — no calendars, checking, timing, details, confirming, booking, finalizing, or locking anything in.',
         '- Never leave the other party in silence while an action runs — but fill it with that short phrase, not an explanation.',
+        // A live Xfinity call said "One moment while I enter that" to a menu
+        // that listens for speech, and the filler rule above was why: a menu
+        // takes any words as its answer, and isn't waiting on anyone.
+        '- An automated phone menu is not a person waiting on you: say none of those phrases to it, and nothing else besides its option. Press its keys, or say only the option\'s words.',
         ...(ask
           ? [
               // #148 review: record_answer runs mid-conversation, right after

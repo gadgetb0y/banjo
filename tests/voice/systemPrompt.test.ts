@@ -411,6 +411,7 @@ describe('phone menu and hold guidance (#151)', () => {
     expect(guidance).toContain('remain on the line');
     expect(guidance).toMatch(/agent or operator option[^.]*before/);
     expect(guidance).not.toContain('A recording never hears you');
+    expect(guidance).toContain('An automated phone menu is not a person waiting on you: say none of those phrases to it');
   });
 
   it('is left out where the voice provider cannot hold', async () => {
