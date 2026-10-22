@@ -279,3 +279,52 @@ exposure on the outbound path, and an explicit list of refuted and unverified cl
 above were opened and verified directly instead. One refuted item to avoid repeating anywhere: the
 "16% of failed projects had contributing guidelines vs 72% of top projects / 27% vs 68% for CI" statistic did
 not survive verification against its cited source.
+
+---
+
+# 2026-10-21 update: LiveKit revisited
+
+A fresh look at [LiveKit](https://livekit.com/) (Agents framework, SIP, Cloud), since the 2026-09-05 pass only
+covered it as an abstraction-layer candidate. Sources were LiveKit's own docs, blog and pricing page, read
+directly. LiveKit's accuracy numbers are from their own, unpublished datasets.
+
+## The framing: infrastructure, not a competitor
+
+LiveKit is a voice-agent framework (Apache-2.0, Python and Node), a media server, a SIP gateway and a paid
+cloud. It has nothing at Banjo's product layer: no task state machine, booking or calendar, no contacts,
+approvals or call caps, no disclosure or recording-consent ordering, no owner notifications, no MCP surface
+for an assistant to delegate calls to. The overlap is everything under `CallSession`.
+
+## What it now ships that touches Banjo's open problems
+
+| Area | Banjo | LiveKit |
+| --- | --- | --- |
+| DTMF | Tones synthesized as audio (`dtmf.ts`); IVR recognition unverified (Open Risks #5) | RFC 2833/4733 at the SIP level |
+| Transfer | Twilio redirect to `<Dial>`; warm via conference (#149) | SIP REFER cold transfer, plus built-in warm transfer |
+| Answering machines | None since Twilio AMD was turned off (#23, #32) | Rule + LLM classifier on the first transcript, out of band, defaults to human; human/voicemail/IVR/unavailable; ~97% macro F1, 840 ms median ([blog](https://livekit.com/blog/answering-machine-detection)) |
+| Phone menus | `wait_on_hold` judging plus menu rules | Detects a menu and navigates it with DTMF automatically (Python only) |
+| Interruptions | OpenAI server-side voice detection | Audio model that tells barge-in from "uh-huh" (LiveKit Cloud only) |
+| Noise | OpenAI noise reduction | Krisp noise cancellation per trunk or call |
+| Testing | `npm run sim`, by hand | Text-mode unit tests that assert tool calls (pytest/Vitest), plus multi-turn simulations ([docs](https://docs.livekit.io/agents/build/testing/)) |
+
+Pricing (LiveKit Cloud, 2026-10): about $0.01/min per agent session and $0.003–0.004/min for third-party SIP,
+on top of the carrier. The turn detector model is under a separate LiveKit Model License, not Apache.
+
+## What to take
+
+- **The answering-machine design, rebuilt on Banjo's hold judging:** [#187](https://github.com/shatch/banjo/issues/187).
+  `judgeHoldLine` already does the out-of-band judgment; run it on the first line after pickup.
+- **Scenario evals on top of the sim,** modeled on LiveKit's text-mode tool-call tests:
+  [#188](https://github.com/shatch/banjo/issues/188).
+
+## What not to take (for now)
+
+- **Moving `CallSession` onto LiveKit Agents.** All of Banjo's call-conduct logic lives there, so it would be a
+  rewrite. Same verdict as the [Roadmap](#roadmap-voicetelephony-abstraction) above.
+- **A LiveKit SIP `TelephonyProvider`.** It would get real DTMF and REFER, through a self-hosted LiveKit server,
+  SIP server and Redis (on a 4 GB node) or through LiveKit Cloud. The trigger is still the one named in the
+  Roadmap: IVRs rejecting the synthesized tones. The Xfinity menu passed on 2026-10-18, so it hasn't fired. It
+  would be a fresh implementation; the earlier adapter never worked and was deleted (`docs/ARCHITECTURE.md`).
+- **Turn detector, adaptive interruption, IVR auto-navigation.** The turn detector needs OpenAI's own turn
+  detection turned off and has a separate model license. Adaptive interruption is Cloud-only. IVR
+  auto-navigation is Python-only, and Banjo is TypeScript.
