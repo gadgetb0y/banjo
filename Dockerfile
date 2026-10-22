@@ -1,7 +1,9 @@
 # ---- build stage: needs devDependencies (typescript) ----
-# Docker Official Images, pulled from their ECR Public mirror: GitHub runners
-# hit Docker Hub's anonymous pull limit (2026-10-09).
-FROM public.ecr.aws/docker/library/node:22-alpine AS builder
+# Docker Official Images via Google's Docker Hub mirror. Not Docker Hub itself
+# (GitHub runners hit its anonymous pull limit, 2026-10-09), and not ECR Public:
+# its anonymous pulls failed the v0.1.14 publish with "toomanyrequests: Data
+# limit exceeded". CI's Postgres service uses the same mirror (#192).
+FROM mirror.gcr.io/library/node:22-alpine AS builder
 WORKDIR /app
 COPY package.json package-lock.json ./
 RUN npm ci
@@ -10,7 +12,7 @@ COPY src ./src
 RUN npm run build
 
 # ---- runtime stage: production deps only ----
-FROM public.ecr.aws/docker/library/node:22-alpine AS runtime
+FROM mirror.gcr.io/library/node:22-alpine AS runtime
 # Proves to the MCP Registry that this image is the server server.json names
 # (io.github.shatch/banjo). Must match server.json's `name` exactly.
 LABEL io.modelcontextprotocol.server.name="io.github.shatch/banjo"
