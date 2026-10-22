@@ -43,6 +43,9 @@ Options:
   --transfer             Offer transfer_to_owner, as with TRANSFER_ENABLED=true.
   --warm                 Make it a warm transfer (TRANSFER_MODE=warm). Implies --transfer.
   --owner <answer>       With --warm: what the owner does. accept|decline|no-answer. Default: accept.
+  --ask-owner <answer>   Offer ask_owner, as with ASK_OWNER_ENABLED=true. A question Banjo asks is
+                         answered with <answer> a few seconds later; "none" never answers (Banjo is
+                         told after 30 seconds).
   --script <file>        Read your lines from a file, one per line (# for comments). A line starting
                          with ~ plays 3 seconds after the one before it, without waiting for
                          Banjo: a phone menu or hold queue, which doesn't wait for anyone.
@@ -79,6 +82,7 @@ async function main(): Promise<void> {
       transfer: { type: 'boolean', default: false },
       warm: { type: 'boolean', default: false },
       owner: { type: 'string', default: 'accept' },
+      'ask-owner': { type: 'string' },
       script: { type: 'string' },
       verbose: { type: 'boolean', default: false },
       help: { type: 'boolean', short: 'h', default: false },
@@ -105,7 +109,8 @@ async function main(): Promise<void> {
   const owner = OWNER_ANSWERS[values.owner as keyof typeof OWNER_ANSWERS];
   if (!owner) fail(`--owner must be accept, decline or no-answer (got "${values.owner}").`);
   const transfer = values.transfer || values.warm;
-  Object.assign(process.env, simEnv(process.env, { transfer, warm: values.warm, verbose: values.verbose }));
+  const askOwner = values['ask-owner'];
+  Object.assign(process.env, simEnv(process.env, { transfer, warm: values.warm, askOwner: askOwner !== undefined, verbose: values.verbose }));
   if (!process.env.OPENAI_API_KEY) fail('OPENAI_API_KEY is not set. Add it to .env or the environment: the sim talks to OpenAI Realtime.');
 
   await ensureSimDatabase(process.env.DATABASE_URL!);
@@ -142,6 +147,7 @@ async function main(): Promise<void> {
     windowDays,
     createVoiceAI: () => new OpenAIRealtimeProvider({ textOnly: true }),
     owner,
+    ...(askOwner !== undefined && { ownerAnswer: askOwner === 'none' ? null : askOwner }),
     print,
   }).catch((err: unknown) => {
     if (err instanceof SimInputError) fail(`place_call would refuse this call: ${err.message}`);

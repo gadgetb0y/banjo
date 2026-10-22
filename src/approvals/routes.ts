@@ -17,14 +17,14 @@ import { contactNames, formatLocal, tierNote } from './request.js';
  */
 export const approvalRoutes = new Hono();
 
-const HEADERS = {
+export const HEADERS = {
   'Cache-Control': 'no-store',
   'Referrer-Policy': 'no-referrer',
   'X-Robots-Tag': 'noindex',
   'Content-Security-Policy': "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; frame-ancestors 'none'",
 };
 
-const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+export const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 
 function invalid(c: Context) {
   return c.html(page('Banjo', '<h1>This link isn’t valid</h1><p>Ask for the call again if you still want it.</p>'), 404, HEADERS);

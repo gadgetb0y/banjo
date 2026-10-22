@@ -464,3 +464,14 @@ describe("buildCallSystemPrompt: mode 'ask' (#148)", () => {
     }
   });
 });
+
+describe('phone menus', () => {
+  // A live Xfinity call escalated at "...say yes or press 1. Otherwise, please
+  // remain on the line": the menu offered a way on, and Banjo hung up.
+  it("tries the menu's own ways on, and the agent option, before escalating", () => {
+    const prompt = buildCallSystemPrompt(bookingTask, contact, []);
+    expect(prompt).toContain('remain on the line');
+    expect(prompt).toMatch(/agent or operator option[^.]*before you escalate/);
+    expect(prompt).not.toContain("if you've tried a couple of\noptions and still can't find a relevant one, escalate");
+  });
+});

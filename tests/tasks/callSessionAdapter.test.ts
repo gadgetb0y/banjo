@@ -533,6 +533,17 @@ describe('waiting on hold (#151)', () => {
     expect(build().tools.some((t) => t.name === 'wait_on_hold')).toBe(true);
   });
 
+  it('offers ask_owner only when ASK_OWNER_ENABLED is on', async () => {
+    const { config } = await import('../../src/config/index.js');
+    expect(build().tools.some((t) => t.name === 'ask_owner')).toBe(false);
+    try {
+      config.ASK_OWNER_ENABLED = true;
+      expect(build().tools.some((t) => t.name === 'ask_owner')).toBe(true);
+    } finally {
+      config.ASK_OWNER_ENABLED = false;
+    }
+  });
+
   it("uses the task's own hold limit when it sets one", () => {
     expect(build().maxHoldMs).toBeUndefined();
     expect(build({ constraints: { maxHoldMinutes: 30 } }).maxHoldMs).toBe(30 * 60_000);
@@ -544,6 +555,20 @@ describe('waiting on hold (#151)', () => {
     await options.onHoldChange!({ kind: 'person', waitedMs: 7 * 60_000 + 10_000 });
     expect(sendOwnerMessage).toHaveBeenNthCalledWith(1, 'Banjo is on hold with Main Street Pharmacy and will wait up to 20 minutes.');
     expect(sendOwnerMessage).toHaveBeenNthCalledWith(2, 'Someone picked up at Main Street Pharmacy after 7 minutes on hold. Banjo is talking to them now.');
+  });
+
+  it('a phone menu stepping in and out of hold tells the owner once, until someone picks up', async () => {
+    vi.mocked(sendOwnerMessage).mockClear();
+    const options = build();
+    await options.onHoldChange!({ kind: 'started', maxMs: 20 * 60_000 });
+    await options.onHoldChange!({ kind: 'menu' });
+    await options.onHoldChange!({ kind: 'started', maxMs: 19 * 60_000 });
+    expect(sendOwnerMessage).toHaveBeenCalledTimes(1);
+    await options.onHoldChange!({ kind: 'person', waitedMs: 60_000 });
+    // A new hold after talking to someone (a transfer, say) is news again.
+    await options.onHoldChange!({ kind: 'started', maxMs: 15 * 60_000 });
+    expect(sendOwnerMessage).toHaveBeenCalledTimes(3);
+    expect(sendOwnerMessage).toHaveBeenLastCalledWith('Banjo is on hold with Main Street Pharmacy and will wait up to 15 minutes.');
   });
 
   it("records a hold that ran out as escalated, stuck at the hold limit", async () => {

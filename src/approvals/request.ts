@@ -22,7 +22,7 @@ export function withoutInvisibleMarks(text: string): string {
 }
 
 /** Agent-written text on one line, so it can't add lines that look like Banjo's own. */
-function oneLine(text: string): string {
+export function oneLine(text: string): string {
   return withoutInvisibleMarks(text).replace(/[\r\n\u0085\u2028\u2029]+/g, ' ').replace(/\s+/g, ' ').trim();
 }
 

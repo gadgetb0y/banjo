@@ -11,7 +11,10 @@ import { callsPlacedToContactSince, dueQueuedCallsForContact, withContactAdvisor
  * slip past it. Each call is an AI calling a real person, and five in one
  * evening to one friend is how this came about. The owner can let a test call
  * to themselves or family go past it, up to OVERRIDE_CAP_MULTIPLIER times it
- * (place_call's overrideCallCap, owner key only); nothing goes past that.
+ * (place_call's overrideCallCap, owner key only). A support line the operator
+ * lists in CALL_CAP_BUSINESS_NUMBERS gets CALL_CAP_BUSINESS_MAX instead: an IVR
+ * that took more than three tries to get through is how that came about.
+ * Nothing else goes past the cap.
  *
  * A call counts once it's dialed, whether or not it connected: a busy line,
  * a call nobody answered and a call Twilio failed all count (#79). Each still
@@ -38,8 +41,14 @@ export interface CallCapResult {
 /** How far the owner's override can raise the cap: no further, whatever is asked. */
 export const OVERRIDE_CAP_MULTIPLIER = 2;
 
-/** The limit a task's call is checked against: the cap, or twice it if the owner overrode it. */
-export function callCapLimit(task: Pick<Task, 'callCapOverride'>): number {
+/**
+ * The limit a task's call is checked against: CALL_CAP_BUSINESS_MAX for a
+ * support line the operator listed in CALL_CAP_BUSINESS_NUMBERS, otherwise the
+ * cap, or twice it if the owner overrode it. The list is .env-only, so a call
+ * or an MCP client can't make a number a business line.
+ */
+export function callCapLimit(task: Pick<Task, 'callCapOverride'>, contact: Pick<Contact, 'phoneNumber'>): number {
+  if (config.CALL_CAP_BUSINESS_NUMBERS.includes(contact.phoneNumber)) return config.CALL_CAP_BUSINESS_MAX;
   return config.MAX_CALLS_PER_NUMBER_PER_DAY * (task.callCapOverride ? OVERRIDE_CAP_MULTIPLIER : 1);
 }
 

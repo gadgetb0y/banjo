@@ -12,7 +12,7 @@ const { getCallTranscriptHandler } = await import('../../../src/mcp/tools/getCal
 const TASK_ID = '11111111-1111-4111-8111-111111111111';
 const on = { enabled: true, retentionDays: 30 };
 const attempt = { id: 'attempt-1', startedAt: new Date('2026-09-23T23:27:00Z') };
-const line = (seq: number, role: 'user' | 'assistant', text: string, extra: Record<string, unknown> = {}) => ({
+const line = (seq: number, role: 'user' | 'assistant' | 'owner', text: string, extra: Record<string, unknown> = {}) => ({
   seq,
   role,
   text,
@@ -45,6 +45,27 @@ describe('get_call_transcript (#6)', () => {
       { seq: 1, at: '2026-09-23T19:27:11', speaker: 'other_party', text: "Claudia's, how can I help?" },
       { seq: 2, at: '2026-09-23T19:27:12', speaker: 'banjo', text: 'Hi, calling for Steve.' },
     ]);
+  });
+
+  it('labels what the owner and the other party said after a transfer, and says how it was captured', async () => {
+    listTranscriptForTask.mockResolvedValue([
+      {
+        attempt,
+        turns: [
+          line(1, 'assistant', 'Connecting you now.', { leg: 'banjo' }),
+          line(2, 'user', 'Hi, is this the account holder?', { leg: 'transferred', voiceProvider: 'whisper-1' }),
+          line(3, 'owner', 'Yes, it is.', { leg: 'transferred', voiceProvider: 'whisper-1' }),
+        ],
+      },
+    ]);
+    const result = await getCallTranscriptHandler({ taskId: TASK_ID }, on);
+    if (!result.found) throw new Error('unreachable');
+    expect(result.calls[0]!.lines.map((l) => [l.speaker, l.afterTransfer])).toEqual([
+      ['banjo', undefined],
+      ['other_party', true],
+      ['owner', true],
+    ]);
+    expect(result.notes.join(' ')).toMatch(/after Banjo transferred the call/);
   });
 
   it('marks suspect lines and says what that means', async () => {

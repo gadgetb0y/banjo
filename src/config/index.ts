@@ -333,6 +333,17 @@ const envSchema = z
     // purpose: nothing the model or an MCP client sends can raise it. Five
     // test calls to one friend in one evening is how this came about.
     MAX_CALLS_PER_NUMBER_PER_DAY: z.coerce.number().int().min(1).default(3),
+    // Big companies' support lines (an IVR and a call centre, not a person's
+    // phone), allowed CALL_CAP_BUSINESS_MAX calls a day instead: getting
+    // through a long phone menu can take more tries than three. Operator
+    // settings only, like the cap itself: nothing an MCP client or a call
+    // sends can add a number here. Comma-separated E.164.
+    CALL_CAP_BUSINESS_NUMBERS: z
+      .string()
+      .default('')
+      .transform((v) => v.split(',').map((n) => n.trim()).filter(Boolean))
+      .pipe(z.array(z.string().regex(/^\+[1-9]\d{1,14}$/, 'each number must be in E.164 format, e.g. +18005551234'))),
+    CALL_CAP_BUSINESS_MAX: z.coerce.number().int().min(1).max(20).default(10),
 
     // Cold call transfer to the principal's phone (#7). Off by default: when
     // on, both the outbound and inbound tool lists gain transfer_to_owner and
@@ -359,6 +370,24 @@ const envSchema = z
       .string()
       .min(1)
       .default("Sorry, they couldn't be reached right now. They'll get back to you soon. Goodbye."),
+    // When the other party asks something the task doesn't cover, Banjo asks
+    // the owner mid-call (ask_owner, src/ownerQuestions/): a message through
+    // NOTIFICATION_CHANNEL with a signed link to a page where the owner types
+    // the answer, which is relayed into the call. Off by default.
+    ASK_OWNER_ENABLED: z
+      .enum(['true', 'false'])
+      .default('false')
+      .transform((v) => v === 'true'),
+    // How long Banjo waits for the owner's answer before it's told none came.
+    ASK_OWNER_TIMEOUT_SECONDS: z.coerce.number().int().min(30).max(600).default(120),
+    // Transcribe what's said after a cold transfer, between the principal and
+    // the other party. Off by default. Both hear a recording notice before
+    // they're bridged; the recording is transcribed into the call's
+    // transcript once the call ends, then deleted from Twilio.
+    TRANSCRIBE_TRANSFERS: z
+      .enum(['true', 'false'])
+      .default('false')
+      .transform((v) => v === 'true'),
   })
   .refine((v) => v.VOICE_AI_PROVIDER !== 'openai' || !!v.OPENAI_API_KEY, {
     message: 'OPENAI_API_KEY is required when VOICE_AI_PROVIDER=openai',
@@ -421,9 +450,21 @@ const envSchema = z
     message: "NOTIFICATION_CHANNEL can't be none when MCP_AGENT_API_KEY is set: approval requests go to the owner through it",
     path: ['NOTIFICATION_CHANNEL'],
   })
+  .refine((v) => v.CALL_CAP_BUSINESS_MAX >= v.MAX_CALLS_PER_NUMBER_PER_DAY, {
+    message: 'CALL_CAP_BUSINESS_MAX must be at least MAX_CALLS_PER_NUMBER_PER_DAY: it raises the cap for support lines, never lowers it',
+    path: ['CALL_CAP_BUSINESS_MAX'],
+  })
   .refine((v) => !v.TRANSFER_ENABLED || !!v.TRANSFER_TO_PHONE_NUMBER, {
     message: 'TRANSFER_TO_PHONE_NUMBER is required when TRANSFER_ENABLED=true',
     path: ['TRANSFER_TO_PHONE_NUMBER'],
+  })
+  .refine((v) => !v.ASK_OWNER_ENABLED || (v.NOTIFICATION_CHANNEL !== 'none' && !!v.PUBLIC_HOSTNAME), {
+    message: "ASK_OWNER_ENABLED needs a NOTIFICATION_CHANNEL other than none and PUBLIC_HOSTNAME: questions reach the owner as a link through it",
+    path: ['ASK_OWNER_ENABLED'],
+  })
+  .refine((v) => !v.TRANSCRIBE_TRANSFERS || (v.PERSIST_TRANSCRIPTS && !!v.OPENAI_API_KEY), {
+    message: 'TRANSCRIBE_TRANSFERS needs PERSIST_TRANSCRIPTS=true and OPENAI_API_KEY: the transcript is saved with the call, transcribed by OpenAI',
+    path: ['TRANSCRIBE_TRANSFERS'],
   })
   .refine((v) => v.BUSINESS_HOURS_START < v.BUSINESS_HOURS_END, {
     message: 'BUSINESS_HOURS_START must be earlier than BUSINESS_HOURS_END',

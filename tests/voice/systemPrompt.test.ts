@@ -335,7 +335,9 @@ describe('transfer guidance (#7)', () => {
           .split('\n\n')
           .filter((section) => !section.startsWith('Transferring to'))
           .join('\n\n')
-          .replace(`\n${transferLine}`, '');
+          .replace(`\n${transferLine}`, '')
+          // The outbound conduct rules' own line about handing the call over.
+          .replace(/\n- Hand the call to Alex only for what needs them personally[^\n]*/, '');
         expect(stripped).toBe(off);
       }
     } finally {
@@ -400,6 +402,20 @@ describe('phone menu and hold guidance (#151)', () => {
     expect(buildBaseSystemPromptGuidance('outbound')).toContain('Phone menus and holding:');
     expect(buildBaseSystemPromptGuidance('outbound')).toContain('use wait_on_hold, saying nothing');
     expect(buildBaseSystemPromptGuidance('inbound')).not.toContain('wait_on_hold');
+  });
+
+  // A live Xfinity call: Banjo went on hold at "...otherwise, please remain on
+  // the line" and never answered the menu's spoken questions after that, and
+  // spoke filler ("One moment") into a menu that listens for speech.
+  it('treats a menu as something that may listen for speech, and waiting at "remain on the line" as a hold', () => {
+    const guidance = buildBaseSystemPromptGuidance('outbound');
+    expect(guidance).toContain('listen for speech');
+    expect(guidance).toContain('remain on the line');
+    expect(guidance).toMatch(/agent or operator option[^.]*before/);
+    expect(guidance).not.toContain('A recording never hears you');
+    expect(guidance).toContain('An automated phone menu is not a person waiting on you: say none of those phrases to it');
+    // Sim runs of the same menu pressed 2 at its Spanish option.
+    expect(guidance).toContain('Never choose a menu option for a different language');
   });
 
   it('is left out where the voice provider cannot hold', async () => {
@@ -489,5 +505,48 @@ describe("purpose 'ask' (#148 review, finding 3)", () => {
       const prompt = build('outbound');
       for (const line of BOOKING_ONLY) expect(prompt).toContain(line);
     }
+  });
+});
+
+describe('working with the person helping you (2026-10-18 support call)', () => {
+  it('outbound only: ticket numbers on record, a specialist when the steps miss, the process not the person', () => {
+    const prompt = buildBaseSystemPromptGuidance('outbound');
+    expect(prompt).toContain('Working with the person helping you:');
+    expect(prompt).toMatch(/As soon as they say they have opened a ticket, case or order, ask for its number before anything else, and ask them to note the details you gave them/);
+    expect(prompt).toMatch(/someone more specialized/);
+    expect(prompt).toMatch(/keep it about the process, never them/);
+    expect(buildBaseSystemPromptGuidance('inbound')).not.toContain('Working with the person helping you:');
+  });
+
+  it('names ask_owner only when ASK_OWNER_ENABLED is on, on OpenAI Realtime', async () => {
+    const { config } = await import('../../src/config/index.js');
+    expect(buildBaseSystemPromptGuidance('outbound')).not.toContain('ask_owner');
+    expect(buildBaseSystemPromptGuidance('outbound')).toMatch(/say plainly that you don't have it rather than guess/);
+    try {
+      config.ASK_OWNER_ENABLED = true;
+      const prompt = buildBaseSystemPromptGuidance('outbound');
+      expect(prompt).toMatch(/don't guess: tell them you'll check with Alex, which may take a minute or two, and use ask_owner/);
+      expect(buildBaseSystemPromptGuidance('inbound')).not.toContain('ask_owner');
+    } finally {
+      config.ASK_OWNER_ENABLED = false;
+    }
+  });
+
+  it('with transfers on, hands the call over only for what needs the principal, after the ticket is settled', async () => {
+    const { config } = await import('../../src/config/index.js');
+    try {
+      config.TRANSFER_ENABLED = true;
+      expect(buildBaseSystemPromptGuidance('outbound')).toMatch(/never because the conversation is long or difficult/);
+    } finally {
+      config.TRANSFER_ENABLED = false;
+    }
+  });
+});
+
+describe('arrival windows (2026-10-19 sim)', () => {
+  it('outbound booking calls book an arrival window as its start and length; ask and inbound calls get no such line', () => {
+    expect(buildBaseSystemPromptGuidance('outbound')).toMatch(/arrival window[^\n]*the window's start is the start time, and the whole window is the length/);
+    expect(buildBaseSystemPromptGuidance('outbound', { purpose: 'ask' })).not.toContain('arrival window');
+    expect(buildBaseSystemPromptGuidance('inbound')).not.toContain('arrival window');
   });
 });

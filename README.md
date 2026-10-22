@@ -90,6 +90,11 @@ AI rather than waiting to be asked ([#8](https://github.com/shatch/banjo/issues/
 - **Hands a call to you.** Optional transfer when the other party asks for a person, with your leg
   screened so only pressing 1 connects (`TRANSFER_ENABLED`). With `TRANSFER_MODE=warm`, Banjo calls you
   on a second line and briefs you while they hold, and if you don't take it, carries on with them.
+- **Asks you mid-call.** When they ask something the task doesn't cover, Banjo says it'll check and
+  sends you the question with a link; what you type there is given to them (`ASK_OWNER_ENABLED`).
+- **Keeps the part after a transfer.** Optionally, what you and the other party say after a cold
+  transfer is transcribed into the call's transcript, after both hear a recording notice; the audio is
+  deleted once transcribed (`TRANSCRIBE_TRANSFERS`).
 - **Answers your number.** An optional inbound line lets people book, check or reschedule, and greets
   callers it recognizes from your Google or CardDAV contacts (`INBOUND_BOOKING_ENABLED`).
 
