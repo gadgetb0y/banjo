@@ -28,7 +28,10 @@ export function simDatabaseUrl(databaseUrl: string | undefined): string {
   return url.toString();
 }
 
-export function simEnv(base: Record<string, string | undefined>, opts: { transfer: boolean; warm?: boolean; verbose: boolean }): Record<string, string> {
+export function simEnv(
+  base: Record<string, string | undefined>,
+  opts: { transfer: boolean; warm?: boolean; askOwner?: boolean; verbose: boolean },
+): Record<string, string> {
   const placeholders: Record<string, string> = {
     TWILIO_ACCOUNT_SID: 'ACsimulator',
     TWILIO_AUTH_TOKEN: 'simulator',
@@ -46,9 +49,22 @@ export function simEnv(base: Record<string, string | undefined>, opts: { transfe
     VOICE_AI_PROVIDER: 'openai',
     CALENDAR_PROVIDER: 'google', // never constructed: the sim's calendar replaces it
     CONTACTS_PROVIDER: 'none',
-    NOTIFICATION_CHANNEL: 'none',
+    // ask_owner needs a channel to be on (config's check), so --ask-owner names
+    // one with placeholder keys. Nothing reaches it: the sim overrides every
+    // message to the owner (notifications/owner.ts's overrideOwnerMessages).
+    ...(opts.askOwner
+      ? {
+          NOTIFICATION_CHANNEL: 'pushover',
+          PUSHOVER_APP_TOKEN: 'simulator-never-sent',
+          PUSHOVER_USER_KEY: 'simulator-never-sent',
+          PUBLIC_HOSTNAME: 'sim.invalid',
+          ASK_OWNER_ENABLED: 'true',
+          ASK_OWNER_TIMEOUT_SECONDS: '30',
+        }
+      : { NOTIFICATION_CHANNEL: 'none', ASK_OWNER_ENABLED: 'false' }),
     TASK_WEBHOOK_URL: '',
     RECORD_CALLS: 'false',
+    TRANSCRIBE_TRANSFERS: 'false',
     PERSIST_TRANSCRIPTS: 'true',
     INBOUND_BOOKING_ENABLED: 'false',
     TRANSFER_ENABLED: String(opts.transfer),

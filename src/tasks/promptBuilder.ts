@@ -250,8 +250,10 @@ voicemail with the AI disclosure, then says your message verbatim, then hangs up
 and do not say the message yourself; the callee would hear it twice.
 ${ask ? '' : NEGOTIATION_FAILED_GUIDANCE}If you get stuck — a confusing phone menu, a hostile or nonsensical response, or you genuinely cannot proceed —
 call escalate_and_end_call with a short reason rather than guessing or looping indefinitely.
-If you're navigating a phone menu, use press_digits to select the relevant option; if you've tried a couple of
-options and still can't find a relevant one, escalate (stuckAt "phone_menu") rather than keep guessing.${conversationModeGuidance(task)}${ownerProfileSection(ownerProfile, contact)}
+If you're navigating a phone menu, use press_digits or say the option's words to select the relevant option. If the
+menu says you can remain on the line and that's the way forward, wait rather than escalate. If you've tried a couple
+of options and still can't find a relevant one, try the agent or operator option before you escalate (stuckAt
+"phone_menu") rather than keep guessing.${conversationModeGuidance(task)}${ownerProfileSection(ownerProfile, contact)}
 `.trim();
 }
 

@@ -15,6 +15,8 @@ import { SIM_BUSINESS_NUMBER } from './env.js';
 import { SimCalendarProvider } from './simCalendar.js';
 import { SimTelephonyProvider } from './simTelephony.js';
 import { modeRules } from '../tasks/modes.js';
+import { overrideOwnerMessages } from '../notifications/owner.js';
+import { answerQuestion } from '../ownerQuestions/service.js';
 
 /** A voice session the other party types into: OpenAIRealtimeProvider in text-only mode, or a test's fake. */
 export interface TextVoiceAIProvider extends VoiceAIProvider {
@@ -34,6 +36,11 @@ export interface SimCallOptions {
   createVoiceAI: () => TextVoiceAIProvider;
   /** What the owner does if Banjo tries a warm transfer (#149). Defaults to accepting. */
   owner?: LoopInResult;
+  /**
+   * With --ask-owner: what the owner types for any ask_owner question, a few
+   * seconds after it's sent, or null for never answering. Unset: ask_owner is off.
+   */
+  ownerAnswer?: string | null;
   /** Everything the sim shows, other than what the person types. */
   print: (line: string) => void;
 }
@@ -88,6 +95,7 @@ export async function startSimCall(opts: SimCallOptions): Promise<SimCall> {
   const calendar = new SimCalendarProvider(config.CALENDAR_TIMEZONE, opts.print);
   overrideTelephonyProvider(telephony);
   overrideCalendarProvider(calendar);
+  overrideOwnerMessages((body) => showOwnerMessage(body, opts));
 
   let resolveReady!: (voice: TextVoiceAIProvider | null) => void;
   const ready = new Promise<TextVoiceAIProvider | null>((resolve) => (resolveReady = resolve));
@@ -109,8 +117,31 @@ export async function startSimCall(opts: SimCallOptions): Promise<SimCall> {
   return { taskId, telephony, calendar, ready, finished };
 }
 
+/** How long the sim's owner takes to answer an ask_owner question. */
+const OWNER_ANSWER_DELAY_MS = 4000;
+
+/** A message to the owner, shown rather than sent; an ask_owner question is answered as --ask-owner says. */
+function showOwnerMessage(body: string, opts: Pick<SimCallOptions, 'ownerAnswer' | 'print'>): void {
+  const question = /\/answer\/([0-9a-f-]{36})\?sig=/.exec(body);
+  if (!question) {
+    opts.print(`[Message to the owner: ${body.replace(/\n+/g, ' ')}]`);
+    return;
+  }
+  opts.print(`[Banjo asks the owner: ${body.split('\n').at(-1)!.replace(/^The question: /, '')}]`);
+  const answer = opts.ownerAnswer;
+  if (answer === null || answer === undefined) {
+    opts.print("[The owner doesn't answer.]");
+    return;
+  }
+  setTimeout(() => {
+    opts.print(`[The owner answers: ${answer}]`);
+    void answerQuestion(question[1]!, answer);
+  }, OWNER_ANSWER_DELAY_MS).unref();
+}
+
 /** Clears the overrides startSimCall set, so nothing after it gets the sim's providers. */
 export function endSimOverrides(): void {
+  overrideOwnerMessages(null);
   overrideTelephonyProvider(null);
   overrideCalendarProvider(null);
   overrideVoiceAIProvider(null);

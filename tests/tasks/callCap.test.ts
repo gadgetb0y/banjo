@@ -17,7 +17,11 @@ const now = new Date('2026-09-26T20:00:00.000Z');
 beforeEach(() => {
   vi.clearAllMocks();
   config.MAX_CALLS_PER_NUMBER_PER_DAY = 3;
+  config.CALL_CAP_BUSINESS_NUMBERS = [];
+  config.CALL_CAP_BUSINESS_MAX = 10;
 });
+
+const someone = { phoneNumber: '+15550000001' };
 
 describe('checkCallCap (at most MAX_CALLS_PER_NUMBER_PER_DAY calls per number per rolling 24h)', () => {
   it('allows a call while fewer than the cap were placed in the last 24 hours', async () => {
@@ -156,8 +160,8 @@ describe('the owner override (testing calls to themselves or family)', () => {
   });
 
   it('callCapLimit is twice the cap only with the override', () => {
-    expect(callCapLimit({ callCapOverride: false })).toBe(3);
-    expect(callCapLimit({ callCapOverride: true })).toBe(6);
+    expect(callCapLimit({ callCapOverride: false }, someone)).toBe(3);
+    expect(callCapLimit({ callCapOverride: true }, someone)).toBe(6);
   });
 
   it('only the owner and family can be overridden', () => {
@@ -175,5 +179,29 @@ describe('the owner override (testing calls to themselves or family)', () => {
     } finally {
       config.TRANSFER_TO_PHONE_NUMBER = original;
     }
+  });
+});
+
+describe('business support lines (CALL_CAP_BUSINESS_NUMBERS, set only in .env)', () => {
+  const supportLine = { phoneNumber: '+18005550100' };
+
+  it('a listed number gets the business cap; everyone else keeps the normal one', () => {
+    config.CALL_CAP_BUSINESS_NUMBERS = [supportLine.phoneNumber];
+    expect(callCapLimit({ callCapOverride: false }, supportLine)).toBe(10);
+    expect(callCapLimit({ callCapOverride: false }, someone)).toBe(3);
+    // The override is for the owner and family, never a business, and doesn't stack.
+    expect(callCapLimit({ callCapOverride: true }, supportLine)).toBe(10);
+  });
+
+  it('a number not on the list is not a business line, however it is written elsewhere', () => {
+    config.CALL_CAP_BUSINESS_NUMBERS = ['+18005550100'];
+    expect(callCapLimit({ callCapOverride: false }, { phoneNumber: '+18005550199' })).toBe(3);
+  });
+
+  it('at the business cap, the next call is refused', async () => {
+    callsPlacedToContactSince.mockResolvedValue(Array.from({ length: 10 }, () => new Date(now.getTime() - 60_000)));
+    const full = await checkCallCap('c1', now, { limit: 10 });
+    expect(full.allowed).toBe(false);
+    expect(describeCallCapRefusal(full)).toMatch(/max 10 per 24 hours/);
   });
 });

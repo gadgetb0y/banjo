@@ -12,8 +12,11 @@ export interface TranscriptLine {
   seq: number;
   /** Local time (CALENDAR_TIMEZONE), no UTC offset — the convention every call-facing time uses. */
   at: string;
-  speaker: 'banjo' | 'other_party';
+  /** 'owner': the principal, after a transfer. */
+  speaker: 'banjo' | 'other_party' | 'owner';
   text: string;
+  /** Said after Banjo transferred the call (TRANSCRIBE_TRANSFERS), between the principal and the other party. */
+  afterTransfer?: true;
   /** The transcriber may have invented this line from line noise (#25). */
   suspect?: true;
 }
@@ -53,8 +56,9 @@ export async function getCallTranscriptHandler(
       return {
         seq: t.seq,
         at: formatInZone(t.spokenAt.toISOString(), tz),
-        speaker: t.role === 'assistant' ? 'banjo' : 'other_party',
+        speaker: t.role === 'assistant' ? 'banjo' : t.role === 'owner' ? 'owner' : 'other_party',
         text: t.text,
+        ...(t.leg === 'transferred' && { afterTransfer: true as const }),
         ...(t.quality === 'suspect' && { suspect: true as const }),
       };
     });
@@ -86,6 +90,11 @@ export async function getCallTranscriptHandler(
   if (calls.some((c) => c.recordingSid)) {
     notes.push(
       "Calls with a recordingSid were recorded (#8), starting from Banjo's recording notice. Listen in the Twilio console under Monitor → Call recordings.",
+    );
+  }
+  if (calls.some((c) => c.lines.some((l) => l.afterTransfer))) {
+    notes.push(
+      `Lines marked afterTransfer are what ${config.ASSISTANT_PRINCIPAL_NAME} (speaker "owner") and the other party said after Banjo transferred the call: transcribed from a recording once the call ended, then the recording was deleted. Their times are approximate.`,
     );
   }
   if (calls.some((c) => c.lines.length > 0)) {

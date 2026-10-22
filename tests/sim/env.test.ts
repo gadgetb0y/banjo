@@ -42,6 +42,18 @@ describe('simEnv', () => {
     expect(env).not.toHaveProperty('TRANSFER_TO_PHONE_NUMBER');
   });
 
+  it('with --ask-owner, turns ask_owner on with placeholder Pushover keys, never the real ones', () => {
+    const env = simEnv({ ...real, PUSHOVER_APP_TOKEN: 'real-token', PUSHOVER_USER_KEY: 'real-user' }, { transfer: false, askOwner: true, verbose: false });
+    expect(env).toMatchObject({
+      ASK_OWNER_ENABLED: 'true',
+      NOTIFICATION_CHANNEL: 'pushover',
+      PUSHOVER_APP_TOKEN: 'simulator-never-sent',
+      PUSHOVER_USER_KEY: 'simulator-never-sent',
+      TRANSCRIBE_TRANSFERS: 'false',
+    });
+    expect(simEnv(real, { transfer: false, verbose: false })).toMatchObject({ ASK_OWNER_ENABLED: 'false', NOTIFICATION_CHANNEL: 'none' });
+  });
+
   it('fills placeholders only where nothing is set', () => {
     const env = simEnv(real, { transfer: false, verbose: false });
     expect(env).not.toHaveProperty('TWILIO_ACCOUNT_SID');

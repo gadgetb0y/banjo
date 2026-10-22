@@ -187,13 +187,16 @@ export interface VoiceAIProvider {
    */
   setHold?(onHold: boolean): void;
   /**
-   * Whether `line`, heard on hold, is a live person picking up rather than a
-   * recording, hold message or menu (#151). Judged outside the conversation,
-   * with no audio: the other party never hears it. `earlier` is what was
-   * heard on hold before it. Resolves 'person' if the judgment fails: a person
-   * left in silence would hang up, while a wrongly woken Banjo can go back on hold.
+   * What `line`, heard on hold, is (#151): a live person picking up, an
+   * automated phone menu asking the caller for input, or a recording that
+   * asks nothing (hold music, a wait-time announcement). A menu was once
+   * judged a recording, and Banjo sat silent through every question an IVR
+   * asked until it hung up. Judged outside the conversation, with no audio:
+   * the other party never hears it. `earlier` is what was heard on hold
+   * before it. Resolves 'person' if the judgment fails: a person left in
+   * silence would hang up, while a wrongly woken Banjo can go back on hold.
    */
-  judgeHoldLine?(line: string, earlier: string[]): Promise<'person' | 'recording'>;
+  judgeHoldLine?(line: string, earlier: string[]): Promise<HoldVerdict>;
   /**
    * Adds lines to the conversation without prompting a reply (#151): a fixed
    * system note, or what the other party said, as a user line. Unlike a
@@ -207,3 +210,6 @@ export interface VoiceAIProvider {
   on(event: 'event', listener: VoiceAIEventListener): void;
   off(event: 'event', listener: VoiceAIEventListener): void;
 }
+
+/** What a line heard on hold is (VoiceAIProvider.judgeHoldLine, #151). */
+export type HoldVerdict = 'person' | 'menu' | 'recording';

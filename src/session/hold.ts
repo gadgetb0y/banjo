@@ -49,6 +49,23 @@ export function personPickedUpNote(openingLine: string | undefined): string {
 }
 
 /**
+ * The system note added when an automated phone menu asks for input while
+ * Banjo is on hold, just before the menu's own words go in as a user line.
+ * Banjo once went on hold at a menu's "remain on the line" and stayed silent
+ * through every question that followed until the menu hung up. No reopening:
+ * a menu isn't a person, and the disclosure is for whoever picks up later.
+ * Fixed text that quotes nothing, so there's no phrase for the model to echo (#154).
+ */
+export function menuPromptNote(): string {
+  return (
+    'You were waiting silently, and an automated phone menu is now asking for input; its words follow. Answer it now: ' +
+    "use press_digits for the option you need, or say only the option's words. Don't add anything else: a menu that " +
+    'listens for speech takes any other words as your answer. If the menu lets you simply remain on the line and that ' +
+    'is the way forward, call wait_on_hold again without saying anything.'
+  );
+}
+
+/**
  * The longest this hold may last: the call's own limit, cut short so the
  * voice session still has `reserveMs` left to talk in once a person picks up.
  * Zero or less means there isn't time to wait at all.

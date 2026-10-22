@@ -702,8 +702,10 @@ export const waitOnHoldTool: VoiceTool<Record<string, never>> = defineVoiceTool(
   name: 'wait_on_hold',
   description:
     'Use this, without saying anything first, as soon as you are in a hold queue: hold music, "please hold", "your call ' +
-    'will be answered by the next available…", or an estimated wait time. You stay on the line silently, and you are ' +
-    'told the moment a live person picks up. Never use it with a person on the line, and never talk to a recording.',
+    'will be answered by the next available…", or an estimated wait time. Also use it when a phone menu says you can ' +
+    'remain on the line and you have nothing to enter. Not after each key press, though: a menu goes on to its next ' +
+    'prompt by itself, and you answer it faster off hold. You stay on the line silently, and you are told the moment a ' +
+    'live person picks up, or handed back as soon as a menu asks you for something. Never use it with a person on the line.',
   schema: z.object({}),
   startsHold: true,
   handler: async () => ({ ok: true }),

@@ -467,6 +467,35 @@ describe('TwilioProvider.transferCall (#7)', () => {
     expect(twiml).toMatch(/<\/Dial><\/Response>$/);
   });
 
+  it('records nothing and plays no notice unless TRANSCRIBE_TRANSFERS is on', async () => {
+    const provider = new TwilioProvider();
+    provider.registerInboundCall('CA-10', '+15555550100');
+    const { update } = withFakeCalls(provider);
+    await provider.transferCall('CA-10', { to: '+15557654321' });
+    const twiml = (update.mock.calls[0] as unknown as [{ twiml: string }])[0].twiml;
+    expect(twiml).not.toContain('record');
+    expect(twiml).not.toContain('<Say');
+  });
+
+  it('with TRANSCRIBE_TRANSFERS, tells them it will be recorded before the dial, and records both sides apart', async () => {
+    const { config } = await import('../../src/config/index.js');
+    config.TRANSCRIBE_TRANSFERS = true;
+    try {
+      const provider = new TwilioProvider();
+      provider.registerInboundCall('CA-11', '+15555550100');
+      const { update } = withFakeCalls(provider);
+      await provider.transferCall('CA-11', { to: '+15557654321' });
+      const twiml = (update.mock.calls[0] as unknown as [{ twiml: string }])[0].twiml;
+      expect(twiml).toMatch(/^<\?xml[^>]*\?><Response><Say>This call will be recorded\.<\/Say><Dial /);
+      expect(twiml).toMatch(/<Dial[^>]*record="record-from-answer-dual"/);
+      expect(twiml).toMatch(/<Dial[^>]*recordingStatusCallback="https:\/\/[^"]+\/telephony\/twilio\/transfer-recording\?callId=CA-11"/);
+      expect(twiml).toMatch(/<Dial[^>]*recordingStatusCallbackEvent="completed"/);
+      expect(new TwilioProvider().buildTransferScreenTwiml('CA-11')).toContain('This call is recorded. Press 1 to take it.');
+    } finally {
+      config.TRANSCRIBE_TRANSFERS = false;
+    }
+  });
+
   it('stops a running recording before transferring', async () => {
     const provider = new TwilioProvider();
     provider.registerInboundCall('CA-2', '+15555550100');

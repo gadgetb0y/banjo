@@ -90,6 +90,14 @@ function generateSilencePcm16(durationMs: number): Buffer {
 
 /** Said to the principal when a transfer reaches them (#74), before they are connected. */
 const TRANSFER_SCREEN_PROMPT = 'Your AI assistant is transferring a call to you. Press 1 to take it.';
+/** The screen's prompt when the transferred part is recorded (TRANSCRIBE_TRANSFERS): pressing 1 accepts that too. */
+const TRANSFER_SCREEN_PROMPT_RECORDED = 'Your AI assistant is transferring a call to you. This call is recorded. Press 1 to take it.';
+/**
+ * Played to the other party before a transfer rings the principal, when the
+ * transferred part is recorded (TRANSCRIBE_TRANSFERS). Fixed audio, not the
+ * model's words: the consent can't depend on what the model chose to say (#8).
+ */
+export const TRANSFER_RECORDING_NOTICE = 'This call will be recorded.';
 /** Seconds the screen waits for a key after the prompt, per Twilio <Gather>. */
 const TRANSFER_SCREEN_TIMEOUT_S = 5;
 /** How long an accepted screen waits for its transfer callback (which comes when the bridged call ends) before it's swept: Twilio's default <Dial> timeLimit, 4 hours. */
@@ -671,10 +679,20 @@ export class TwilioProvider implements TelephonyProvider {
     }
 
     const response = new twilioLib.twiml.VoiceResponse();
+    // TRANSCRIBE_TRANSFERS: the other party hears the notice before anything is
+    // recorded, and the principal's screen says it too. The recording, one
+    // channel each, starts when the principal answers and is transcribed and
+    // deleted once the call ends (transcripts/transferLeg.ts).
+    if (config.TRANSCRIBE_TRANSFERS) response.say(TRANSFER_RECORDING_NOTICE);
     const dial = response.dial({
       timeout: 20,
       answerOnBridge: true,
       action: `https://${config.PUBLIC_HOSTNAME}/telephony/twilio/transfer-callback?callId=${encodeURIComponent(callId)}`,
+      ...(config.TRANSCRIBE_TRANSFERS && {
+        record: 'record-from-answer-dual' as const,
+        recordingStatusCallback: `https://${config.PUBLIC_HOSTNAME}/telephony/twilio/transfer-recording?callId=${encodeURIComponent(callId)}`,
+        recordingStatusCallbackEvent: ['completed' as const],
+      }),
     });
     // #74: a carrier voicemail answers a dial just like a person, so the
     // principal's leg is screened first — see buildTransferScreenTwiml.
@@ -707,7 +725,7 @@ export class TwilioProvider implements TelephonyProvider {
       timeout: TRANSFER_SCREEN_TIMEOUT_S,
       action: `https://${config.PUBLIC_HOSTNAME}/telephony/twilio/transfer-screen-result?callId=${encodeURIComponent(callId)}`,
     });
-    gather.say({ loop: 2 }, TRANSFER_SCREEN_PROMPT);
+    gather.say({ loop: 2 }, config.TRANSCRIBE_TRANSFERS ? TRANSFER_SCREEN_PROMPT_RECORDED : TRANSFER_SCREEN_PROMPT);
     response.hangup();
     return response.toString();
   }
@@ -925,6 +943,20 @@ export class TwilioProvider implements TelephonyProvider {
     if (state.recordingUncertain) {
       throw new Error(`stopRecording: a recording start on ${callId} failed after it was sent, so no stop can be confirmed`);
     }
+  }
+
+  /**
+   * A finished recording's audio as WAV, two channels for a dual recording
+   * (TRANSCRIBE_TRANSFERS). Fetched by its sid from the account's own API
+   * path, never from a URL in a webhook body.
+   */
+  async fetchRecordingWav(recordingId: string): Promise<Buffer> {
+    if (!/^RE[0-9a-f]{32}$/.test(recordingId)) throw new Error('fetchRecordingWav: not a recording sid');
+    const url = `https://api.twilio.com/2010-04-01/Accounts/${config.TWILIO_ACCOUNT_SID}/Recordings/${recordingId}.wav?RequestedChannels=2`;
+    const auth = Buffer.from(`${config.TWILIO_ACCOUNT_SID}:${config.TWILIO_AUTH_TOKEN}`).toString('base64');
+    const res = await fetch(url, { headers: { Authorization: `Basic ${auth}` }, signal: AbortSignal.timeout(60_000) });
+    if (!res.ok) throw new Error(`fetchRecordingWav: Twilio returned ${res.status}`);
+    return Buffer.from(await res.arrayBuffer());
   }
 
   /** Deletes a recording from Twilio. Already gone (404) counts as deleted, so retention can't get stuck on one. */
