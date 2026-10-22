@@ -15,8 +15,10 @@ jobs:
 
     services:
       postgres:
-        # The Docker Official Image via its ECR Public mirror, as in the Dockerfile.
-        image: public.ecr.aws/docker/library/postgres:16-alpine
+        # The Docker Official Image via Google's Docker Hub mirror. Not ECR
+        # Public (the Dockerfile's source): from GitHub's shared runners, its
+        # anonymous pulls kept failing with "toomanyrequests: Data limit exceeded".
+        image: mirror.gcr.io/library/postgres:16-alpine
         env:
           POSTGRES_USER: banjo
           POSTGRES_PASSWORD: banjo
