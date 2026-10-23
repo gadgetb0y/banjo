@@ -102,6 +102,10 @@ const scenarioSchema = z
         traceableNumbers: z.boolean().optional(),
         neverSays: z.array(z.string().min(1)).optional(),
         goodbyeWithinTurnsAfter: z.object({ userLineIncludes: z.string().min(1), turns: z.number().int().positive() }).strict().optional(),
+        /** Lines of theirs the call must get to, and optionally before Banjo first calls a tool: so a call that ends early can't pass vacuously. */
+        reaches: z
+          .array(z.object({ userLineIncludes: z.string().min(1), beforeTool: z.enum(KNOWN_TOOL_NAMES).optional() }).strict())
+          .optional(),
       })
       .strict(),
     skipUniversal: z.array(z.object({ check: z.enum(UNIVERSAL_CHECKS), reason: z.string().min(1) }).strict()).optional(),

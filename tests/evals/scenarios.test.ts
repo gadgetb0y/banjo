@@ -31,4 +31,20 @@ describe('evals/scenarios', () => {
   it.each(files)('%s names no real person', (_, text) => {
     expect(text).not.toMatch(/\b(steve|steven|stephen|hatch|jessica)\b/i);
   });
+
+  it('every argsInclude key is a parameter of its tool', async () => {
+    const t = await import('../../src/voice/tools/callTools.js');
+    const { pressDigitsTool } = await import('../../src/telephony/dtmf.js');
+    const { askOwnerTool } = await import('../../src/ownerQuestions/tool.js');
+    const { toToolDefinition } = await import('../../src/voice/tools/defineVoiceTool.js');
+    const tools = [...t.callTools, t.endConversationCallTool, t.recordAnswerTool, t.reportAnswersAndEndCallTool, t.waitOnHoldTool, pressDigitsTool, askOwnerTool];
+    const params = new Map(tools.map((tool) => [tool.name, Object.keys((toToolDefinition(tool).parameters as { properties?: object }).properties ?? {})]));
+    const unknown: string[] = [];
+    for (const s of loadScenarios(DIR)) {
+      for (const e of [...(s.expect.toolsCalled ?? []), ...(s.expect.toolsNotCalled ?? [])]) {
+        for (const key of Object.keys(e.argsInclude ?? {})) if (!params.get(e.name)?.includes(key)) unknown.push(`${s.id}: ${e.name}.${key}`);
+      }
+    }
+    expect(unknown).toEqual([]);
+  });
 });

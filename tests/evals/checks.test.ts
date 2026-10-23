@@ -176,4 +176,19 @@ describe('expectations', () => {
     const slow = log("b:Hi, I'm an AI.", "u:I'm exhausted.", 'b:Why?', 'b:Tell me more.', 'b:What happened?', 'b:Bye!');
     expect(check(slow, { goodbyeWithinTurnsAfter: { userLineIncludes: 'exhausted', turns: 3 } }).goodbye_within_turns!.pass).toBe(false);
   });
+
+  it('reaches passes once a line of theirs includes the text, and fails if the call ended first', () => {
+    const heard = log('u:Leave a message after the tone. Beep.', "b:Hi, I'm an AI.", { tool: 'leave_voicemail_and_end_call' });
+    expect(check(heard, { reaches: [{ userLineIncludes: 'beep' }] })['reaches:beep']!.pass).toBe(true);
+    const cut = log("u:We can't come to the phone.", "b:Hi, I'm an AI.", { tool: 'leave_voicemail_and_end_call' });
+    expect(check(cut, { reaches: [{ userLineIncludes: 'beep' }] })['reaches:beep']).toMatchObject({ pass: false, reason: expect.stringContaining('never reached') });
+  });
+
+  it('reaches with beforeTool fails when the tool came before that line', () => {
+    const early = log("u:We can't come to the phone.", { tool: 'leave_voicemail_and_end_call' }, 'u:Beep.');
+    const exp = { reaches: [{ userLineIncludes: 'beep', beforeTool: 'leave_voicemail_and_end_call' as const }] };
+    expect(check(early, exp)['reaches:beep']).toMatchObject({ pass: false, reason: expect.stringContaining('before') });
+    const late = log("u:We can't come to the phone.", 'u:Beep.', { tool: 'leave_voicemail_and_end_call' });
+    expect(check(late, exp)['reaches:beep']!.pass).toBe(true);
+  });
 });

@@ -15,3 +15,7 @@ expect:
     - name: leave_voicemail_and_end_call
   toolsNotCalled:
     - name: confirm_appointment
+  # #71: a message left before the tone is lost.
+  reaches:
+    - userLineIncludes: Beep
+      beforeTool: leave_voicemail_and_end_call

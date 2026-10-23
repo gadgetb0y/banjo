@@ -1,6 +1,6 @@
 id: anything-else-silence
-title: After the booking, the line goes quiet
-source: "#130: ending without waiting for an answer, or without a goodbye"
+title: Banjo asks a question and the line goes quiet, then they come back
+source: "#130, #179: a question met with silence; check in once, don't hang up or end without a goodbye"
 task:
   business: Claudia's Dog Grooming
   category: salon
@@ -8,11 +8,16 @@ task:
   mode: booking
 script:
   - Claudia's Grooming, this is Dana.
-  - Let me look. I have {day+2} at 3 in the afternoon.
+  - Let me look. I have {day+2} in the afternoon.
+  - (silence 18)
+  - Sorry, I had a customer at the desk. Does 3 o'clock work?
   - Okay, you're all booked for that.
-  - (silence 30)
+  - Bye!
 expect:
   status: [confirmed]
   toolsCalled:
     - name: confirm_appointment
   bookedLocal: { dayOffset: 2, time: "15:00" }
+  reaches:
+    - userLineIncludes: customer at the desk
+      beforeTool: confirm_appointment

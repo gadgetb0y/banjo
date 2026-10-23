@@ -173,7 +173,7 @@ describe('recorded scenarios', async () => {
       it.skip(`${scenario.id} (${reason})`, () => {});
       continue;
     }
-    it(`${scenario.id} replays, and its checks pass`, async () => {
+    it(`${scenario.id} replays, and its checks pass`, async (ctx) => {
       vi.resetModules();
       const { evalEnv } = await import('../../src/evals/env.js');
       for (const [key, value] of Object.entries(evalEnv({ OPENAI_API_KEY: 'sk-test' }, { ...scenario.flags, env: scenario.env }))) vi.stubEnv(key, value);
@@ -183,7 +183,8 @@ describe('recorded scenarios', async () => {
         const { outcome, checks } = await replayAndCheck(rec!, scenario);
         if (!outcome.ok && 'stale' in outcome) {
           console.warn(`[evals] ${scenario.id}: stale (the prompt or tools changed) — re-record with npm run eval -- --scenario ${scenario.id} --record`);
-          return;
+          // Skipped, never a pass: a stale recording proves nothing about this code.
+          ctx.skip();
         }
         expect(outcome, JSON.stringify(outcome).slice(0, 2000)).toMatchObject({ ok: true });
         expect(checks.filter((c) => !c.pass)).toEqual([]);

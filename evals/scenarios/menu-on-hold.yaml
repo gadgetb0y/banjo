@@ -14,7 +14,7 @@ script:
   - ~Para español, oprima dos.
   - ~Please hold while we connect you with the next available representative.
   - ~Your call is important to us. Please stay on the line.
-  - ~We have chat agents available right now by text message. Press 1 to continue by text message on your mobile phone, otherwise press 2.
+  - ~We have chat agents available right now by text message. Press 1 to continue by text message on your mobile phone, otherwise press 3.
   - ~Please wait for the next available representative.
   - ~Hi, this is Morgan with Northline support. How can I help you today?
   - Okay, I see the drops. I've opened a ticket for you. The ticket number is 4417.
@@ -26,9 +26,12 @@ expect:
   toolsCalled:
     - name: wait_on_hold
     - name: press_digits
-      argsInclude: { digits: "2" }
+      argsInclude: { digits: "3" }
   toolsNotCalled:
     - name: press_digits
       argsInclude: { digits: "1" }
+    # 2 is Spanish; the chat menu's "stay on the line" is 3, so the two can't be confused.
+    - name: press_digits
+      argsInclude: { digits: "2" }
   bookedLocal: { dayOffset: 2, time: "13:00" }
   traceableNumbers: true
