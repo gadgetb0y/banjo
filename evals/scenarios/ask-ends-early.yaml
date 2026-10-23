@@ -1,0 +1,20 @@
+id: ask-ends-early
+title: An ask call where they confirm the first answer, then have to go
+source: "#158: answers saved one at a time, so an early ending keeps them"
+task:
+  business: Claudia's Dog Grooming
+  category: salon
+  goal: Find out a few things before booking a grooming.
+  mode: ask
+  questions:
+    - What time do you close on Saturdays?
+    - How much is a full groom for a golden retriever?
+script:
+  - Claudia's, how can I help?
+  - We close at 5 on Saturdays.
+  - Yes, five. Sorry, I have to run, a customer just walked in. Bye!
+expect:
+  status: [answered]
+  toolsCalled:
+    - name: report_answers_and_end_call
+  traceableNumbers: true

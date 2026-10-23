@@ -1,0 +1,21 @@
+id: voicemail
+title: Voicemail picks up; Banjo leaves a message and books nothing
+source: "#71, #177: voicemails cut off or left blank"
+task:
+  business: Claudia's Dog Grooming
+  category: salon
+  goal: Book a full grooming appointment for my dog, Banjo, a golden retriever.
+  mode: booking
+script:
+  - ~Hi, you've reached Claudia's Dog Grooming. We can't come to the phone right now.
+  - ~Please leave your name, number and a short message after the tone. Beep.
+expect:
+  status: [voicemail_left]
+  toolsCalled:
+    - name: leave_voicemail_and_end_call
+  toolsNotCalled:
+    - name: confirm_appointment
+  # #71: a message left before the tone is lost.
+  reaches:
+    - userLineIncludes: Beep
+      beforeTool: leave_voicemail_and_end_call

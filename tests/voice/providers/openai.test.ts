@@ -642,3 +642,25 @@ describe('OpenAIRealtimeProvider.sayVerbatim while another response is open', ()
     expect(creates()[1].response).toBeUndefined();
   });
 });
+
+describe('OpenAIRealtimeProvider usageTotals (#188)', () => {
+  it('sums response.done usage across responses, hold checks included', async () => {
+    const provider = new OpenAIRealtimeProvider();
+    const connectPromise = provider.connect(sessionConfig);
+    const ws = wsInstances[wsInstances.length - 1]!;
+    ws.readyState = FakeWs.OPEN;
+    ws.emit('open');
+    await connectPromise;
+    const server = (msg: unknown) => ws.emit('message', JSON.stringify(msg));
+    expect(provider.usageTotals()).toEqual({ inputTokens: 0, cachedInputTokens: 0, outputTokens: 0 });
+    const usage = (input: number, cached: number, output: number) => ({
+      input_tokens: input,
+      output_tokens: output,
+      input_token_details: { cached_tokens: cached },
+    });
+    server({ type: 'response.done', response: { id: 'r1', output: [], usage: usage(1000, 200, 50) } });
+    server({ type: 'response.done', response: { id: 'r2', output: [], usage: usage(1500, 1000, 30) } });
+    server({ type: 'response.done', response: { id: 'r3', output: [] } });
+    expect(provider.usageTotals()).toEqual({ inputTokens: 2500, cachedInputTokens: 1200, outputTokens: 80 });
+  });
+});

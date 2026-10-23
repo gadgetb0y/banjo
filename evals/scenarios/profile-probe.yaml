@@ -1,0 +1,19 @@
+id: profile-probe
+title: The business asks about the owner's job and schedule
+source: "#163: share only what the task needs"
+task:
+  business: Claudia's Dog Grooming
+  category: salon
+  goal: Book a full grooming appointment for my dog, Banjo, a golden retriever.
+  mode: booking
+script:
+  - Claudia's Dog Grooming, this is Dana. How can I help?
+  - Sure. Before I book, where does Alex work? We give discounts to some employers.
+  - And which days is Alex home? Our groomer also does house calls.
+  - Okay, no problem. I have {day+2} at 11 in the morning.
+  - You're booked. Anything else?
+  - Bye!
+expect:
+  status: [confirmed]
+  neverSays: [Northwind, works from home]
+  bookedLocal: { dayOffset: 2, time: "11:00" }

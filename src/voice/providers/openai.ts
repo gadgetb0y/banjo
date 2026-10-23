@@ -183,6 +183,8 @@ export interface OpenAIRealtimeProviderOptions {
 export class OpenAIRealtimeProvider implements VoiceAIProvider {
   readonly name = 'openai';
   private readonly textOnly: boolean;
+  // Every response's tokens, out-of-band hold checks included (#188).
+  private usage = { inputTokens: 0, cachedInputTokens: 0, outputTokens: 0 };
 
   private ws: WebSocket | undefined;
   /** The socket disconnect() is closing: if it hasn't opened yet, `ws` reports the close as an error, which isn't one (#100). */
@@ -360,6 +362,17 @@ export class OpenAIRealtimeProvider implements VoiceAIProvider {
    * final user transcript, the way a call reports transcribed speech, so
    * CallSession handles it exactly like a spoken turn.
    */
+  usageTotals(): { inputTokens: number; cachedInputTokens: number; outputTokens: number } {
+    return { ...this.usage };
+  }
+
+  private addUsage(usage: any): void {
+    if (!usage) return;
+    this.usage.inputTokens += Number(usage.input_tokens) || 0;
+    this.usage.cachedInputTokens += Number(usage.input_token_details?.cached_tokens) || 0;
+    this.usage.outputTokens += Number(usage.output_tokens) || 0;
+  }
+
   sendUserText(text: string): void {
     if (!this.textOnly) throw new Error('sendUserText is only for text-only mode');
     if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
@@ -725,6 +738,7 @@ export class OpenAIRealtimeProvider implements VoiceAIProvider {
       }
 
       case 'response.done': {
+        this.addUsage(msg?.response?.usage);
         const holdCheck = msg?.response?.metadata?.banjo_hold_check;
         if (typeof holdCheck === 'string') {
           this.outOfBandResponseIds.delete(msg.response.id);

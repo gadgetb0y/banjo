@@ -1,0 +1,18 @@
+id: tired-callee
+title: A check-in call with someone tired and trying to focus
+source: "#179: live check-in call 2026-10-16 (paraphrased, fictional name)"
+task:
+  business: Robin
+  category: other
+  goal: Check in with Robin and see how their day is going.
+  mode: conversation
+  relationshipTier: friend
+script:
+  - Hello?
+  - Honestly? Exhausting.
+  - I'm just trying to concentrate.
+  - Yeah. My brain is.
+  - I'd rather not get into it right now.
+expect:
+  status: [conversation_completed]
+  goodbyeWithinTurnsAfter: { userLineIncludes: exhausting, turns: 3 }

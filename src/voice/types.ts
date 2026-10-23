@@ -204,6 +204,11 @@ export interface VoiceAIProvider {
    * never puts the other party's words in instruction position.
    */
   addContext?(items: { role: 'system' | 'user'; text: string }[]): void;
+  /**
+   * Tokens used so far this session, as the vendor reports them. Optional:
+   * only the scenario evals read it, to report what a run cost (#188).
+   */
+  usageTotals?(): { inputTokens: number; cachedInputTokens: number; outputTokens: number };
   /** The longest a session can last (OpenAI Realtime: 60 minutes). Undefined: no known limit. Caps a hold (#151). */
   readonly maxSessionMs?: number;
   disconnect(): Promise<void>;

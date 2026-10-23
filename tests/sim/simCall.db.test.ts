@@ -120,6 +120,33 @@ describe('startSimCall', () => {
     expect(printed).toContain('[Banjo hung up]');
   }, 20_000);
 
+  it("windowStart sets the booking window, and relationshipTier the contact's tier", async () => {
+    const windowStart = new Date('2031-03-04T15:00:00.000Z');
+    class Unreachable extends ScriptedBanjo {
+      override async connect(): Promise<void> {
+        throw new Error('no network in this test');
+      }
+    }
+    const call = await sim.startSimCall({
+      business: "Claudia's Dog Grooming",
+      category: 'salon',
+      goal: 'Book a grooming appointment.',
+      mode: 'booking',
+      durationMinutes: 60,
+      windowDays: 3,
+      windowStart,
+      relationshipTier: 'friend',
+      createVoiceAI: () => new Unreachable('2031-03-05T10:00:00'),
+      print: () => {},
+    });
+    await call.finished;
+
+    const [task] = await db.select().from(tasks);
+    expect(task.constraints.dateWindows[0].start).toBe(windowStart.toISOString());
+    const [contact] = await db.select().from(contacts);
+    expect(contact.relationshipTier).toBe('friend');
+  }, 20_000);
+
   it('resolves ready with null, and finishes, when the voice session never connects', async () => {
     class Unreachable extends ScriptedBanjo {
       override async connect(): Promise<void> {

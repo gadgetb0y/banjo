@@ -1,0 +1,22 @@
+id: hold-then-person
+title: Put on hold, a hold queue, then a person picks up
+source: "#151: wait on hold, then open again to the person"
+task:
+  business: Riverside Auto Care
+  category: other
+  goal: Book an oil change for my car.
+  mode: booking
+script:
+  - Riverside Auto, can you hold please?
+  - ~Thank you for holding. Your call is important to us.
+  - ~Please stay on the line. The next available associate will be with you shortly.
+  - ~Thank you for holding. Your call is important to us.
+  - ~Hi, sorry about the wait, this is Sam. What can I do for you?
+  - Sure, I can get the car in {day+2} at 9 in the morning. Want it?
+  - Done, see you then. Anything else?
+  - Okay, bye!
+expect:
+  status: [confirmed]
+  toolsCalled:
+    - name: wait_on_hold
+  bookedLocal: { dayOffset: 2, time: "09:00" }

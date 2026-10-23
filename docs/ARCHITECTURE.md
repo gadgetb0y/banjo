@@ -695,6 +695,37 @@ noise and echo (#143), the playback timing behind `hangUpAfterSpeaking`, and whe
 Text replies can also differ a little from spoken ones. Use the sim for what Banjo says and which
 tools it calls, and a real call for how it sounds.
 
+### Scenario evals (`evals/`, `src/evals/`, #188)
+
+A scenario (`evals/scenarios/<id>.yaml`, schema in `src/evals/scenario.ts`) is a sim call with a
+script for the other party and expectations: the final status, tools called or not (with argument
+matches), a booking's local day and time, numbers Banjo may say only if the call said them first,
+phrases it never says, and a goodbye within N lines of a cue. Every scenario also gets the universal
+checks: disclosure first, disclosure once, and a goodbye before the call ends (not for voicemail,
+transfer or escalation). Scripts write dates as `{day+N}`, rendered in the scenario's time zone,
+since Banjo isn't reliably given today's date and reads relative days ("the day after tomorrow")
+loosely. The env is fixed (`src/evals/env.ts`): owner "Alex", a fictional profile, New York time,
+`gpt-realtime`, and nothing from your `.env` but `OPENAI_API_KEY` and `DATABASE_URL`.
+
+Two tiers run from the same files:
+
+- **Live:** `npm run eval` runs each scenario `--runs` times (default 3) against real OpenAI, each run
+  in its own child process (`scripts/eval-run.ts`). It prints pass rates, the safety nets that
+  rescued a call (`src/evals/rescues.ts`: a refused ending, the fixed goodbye, a goodbye or "still
+  there?" cue, the opener cue), and the estimated cost from the session's token usage. Results go
+  to `evals/results/<timestamp>/` (git-ignored). It only warns: a drop against `evals/baseline.json`
+  larger than the noise (1/runs) is flagged, never failed. `--save-baseline` writes the baseline
+  from a full run. `--record` saves a passing run of each scenario to `evals/recordings/`.
+- **Replay:** `tests/evals/replay.db.test.ts`, in `npm test` and CI, plays each recording back through
+  the real call path with no model: `CallSession`, its safety nets, the tools and Postgres run for
+  real, and `ReplayVoiceAI` returns the model's recorded side once the code makes the same calls it
+  did live. A different call or tool result is a divergence and fails the test. A recording whose
+  prompt or tools changed (its fingerprint, over the instructions and tool JSON with UUIDs and
+  timestamps normalized) is stale: skipped with a warning to re-record, never a pass. So is one whose
+  scenario file changed.
+
+Recordings hold only the fictional scenario's words, never a real call's.
+
 ---
 
 ## Configuration

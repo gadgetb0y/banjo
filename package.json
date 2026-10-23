@@ -21,6 +21,7 @@
     "db:studio": "drizzle-kit studio",
     "test:call": "tsx scripts/manual-test-call.ts",
     "sim": "tsx scripts/sim.ts",
+    "eval": "tsx scripts/eval.ts",
     "dav:check": "tsx scripts/dav-check.ts",
     "setup": "tsx scripts/setup.ts"
   },
@@ -47,6 +48,7 @@
     "drizzle-kit": "^0.31.11",
     "tsx": "^4.23.15",
     "typescript": "^5.7.2",
-    "vitest": "^2.1.8"
+    "vitest": "^2.1.8",
+    "yaml": "^2.9.1"
   }
 }

@@ -412,6 +412,7 @@ Vitest, Docker.
 | --- | --- |
 | `npm run setup` | Interactive setup: asks for the required settings, checks them, and writes `.env` |
 | `npm run sim` | Text-mode simulator: type as the business while Banjo calls it. No phone, no real calendar |
+| `npm run eval` | Scenario evals: scripted sim calls against real OpenAI, scored, with cost. Passing runs are recorded and replayed free in `npm test` (see `docs/ARCHITECTURE.md`) |
 | `npm run dev` | Run the server with hot reload (`tsx watch`) |
 | `npm run build` | Type-check and compile to `dist/` |
 | `npm test` | Run the Vitest suite |

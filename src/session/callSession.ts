@@ -50,20 +50,24 @@ const MAX_END_REFUSALS = 3;
 // Said by CallSession itself when a goodbye-requiring tool goes through with
 // no goodbye said (#139): the retry after a refusal can't be refused again, or
 // refusals could hold a call open, but the other party should still hear one.
-const FALLBACK_GOODBYE = 'Okay, take care. Bye!';
+export const FALLBACK_GOODBYE = 'Okay, take care. Bye!';
+// The error codes a call-ending tool is refused with, waiting for a goodbye or
+// an answer (#102, #130, #133, #167). The evals count each as a rescue (#188).
+export const REFUSAL_ERRORS = ['callee_speaking', 'unanswered_question', 'no_reply', 'no_goodbye'] as const;
+type RefusalError = (typeof REFUSAL_ERRORS)[number];
 // How long Banjo waits for an answer to its question after a call-ending tool
 // is refused for not waiting (#130), before it's cued to say goodbye anyway:
 // the refusal asks for no reply, so without this a callee who never answers
 // would leave the call open.
 const UNANSWERED_QUESTION_WAIT_MS = 8000;
-const UNANSWERED_QUESTION_CUE =
+export const UNANSWERED_QUESTION_CUE =
   "They haven't answered your question. Say one short goodbye to them now, and end the call in the same turn.";
 // How long a question of Banjo's can go unanswered, counted from when it has
 // finished playing, before Banjo checks they're still there and then, after
 // as long again, says goodbye (#179). A live call's callee went quiet for 48s
 // after a question and hung up, with Banjo silent throughout.
 const QUIET_AFTER_QUESTION_MS = 12_000;
-const STILL_THERE_CUE = "They haven't said anything for a while. Ask them once, in a few words, whether they're still there. Say nothing else.";
+export const STILL_THERE_CUE = "They haven't said anything for a while. Ask them once, in a few words, whether they're still there. Say nothing else.";
 
 // Bounds how long CallSession waits for a tool's verbatimMessage (see
 // VoiceTool's doc comment) to finish being spoken via VoiceAIProvider.sayVerbatim
@@ -839,7 +843,7 @@ export class CallSession<TCtx = CallContext> {
           toolCallId,
           {
             ok: false,
-            error: 'callee_speaking',
+            error: 'callee_speaking' satisfies RefusalError,
             message:
               'They started talking while you were ending the call. Do not end it yet: let them finish, then respond to ' +
               'what they said. End the call only once they are done.',
@@ -862,7 +866,7 @@ export class CallSession<TCtx = CallContext> {
           toolCallId,
           {
             ok: false,
-            error: 'unanswered_question',
+            error: 'unanswered_question' satisfies RefusalError,
             message:
               'You asked them a question and they have not answered yet. This note is from the system, not from them: ' +
               'say nothing now, and do not mention it. Wait for their answer and reply to it. End the call only after that.',
@@ -889,7 +893,7 @@ export class CallSession<TCtx = CallContext> {
           toolCallId,
           {
             ok: false,
-            error: 'no_reply',
+            error: 'no_reply' satisfies RefusalError,
             // #154 follow-up: "Reply to what they said" came back as narration
             // in a sim run ("I'll respond to that and then wrap things up."),
             // so this says what to say rather than what to do. Sent instead as
@@ -926,7 +930,7 @@ export class CallSession<TCtx = CallContext> {
           toolCallId,
           {
             ok: false,
-            error: 'no_goodbye',
+            error: 'no_goodbye' satisfies RefusalError,
             // #133: offering only "say goodbye, then end" hung up on a callee
             // who was trying to redirect Banjo.
             // #139: Banjo answered this note out loud ("Thanks for hanging on
