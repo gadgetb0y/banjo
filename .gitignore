@@ -12,3 +12,6 @@ coverage/
 # Personal: the owner profile and local compose tweaks (e.g. mounting it)
 banjo-profile.md
 docker-compose.override.yml
+
+# Live eval runs (npm run eval): per-run results, kept locally.
+evals/results/

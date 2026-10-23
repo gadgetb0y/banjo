@@ -18,7 +18,7 @@
 import { createInterface } from 'node:readline';
 import { parseArgs } from 'node:util';
 import dotenv from 'dotenv';
-import postgres from 'postgres';
+import { ensureSimDatabase, emptySimDatabase } from '../src/sim/db.js';
 import { SIM_DATABASE, simEnv } from '../src/sim/env.js';
 import { readScript, runScript, type ScriptStep } from '../src/sim/script.js';
 // Type-only, so erased: nothing here may load src/config before simEnv is applied.
@@ -106,10 +106,10 @@ async function main(): Promise<void> {
   Object.assign(process.env, simEnv(process.env, { transfer, warm: values.warm, askOwner: askOwner !== undefined, verbose: values.verbose }));
   if (!process.env.OPENAI_API_KEY) fail('OPENAI_API_KEY is not set. Add it to .env or the environment: the sim talks to OpenAI Realtime.');
 
-  await ensureSimDatabase(process.env.DATABASE_URL!);
+  await ensureSimDatabase(process.env.DATABASE_URL!).catch((err: Error) => fail(err.message));
   const { runMigrations } = await import('../src/db/migrate.js');
   await runMigrations();
-  await emptySimDatabase();
+  await emptySimDatabase().catch((err: Error) => fail(err.message));
 
   const { config } = await import('../src/config/index.js');
   const { OpenAIRealtimeProvider } = await import('../src/voice/providers/openai.js');
@@ -172,34 +172,6 @@ async function main(): Promise<void> {
   console.log(call.calendar.events.length ? `Calendar (dry run): ${call.calendar.events.map((e) => e.summary).join('; ')}` : 'Calendar: nothing booked.');
   console.log(`The transcript and task are in the ${SIM_DATABASE} database until the next run.`);
   process.exit(0);
-}
-
-/** Creates banjo_sim on the configured server if it isn't there yet. */
-async function ensureSimDatabase(simUrl: string): Promise<void> {
-  const url = new URL(simUrl);
-  url.pathname = '/postgres';
-  const admin = postgres(url.toString(), { max: 1, onnotice: () => {} });
-  try {
-    const [row] = await admin`select 1 as ok from pg_database where datname = ${SIM_DATABASE}`;
-    if (!row) await admin.unsafe(`create database ${SIM_DATABASE}`);
-  } catch (err) {
-    const where = `${url.hostname}:${url.port || 5432}`;
-    fail(`Can't reach Postgres at ${where} (${(err as Error).message}). Start it with: docker compose up -d postgres`);
-  } finally {
-    await admin.end({ timeout: 5 });
-  }
-}
-
-/** Every table in banjo_sim, emptied — after checking it really is banjo_sim. */
-async function emptySimDatabase(): Promise<void> {
-  const { sql } = await import('drizzle-orm');
-  const { db } = await import('../src/db/index.js');
-  const [{ name }] = (await db.execute(sql`select current_database() as name`)) as unknown as [{ name: string }];
-  if (name !== SIM_DATABASE) fail(`Refusing to empty "${name}": the sim only ever clears ${SIM_DATABASE}.`);
-  const tables = (await db.execute(sql`select tablename from pg_tables where schemaname = 'public'`)) as unknown as { tablename: string }[];
-  if (!tables.length) return;
-  const list = tables.map(({ tablename }) => `"${tablename.replace(/"/g, '""')}"`).join(', ');
-  await db.execute(sql.raw(`truncate ${list} restart identity cascade`));
 }
 
 /** The --script file's steps, or a clear failure: no lines, or a malformed (silence N). */
