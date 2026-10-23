@@ -3,9 +3,9 @@
   "scenarioId": "ask-ends-early",
   "scenarioHash": "306513537c97c78f7fb71c53992817850145387b500533f9543a95dc4f2dc571",
   "fingerprint": "e7142fd67880840cb1bdd49d589cf7e7f761585c164bcb0b13f9adc1fb399589",
-  "recordedAt": "2026-10-23T23:12:32.438Z",
-  "windowStart": "2026-10-23T23:12:32.438Z",
-  "gitSha": "35cefb8",
+  "recordedAt": "2026-10-23T23:34:21.674Z",
+  "windowStart": "2026-10-23T23:34:21.674Z",
+  "gitSha": "8dc5a10",
   "model": "gpt-realtime",
   "log": [
     {
@@ -190,20 +190,20 @@
     },
     {
       "dir": "out",
-      "t": 276,
+      "t": 309,
       "event": {
         "type": "connected"
       }
     },
     {
       "dir": "in",
-      "t": 290,
+      "t": 332,
       "call": "sendUserText",
       "text": "Claudia's, how can I help?"
     },
     {
       "dir": "out",
-      "t": 290,
+      "t": 332,
       "event": {
         "type": "transcript",
         "role": "user",
@@ -213,7 +213,7 @@
     },
     {
       "dir": "out",
-      "t": 653,
+      "t": 760,
       "event": {
         "type": "transcript",
         "role": "assistant",
@@ -223,7 +223,7 @@
     },
     {
       "dir": "out",
-      "t": 654,
+      "t": 760,
       "event": {
         "type": "transcript",
         "role": "assistant",
@@ -233,7 +233,7 @@
     },
     {
       "dir": "out",
-      "t": 656,
+      "t": 769,
       "event": {
         "type": "transcript",
         "role": "assistant",
@@ -243,7 +243,7 @@
     },
     {
       "dir": "out",
-      "t": 662,
+      "t": 774,
       "event": {
         "type": "transcript",
         "role": "assistant",
@@ -253,7 +253,7 @@
     },
     {
       "dir": "out",
-      "t": 674,
+      "t": 779,
       "event": {
         "type": "transcript",
         "role": "assistant",
@@ -263,7 +263,7 @@
     },
     {
       "dir": "out",
-      "t": 677,
+      "t": 783,
       "event": {
         "type": "transcript",
         "role": "assistant",
@@ -273,7 +273,7 @@
     },
     {
       "dir": "out",
-      "t": 686,
+      "t": 796,
       "event": {
         "type": "transcript",
         "role": "assistant",
@@ -283,7 +283,7 @@
     },
     {
       "dir": "out",
-      "t": 696,
+      "t": 798,
       "event": {
         "type": "transcript",
         "role": "assistant",
@@ -293,7 +293,7 @@
     },
     {
       "dir": "out",
-      "t": 701,
+      "t": 819,
       "event": {
         "type": "transcript",
         "role": "assistant",
@@ -303,7 +303,7 @@
     },
     {
       "dir": "out",
-      "t": 709,
+      "t": 823,
       "event": {
         "type": "transcript",
         "role": "assistant",
@@ -313,7 +313,7 @@
     },
     {
       "dir": "out",
-      "t": 716,
+      "t": 829,
       "event": {
         "type": "transcript",
         "role": "assistant",
@@ -323,7 +323,7 @@
     },
     {
       "dir": "out",
-      "t": 724,
+      "t": 834,
       "event": {
         "type": "transcript",
         "role": "assistant",
@@ -333,7 +333,7 @@
     },
     {
       "dir": "out",
-      "t": 731,
+      "t": 836,
       "event": {
         "type": "transcript",
         "role": "assistant",
@@ -343,7 +343,7 @@
     },
     {
       "dir": "out",
-      "t": 738,
+      "t": 847,
       "event": {
         "type": "transcript",
         "role": "assistant",
@@ -353,7 +353,7 @@
     },
     {
       "dir": "out",
-      "t": 749,
+      "t": 853,
       "event": {
         "type": "transcript",
         "role": "assistant",
@@ -363,7 +363,7 @@
     },
     {
       "dir": "out",
-      "t": 766,
+      "t": 873,
       "event": {
         "type": "transcript",
         "role": "assistant",
@@ -373,7 +373,7 @@
     },
     {
       "dir": "out",
-      "t": 773,
+      "t": 878,
       "event": {
         "type": "transcript",
         "role": "assistant",
@@ -383,7 +383,7 @@
     },
     {
       "dir": "out",
-      "t": 785,
+      "t": 889,
       "event": {
         "type": "transcript",
         "role": "assistant",
@@ -393,7 +393,7 @@
     },
     {
       "dir": "out",
-      "t": 796,
+      "t": 900,
       "event": {
         "type": "transcript",
         "role": "assistant",
@@ -403,7 +403,7 @@
     },
     {
       "dir": "out",
-      "t": 796,
+      "t": 903,
       "event": {
         "type": "transcript",
         "role": "assistant",
@@ -413,7 +413,7 @@
     },
     {
       "dir": "out",
-      "t": 805,
+      "t": 913,
       "event": {
         "type": "transcript",
         "role": "assistant",
@@ -423,7 +423,7 @@
     },
     {
       "dir": "out",
-      "t": 810,
+      "t": 922,
       "event": {
         "type": "transcript",
         "role": "assistant",
@@ -433,47 +433,7 @@
     },
     {
       "dir": "out",
-      "t": 818,
-      "event": {
-        "type": "transcript",
-        "role": "assistant",
-        "text": " if",
-        "isFinal": false
-      }
-    },
-    {
-      "dir": "out",
-      "t": 828,
-      "event": {
-        "type": "transcript",
-        "role": "assistant",
-        "text": " you",
-        "isFinal": false
-      }
-    },
-    {
-      "dir": "out",
-      "t": 832,
-      "event": {
-        "type": "transcript",
-        "role": "assistant",
-        "text": " can",
-        "isFinal": false
-      }
-    },
-    {
-      "dir": "out",
-      "t": 840,
-      "event": {
-        "type": "transcript",
-        "role": "assistant",
-        "text": " help",
-        "isFinal": false
-      }
-    },
-    {
-      "dir": "out",
-      "t": 856,
+      "t": 923,
       "event": {
         "type": "transcript",
         "role": "assistant",
@@ -483,7 +443,7 @@
     },
     {
       "dir": "out",
-      "t": 856,
+      "t": 923,
       "event": {
         "type": "transcript",
         "role": "assistant",
@@ -493,190 +453,17 @@
     },
     {
       "dir": "out",
-      "t": 867,
+      "t": 936,
       "event": {
         "type": "transcript",
         "role": "assistant",
-        "text": "What",
+        "text": "First",
         "isFinal": false
       }
     },
     {
       "dir": "out",
-      "t": 883,
-      "event": {
-        "type": "transcript",
-        "role": "assistant",
-        "text": " time",
-        "isFinal": false
-      }
-    },
-    {
-      "dir": "out",
-      "t": 883,
-      "event": {
-        "type": "transcript",
-        "role": "assistant",
-        "text": " do",
-        "isFinal": false
-      }
-    },
-    {
-      "dir": "out",
-      "t": 887,
-      "event": {
-        "type": "transcript",
-        "role": "assistant",
-        "text": " you",
-        "isFinal": false
-      }
-    },
-    {
-      "dir": "out",
-      "t": 893,
-      "event": {
-        "type": "transcript",
-        "role": "assistant",
-        "text": " close",
-        "isFinal": false
-      }
-    },
-    {
-      "dir": "out",
-      "t": 902,
-      "event": {
-        "type": "transcript",
-        "role": "assistant",
-        "text": " on",
-        "isFinal": false
-      }
-    },
-    {
-      "dir": "out",
-      "t": 911,
-      "event": {
-        "type": "transcript",
-        "role": "assistant",
-        "text": " Saturdays",
-        "isFinal": false
-      }
-    },
-    {
-      "dir": "out",
-      "t": 917,
-      "event": {
-        "type": "transcript",
-        "role": "assistant",
-        "text": "?",
-        "isFinal": false
-      }
-    },
-    {
-      "dir": "out",
-      "t": 935,
-      "event": {
-        "type": "transcript",
-        "role": "assistant",
-        "text": "Hi, I'm an AI assistant calling on behalf of Alex. I’ve got a quick question or two for Alex if you can help. \n\nWhat time do you close on Saturdays?",
-        "isFinal": true
-      }
-    },
-    {
-      "dir": "out",
-      "t": 940,
-      "event": {
-        "type": "turn_end"
-      }
-    },
-    {
-      "dir": "in",
-      "t": 2442,
-      "call": "sendUserText",
-      "text": "We close at 5 on Saturdays."
-    },
-    {
-      "dir": "out",
-      "t": 2442,
-      "event": {
-        "type": "transcript",
-        "role": "user",
-        "text": "We close at 5 on Saturdays.",
-        "isFinal": true
-      }
-    },
-    {
-      "dir": "out",
-      "t": 2659,
-      "event": {
-        "type": "transcript",
-        "role": "assistant",
-        "text": "You",
-        "isFinal": false
-      }
-    },
-    {
-      "dir": "out",
-      "t": 2668,
-      "event": {
-        "type": "transcript",
-        "role": "assistant",
-        "text": " close",
-        "isFinal": false
-      }
-    },
-    {
-      "dir": "out",
-      "t": 2674,
-      "event": {
-        "type": "transcript",
-        "role": "assistant",
-        "text": " at",
-        "isFinal": false
-      }
-    },
-    {
-      "dir": "out",
-      "t": 2674,
-      "event": {
-        "type": "transcript",
-        "role": "assistant",
-        "text": " ",
-        "isFinal": false
-      }
-    },
-    {
-      "dir": "out",
-      "t": 2676,
-      "event": {
-        "type": "transcript",
-        "role": "assistant",
-        "text": "5",
-        "isFinal": false
-      }
-    },
-    {
-      "dir": "out",
-      "t": 2683,
-      "event": {
-        "type": "transcript",
-        "role": "assistant",
-        "text": " on",
-        "isFinal": false
-      }
-    },
-    {
-      "dir": "out",
-      "t": 2692,
-      "event": {
-        "type": "transcript",
-        "role": "assistant",
-        "text": " Saturdays",
-        "isFinal": false
-      }
-    },
-    {
-      "dir": "out",
-      "t": 2699,
+      "t": 937,
       "event": {
         "type": "transcript",
         "role": "assistant",
@@ -686,157 +473,77 @@
     },
     {
       "dir": "out",
-      "t": 2707,
+      "t": 954,
       "event": {
         "type": "transcript",
         "role": "assistant",
-        "text": " got",
+        "text": " what",
         "isFinal": false
       }
     },
     {
       "dir": "out",
-      "t": 2713,
+      "t": 962,
       "event": {
         "type": "transcript",
         "role": "assistant",
-        "text": " it",
+        "text": " time",
         "isFinal": false
       }
     },
     {
       "dir": "out",
-      "t": 2723,
+      "t": 971,
       "event": {
         "type": "transcript",
         "role": "assistant",
-        "text": ".",
+        "text": " do",
         "isFinal": false
       }
     },
     {
       "dir": "out",
-      "t": 2730,
+      "t": 977,
       "event": {
         "type": "transcript",
         "role": "assistant",
-        "text": " And",
+        "text": " you",
         "isFinal": false
       }
     },
     {
       "dir": "out",
-      "t": 2735,
+      "t": 985,
       "event": {
         "type": "transcript",
         "role": "assistant",
-        "text": " how",
+        "text": " close",
         "isFinal": false
       }
     },
     {
       "dir": "out",
-      "t": 2745,
+      "t": 996,
       "event": {
         "type": "transcript",
         "role": "assistant",
-        "text": " much",
+        "text": " on",
         "isFinal": false
       }
     },
     {
       "dir": "out",
-      "t": 2753,
+      "t": 1009,
       "event": {
         "type": "transcript",
         "role": "assistant",
-        "text": " is",
+        "text": " Saturdays",
         "isFinal": false
       }
     },
     {
       "dir": "out",
-      "t": 2771,
-      "event": {
-        "type": "transcript",
-        "role": "assistant",
-        "text": " a",
-        "isFinal": false
-      }
-    },
-    {
-      "dir": "out",
-      "t": 2780,
-      "event": {
-        "type": "transcript",
-        "role": "assistant",
-        "text": " full",
-        "isFinal": false
-      }
-    },
-    {
-      "dir": "out",
-      "t": 2786,
-      "event": {
-        "type": "transcript",
-        "role": "assistant",
-        "text": " groom",
-        "isFinal": false
-      }
-    },
-    {
-      "dir": "out",
-      "t": 2795,
-      "event": {
-        "type": "transcript",
-        "role": "assistant",
-        "text": " for",
-        "isFinal": false
-      }
-    },
-    {
-      "dir": "out",
-      "t": 2800,
-      "event": {
-        "type": "transcript",
-        "role": "assistant",
-        "text": " a",
-        "isFinal": false
-      }
-    },
-    {
-      "dir": "out",
-      "t": 2809,
-      "event": {
-        "type": "transcript",
-        "role": "assistant",
-        "text": " golden",
-        "isFinal": false
-      }
-    },
-    {
-      "dir": "out",
-      "t": 2816,
-      "event": {
-        "type": "transcript",
-        "role": "assistant",
-        "text": " retr",
-        "isFinal": false
-      }
-    },
-    {
-      "dir": "out",
-      "t": 2826,
-      "event": {
-        "type": "transcript",
-        "role": "assistant",
-        "text": "iever",
-        "isFinal": false
-      }
-    },
-    {
-      "dir": "out",
-      "t": 2831,
+      "t": 1013,
       "event": {
         "type": "transcript",
         "role": "assistant",
@@ -846,7 +553,280 @@
     },
     {
       "dir": "out",
-      "t": 2848,
+      "t": 1037,
+      "event": {
+        "type": "transcript",
+        "role": "assistant",
+        "text": "Hi, I'm an AI assistant calling on behalf of Alex. I’ve got a quick question or two for Alex. \n\nFirst, what time do you close on Saturdays?",
+        "isFinal": true
+      }
+    },
+    {
+      "dir": "out",
+      "t": 1043,
+      "event": {
+        "type": "turn_end"
+      }
+    },
+    {
+      "dir": "in",
+      "t": 2544,
+      "call": "sendUserText",
+      "text": "We close at 5 on Saturdays."
+    },
+    {
+      "dir": "out",
+      "t": 2544,
+      "event": {
+        "type": "transcript",
+        "role": "user",
+        "text": "We close at 5 on Saturdays.",
+        "isFinal": true
+      }
+    },
+    {
+      "dir": "out",
+      "t": 2791,
+      "event": {
+        "type": "transcript",
+        "role": "assistant",
+        "text": "You",
+        "isFinal": false
+      }
+    },
+    {
+      "dir": "out",
+      "t": 2796,
+      "event": {
+        "type": "transcript",
+        "role": "assistant",
+        "text": " close",
+        "isFinal": false
+      }
+    },
+    {
+      "dir": "out",
+      "t": 2802,
+      "event": {
+        "type": "transcript",
+        "role": "assistant",
+        "text": " at",
+        "isFinal": false
+      }
+    },
+    {
+      "dir": "out",
+      "t": 2815,
+      "event": {
+        "type": "transcript",
+        "role": "assistant",
+        "text": " ",
+        "isFinal": false
+      }
+    },
+    {
+      "dir": "out",
+      "t": 2817,
+      "event": {
+        "type": "transcript",
+        "role": "assistant",
+        "text": "5",
+        "isFinal": false
+      }
+    },
+    {
+      "dir": "out",
+      "t": 2825,
+      "event": {
+        "type": "transcript",
+        "role": "assistant",
+        "text": " on",
+        "isFinal": false
+      }
+    },
+    {
+      "dir": "out",
+      "t": 2830,
+      "event": {
+        "type": "transcript",
+        "role": "assistant",
+        "text": " Saturdays",
+        "isFinal": false
+      }
+    },
+    {
+      "dir": "out",
+      "t": 2841,
+      "event": {
+        "type": "transcript",
+        "role": "assistant",
+        "text": ",",
+        "isFinal": false
+      }
+    },
+    {
+      "dir": "out",
+      "t": 2849,
+      "event": {
+        "type": "transcript",
+        "role": "assistant",
+        "text": " got",
+        "isFinal": false
+      }
+    },
+    {
+      "dir": "out",
+      "t": 2854,
+      "event": {
+        "type": "transcript",
+        "role": "assistant",
+        "text": " it",
+        "isFinal": false
+      }
+    },
+    {
+      "dir": "out",
+      "t": 2862,
+      "event": {
+        "type": "transcript",
+        "role": "assistant",
+        "text": ".",
+        "isFinal": false
+      }
+    },
+    {
+      "dir": "out",
+      "t": 2869,
+      "event": {
+        "type": "transcript",
+        "role": "assistant",
+        "text": " And",
+        "isFinal": false
+      }
+    },
+    {
+      "dir": "out",
+      "t": 2878,
+      "event": {
+        "type": "transcript",
+        "role": "assistant",
+        "text": " how",
+        "isFinal": false
+      }
+    },
+    {
+      "dir": "out",
+      "t": 2884,
+      "event": {
+        "type": "transcript",
+        "role": "assistant",
+        "text": " much",
+        "isFinal": false
+      }
+    },
+    {
+      "dir": "out",
+      "t": 2893,
+      "event": {
+        "type": "transcript",
+        "role": "assistant",
+        "text": " is",
+        "isFinal": false
+      }
+    },
+    {
+      "dir": "out",
+      "t": 2910,
+      "event": {
+        "type": "transcript",
+        "role": "assistant",
+        "text": " a",
+        "isFinal": false
+      }
+    },
+    {
+      "dir": "out",
+      "t": 2919,
+      "event": {
+        "type": "transcript",
+        "role": "assistant",
+        "text": " full",
+        "isFinal": false
+      }
+    },
+    {
+      "dir": "out",
+      "t": 2925,
+      "event": {
+        "type": "transcript",
+        "role": "assistant",
+        "text": " groom",
+        "isFinal": false
+      }
+    },
+    {
+      "dir": "out",
+      "t": 2933,
+      "event": {
+        "type": "transcript",
+        "role": "assistant",
+        "text": " for",
+        "isFinal": false
+      }
+    },
+    {
+      "dir": "out",
+      "t": 2940,
+      "event": {
+        "type": "transcript",
+        "role": "assistant",
+        "text": " a",
+        "isFinal": false
+      }
+    },
+    {
+      "dir": "out",
+      "t": 2948,
+      "event": {
+        "type": "transcript",
+        "role": "assistant",
+        "text": " golden",
+        "isFinal": false
+      }
+    },
+    {
+      "dir": "out",
+      "t": 2956,
+      "event": {
+        "type": "transcript",
+        "role": "assistant",
+        "text": " retr",
+        "isFinal": false
+      }
+    },
+    {
+      "dir": "out",
+      "t": 2965,
+      "event": {
+        "type": "transcript",
+        "role": "assistant",
+        "text": "iever",
+        "isFinal": false
+      }
+    },
+    {
+      "dir": "out",
+      "t": 2969,
+      "event": {
+        "type": "transcript",
+        "role": "assistant",
+        "text": "?",
+        "isFinal": false
+      }
+    },
+    {
+      "dir": "out",
+      "t": 2989,
       "event": {
         "type": "transcript",
         "role": "assistant",
@@ -856,20 +836,20 @@
     },
     {
       "dir": "out",
-      "t": 2855,
+      "t": 2994,
       "event": {
         "type": "turn_end"
       }
     },
     {
       "dir": "in",
-      "t": 4357,
+      "t": 4496,
       "call": "sendUserText",
       "text": "Yes, five. Sorry, I have to run, a customer just walked in. Bye!"
     },
     {
       "dir": "out",
-      "t": 4357,
+      "t": 4496,
       "event": {
         "type": "transcript",
         "role": "user",
@@ -879,11 +859,58 @@
     },
     {
       "dir": "out",
-      "t": 5468,
+      "t": 5080,
       "event": {
         "type": "tool_call",
         "call": {
-          "id": "call_YFENd6GOlKvQHBSN",
+          "id": "call_tauP3T3PtRSKDRut",
+          "name": "record_answer",
+          "arguments": {
+            "question": 1,
+            "answered": true,
+            "answer": "They close at 5 on Saturdays."
+          },
+          "rawVendorEvent": {
+            "type": "response.function_call_arguments.done",
+            "event_id": "event_EcJ4EO8M7VELr785a1fyf",
+            "response_id": "resp_EcJ4EunfjXSmEWSJHCer7",
+            "item_id": "item_EcJ4E4bmGtgHm1Njalsr4",
+            "output_index": 0,
+            "call_id": "call_tauP3T3PtRSKDRut",
+            "name": "record_answer",
+            "arguments": "{  \n  \"question\": 1, \n  \"answered\": true, \n  \"answer\": \"They close at 5 on Saturdays.\" \n} \n"
+          }
+        }
+      }
+    },
+    {
+      "dir": "out",
+      "t": 5083,
+      "event": {
+        "type": "turn_end"
+      }
+    },
+    {
+      "dir": "in",
+      "t": 5089,
+      "call": "sendToolResult",
+      "toolCallId": "call_tauP3T3PtRSKDRut",
+      "result": {
+        "ok": true,
+        "next": "Saved. Don't mention it, and don't repeat what you just said. If you already asked your next question, wait for their answer. Otherwise ask your next question, or, if none are left, say goodbye and end the call."
+      },
+      "isError": false,
+      "options": {
+        "respond": "if-silent"
+      }
+    },
+    {
+      "dir": "out",
+      "t": 6194,
+      "event": {
+        "type": "tool_call",
+        "call": {
+          "id": "call_oYrSjt0XkvTWQUlT",
           "name": "report_answers_and_end_call",
           "arguments": {
             "answers": [
@@ -897,37 +924,37 @@
                 "answered": false
               }
             ],
-            "summary": "The caller had to leave after confirming the closing time, so the cost of a full groom was not answered."
+            "summary": "They confirmed they close at 5 on Saturdays, but had to end the call before answering the grooming price question."
           },
           "rawVendorEvent": {
             "type": "response.function_call_arguments.done",
-            "event_id": "event_EcIj7LL463qTWRxFEQHdI",
-            "response_id": "resp_EcIj68qG4i0Bo3C3XNwIo",
-            "item_id": "item_EcIj6gZ2TW3Lx4VvFZHGn",
+            "event_id": "event_EcJ4FzwU6piDAfntFlB3U",
+            "response_id": "resp_EcJ4E5CsomCFD12sk9Xlf",
+            "item_id": "item_EcJ4EY66t5WilqZeJqRxX",
             "output_index": 0,
-            "call_id": "call_YFENd6GOlKvQHBSN",
+            "call_id": "call_oYrSjt0XkvTWQUlT",
             "name": "report_answers_and_end_call",
-            "arguments": "{  \n  \"answers\": [\n    {\n      \"question\": 1,\n      \"answered\": true,\n      \"answer\": \"They close at 5 on Saturdays.\"\n    },\n    {\n      \"question\": 2,\n      \"answered\": false\n    }\n  ],\n  \"summary\": \"The caller had to leave after confirming the closing time, so the cost of a full groom was not answered.\"\n} \n"
+            "arguments": "{  \n  \"answers\": [\n    {\n      \"question\": 1,\n      \"answered\": true,\n      \"answer\": \"They close at 5 on Saturdays.\"\n    },\n    {\n      \"question\": 2,\n      \"answered\": false\n    }\n  ],\n  \"summary\": \"They confirmed they close at 5 on Saturdays, but had to end the call before answering the grooming price question.\"\n} \n"
           }
         }
       }
     },
     {
       "dir": "out",
-      "t": 5473,
+      "t": 6199,
       "event": {
         "type": "turn_end"
       }
     },
     {
       "dir": "in",
-      "t": 5485,
+      "t": 6210,
       "call": "sayVerbatim",
       "text": "Okay, take care. Bye!"
     },
     {
       "dir": "out",
-      "t": 5743,
+      "t": 6506,
       "event": {
         "type": "transcript",
         "role": "assistant",
@@ -937,7 +964,7 @@
     },
     {
       "dir": "out",
-      "t": 5746,
+      "t": 6514,
       "event": {
         "type": "transcript",
         "role": "assistant",
@@ -947,7 +974,7 @@
     },
     {
       "dir": "out",
-      "t": 5750,
+      "t": 6517,
       "event": {
         "type": "transcript",
         "role": "assistant",
@@ -957,7 +984,7 @@
     },
     {
       "dir": "out",
-      "t": 5757,
+      "t": 6519,
       "event": {
         "type": "transcript",
         "role": "assistant",
@@ -967,7 +994,7 @@
     },
     {
       "dir": "out",
-      "t": 5764,
+      "t": 6526,
       "event": {
         "type": "transcript",
         "role": "assistant",
@@ -977,7 +1004,7 @@
     },
     {
       "dir": "out",
-      "t": 5772,
+      "t": 6532,
       "event": {
         "type": "transcript",
         "role": "assistant",
@@ -987,7 +1014,7 @@
     },
     {
       "dir": "out",
-      "t": 5781,
+      "t": 6541,
       "event": {
         "type": "transcript",
         "role": "assistant",
@@ -997,7 +1024,7 @@
     },
     {
       "dir": "out",
-      "t": 5802,
+      "t": 6570,
       "event": {
         "type": "transcript",
         "role": "assistant",
@@ -1007,7 +1034,7 @@
     },
     {
       "dir": "out",
-      "t": 5807,
+      "t": 6581,
       "event": {
         "type": "turn_end",
         "verbatim": true
@@ -1015,7 +1042,7 @@
     },
     {
       "dir": "in",
-      "t": 5809,
+      "t": 6585,
       "call": "verbatimDeliveryReport",
       "report": {
         "intended": "Okay, take care. Bye!",
@@ -1025,9 +1052,9 @@
     },
     {
       "dir": "in",
-      "t": 6219,
+      "t": 6996,
       "call": "sendToolResult",
-      "toolCallId": "call_YFENd6GOlKvQHBSN",
+      "toolCallId": "call_oYrSjt0XkvTWQUlT",
       "result": {
         "ok": true
       },
@@ -1035,7 +1062,7 @@
     },
     {
       "dir": "out",
-      "t": 6313,
+      "t": 7116,
       "event": {
         "type": "disconnected",
         "reason": "client disconnect"
