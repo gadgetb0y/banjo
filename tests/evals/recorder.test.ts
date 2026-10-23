@@ -4,7 +4,7 @@ import { RecordingVoiceAI } from '../../src/evals/recorder.js';
 import type { TextVoiceAIProvider } from '../../src/sim/simCall.js';
 import type { VoiceAIEvent, VoiceAIEventListener } from '../../src/voice/types.js';
 
-const OPTIONAL = ['addContext', 'setHold', 'judgeHoldLine', 'verbatimDeliveryReport'] as const;
+const OPTIONAL = ['addContext', 'setHold', 'judgeHoldLine', 'verbatimDeliveryReport', 'usageTotals'] as const;
 
 /** A text voice session; `full` also has every optional method, as OpenAI Realtime does. */
 function inner(full: boolean) {
@@ -33,6 +33,7 @@ function inner(full: boolean) {
       setHold: () => {},
       judgeHoldLine: async () => 'menu',
       verbatimDeliveryReport: () => ({ intended: 'Bye!', spoken: 'Bye!', matched: true }),
+      usageTotals: () => ({ inputTokens: 1, cachedInputTokens: 0, outputTokens: 2 }),
     });
   }
   return base as unknown as TextVoiceAIProvider;

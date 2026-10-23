@@ -16,7 +16,7 @@ import type {
 } from '../voice/types.js';
 
 /** The optional methods CallSession checks for before using: a recording keeps which ones the session had. */
-export const OPTIONAL_METHODS = ['addContext', 'setHold', 'judgeHoldLine', 'verbatimDeliveryReport'] as const;
+export const OPTIONAL_METHODS = ['addContext', 'setHold', 'judgeHoldLine', 'verbatimDeliveryReport', 'usageTotals'] as const;
 /** The optional flags CallSession reads off the provider. */
 export const OPTIONAL_PROPS = ['emitsInterruptions', 'transcriptsLate', 'marksVerbatimTurns', 'maxSessionMs'] as const;
 
@@ -51,6 +51,7 @@ export class RecordingVoiceAI implements TextVoiceAIProvider {
   declare setHold?: (onHold: boolean) => void;
   declare judgeHoldLine?: (line: string, earlier: string[]) => Promise<HoldVerdict>;
   declare verbatimDeliveryReport?: () => VerbatimDeliveryReport | undefined;
+  declare usageTotals?: () => { inputTokens: number; cachedInputTokens: number; outputTokens: number };
 
   constructor(private readonly inner: TextVoiceAIProvider) {
     this.name = inner.name;
@@ -88,6 +89,8 @@ export class RecordingVoiceAI implements TextVoiceAIProvider {
         return report;
       };
     }
+    // Not logged: read once at the end of a run, and nothing in the call depends on it.
+    if (inner.usageTotals) this.usageTotals = () => inner.usageTotals!();
     inner.on('event', (event) => {
       if (event.type !== 'audio_chunk') this.log.push({ dir: 'out', t: this.now(), event });
     });
