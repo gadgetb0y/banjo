@@ -33,6 +33,10 @@ export interface SimCallOptions {
   /** Booking and conversation only: an 'ask' call books nothing, so it gets neither. */
   durationMinutes: number;
   windowDays: number;
+  /** When the booking window starts. Defaults to now; an eval replay passes the recording's (#188). */
+  windowStart?: Date;
+  /** The business contact's relationship tier, which decides how much of the owner profile Banjo may share (#163). */
+  relationshipTier?: 'family' | 'friend';
   createVoiceAI: () => TextVoiceAIProvider;
   /** What the owner does if Banjo tries a warm transfer (#149). Defaults to accepting. */
   owner?: LoopInResult;
@@ -73,7 +77,7 @@ export async function startSimCall(opts: SimCallOptions): Promise<SimCall> {
   // Through place_call's own schema, as the MCP server does before calling the
   // handler, so the sim can't start a call place_call would refuse (#148
   // review). First, so a refusal leaves nothing behind: no contact, no overrides.
-  const windowStart = new Date();
+  const windowStart = opts.windowStart ?? new Date();
   const windowEnd = new Date(windowStart.getTime() + opts.windowDays * 24 * 60 * 60 * 1000);
   const input = placeCallInputSchema.omit({ contactId: true }).safeParse({
     taskDescription: opts.goal,
@@ -108,7 +112,12 @@ export async function startSimCall(opts: SimCallOptions): Promise<SimCall> {
     return voice;
   });
 
-  const contact = await addContact({ displayName: opts.business, phoneNumber: SIM_BUSINESS_NUMBER, category: opts.category });
+  const contact = await addContact({
+    displayName: opts.business,
+    phoneNumber: SIM_BUSINESS_NUMBER,
+    category: opts.category,
+    ...(opts.relationshipTier && { relationshipTier: opts.relationshipTier }),
+  });
   const { taskId } = await placeCallHandler({ ...input.data, contactId: contact.id }, { role: 'owner' });
 
   const finished = waitUntilFinished(taskId);

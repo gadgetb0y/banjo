@@ -15,15 +15,14 @@
  *
  * Options: see USAGE below, or `npm run sim -- --help`.
  */
-import { readFileSync } from 'node:fs';
 import { createInterface } from 'node:readline';
 import { parseArgs } from 'node:util';
 import dotenv from 'dotenv';
 import postgres from 'postgres';
 import { SIM_DATABASE, simEnv } from '../src/sim/env.js';
+import { readScript, runScript, type ScriptStep } from '../src/sim/script.js';
 // Type-only, so erased: nothing here may load src/config before simEnv is applied.
 import type { TextVoiceAIProvider } from '../src/sim/simCall.js';
-import type { SimTelephonyProvider } from '../src/sim/simTelephony.js';
 
 const USAGE = `Usage: npm run sim -- [options]
 
@@ -49,6 +48,7 @@ Options:
   --script <file>        Read your lines from a file, one per line (# for comments). A line starting
                          with ~ plays 3 seconds after the one before it, without waiting for
                          Banjo: a phone menu or hold queue, which doesn't wait for anyone.
+                         (silence N) says nothing for N seconds (1 to 120) once Banjo goes quiet.
   --verbose              Show the app's info-level logs.
   -h, --help             Show this.
 
@@ -61,13 +61,6 @@ const OWNER_ANSWERS = { accept: 'accepted', decline: 'declined', 'no-answer': 'n
 
 const CATEGORIES = ['salon', 'medical', 'restaurant', 'home_services', 'other'] as const;
 type Category = (typeof CATEGORIES)[number];
-
-/** How long Banjo must stay quiet before a --script run says its next line. */
-const SCRIPT_TURN_QUIET_MS = 1500;
-/** How long after the line before it a ~ line (a recording: menu, hold queue) plays. */
-const SCRIPT_RECORDING_GAP_MS = 3000;
-/** After the last scripted line: how long to wait for Banjo to end the call before hanging up on it. */
-const SCRIPT_END_QUIET_MS = 15_000;
 
 async function main(): Promise<void> {
   const { values } = parseArgs({
@@ -101,7 +94,7 @@ async function main(): Promise<void> {
   if (!CATEGORIES.includes(category)) fail(`--category must be one of ${CATEGORIES.join(', ')} (got "${values.category}").`);
   const durationMinutes = positiveInt(values.duration, '--duration');
   const windowDays = positiveInt(values['window-days'], '--window-days');
-  const scriptLines = values.script ? readScript(values.script) : undefined;
+  const scriptLines = values.script ? loadScript(values.script) : undefined;
 
   // .env first, then the sim's own values over it: config reads process.env at
   // import, and dotenv never overwrites what is already set.
@@ -159,7 +152,7 @@ async function main(): Promise<void> {
   if (voice) {
     console.log('[The phone rings. You pick up.]');
     if (scriptLines) {
-      runScript(scriptLines, voice, call.telephony, print);
+      void runScript(scriptLines, voice, call.telephony, print);
     } else {
       rl.on('line', (line) => {
         const text = line.trim();
@@ -179,61 +172,6 @@ async function main(): Promise<void> {
   console.log(call.calendar.events.length ? `Calendar (dry run): ${call.calendar.events.map((e) => e.summary).join('; ')}` : 'Calendar: nothing booked.');
   console.log(`The transcript and task are in the ${SIM_DATABASE} database until the next run.`);
   process.exit(0);
-}
-
-/**
- * Says each scripted line once Banjo has spoken and gone quiet, then hangs up
- * if Banjo hasn't ended the call itself soon after the last one.
- */
-function runScript(
-  lines: string[],
-  voice: TextVoiceAIProvider,
-  telephony: SimTelephonyProvider,
-  print: (line: string) => void,
-): void {
-  let next = 0;
-  let banjoSpoke = false;
-  let timer: NodeJS.Timeout | undefined;
-  const isRecording = (line: string) => line.startsWith('~');
-  const say = () => {
-    const raw = lines[next++]!;
-    const line = isRecording(raw) ? raw.slice(1).trim() : raw;
-    print(`You: ${line}`);
-    banjoSpoke = false;
-    voice.sendUserText(line);
-  };
-  const schedule = () => {
-    clearTimeout(timer);
-    if (next < lines.length && isRecording(lines[next]!)) {
-      // A recording plays on regardless of Banjo, on its own clock.
-      timer = setTimeout(() => {
-        if (over) return;
-        say();
-        schedule();
-      }, SCRIPT_RECORDING_GAP_MS);
-    } else if (next < lines.length) {
-      timer = setTimeout(() => banjoSpoke && say(), SCRIPT_TURN_QUIET_MS);
-    } else {
-      timer = setTimeout(() => {
-        print('[End of script.]');
-        telephony.calleeHangsUp();
-      }, SCRIPT_END_QUIET_MS);
-    }
-  };
-  let over = false;
-  voice.on('event', (event) => {
-    if (event.type === 'transcript' && event.role === 'assistant') banjoSpoke = true;
-    if (!over) schedule();
-  });
-  // Nothing more to say once the line is dead, whoever hung up.
-  telephony.on('event', (event) => {
-    if (event.type !== 'ended') return;
-    over = true;
-    clearTimeout(timer);
-  });
-  // The callee speaks first on an outbound call.
-  say();
-  schedule();
 }
 
 /** Creates banjo_sim on the configured server if it isn't there yet. */
@@ -264,13 +202,16 @@ async function emptySimDatabase(): Promise<void> {
   await db.execute(sql.raw(`truncate ${list} restart identity cascade`));
 }
 
-function readScript(path: string): string[] {
-  const lines = readFileSync(path, 'utf8')
-    .split('\n')
-    .map((line) => line.trim())
-    .filter((line) => line && !line.startsWith('#'));
-  if (!lines.length) fail(`--script ${path} has no lines.`);
-  return lines;
+/** The --script file's steps, or a clear failure: no lines, or a malformed (silence N). */
+function loadScript(path: string): ScriptStep[] {
+  let steps: ScriptStep[];
+  try {
+    steps = readScript(path);
+  } catch (err) {
+    fail(`--script ${path}: ${(err as Error).message}`);
+  }
+  if (!steps.length) fail(`--script ${path} has no lines.`);
+  return steps;
 }
 
 function positiveInt(value: string | undefined, flag: string): number {
