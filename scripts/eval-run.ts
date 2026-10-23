@@ -80,6 +80,12 @@ async function main(): Promise<void> {
     print,
   });
 
+  // The other party's hang-up isn't a voice call, so it's logged here, for a replay to play back.
+  const hangUp = call.telephony.calleeHangsUp.bind(call.telephony);
+  call.telephony.calleeHangsUp = () => {
+    recorder?.noteCalleeHangsUp();
+    hangUp();
+  };
   const voice = await call.ready;
   if (voice) void runScript(scenario.script, voice, call.telephony, print);
   const limit = setTimeout(() => {

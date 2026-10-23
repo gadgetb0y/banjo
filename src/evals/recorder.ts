@@ -34,6 +34,8 @@ export type LogEntry =
   | In<'interrupt'>
   | In<'judgeHoldLine', { line: string; earlier: string[]; verdict: HoldVerdict }>
   | In<'verbatimDeliveryReport', { report: VerbatimDeliveryReport | undefined }>
+  /** Not a voice call: the other party hanging up, which the eval run logs so a replay can do the same. */
+  | In<'calleeHangsUp'>
   | { dir: 'out'; t: number; event: VoiceAIEvent };
 
 export class RecordingVoiceAI implements TextVoiceAIProvider {
@@ -147,6 +149,11 @@ export class RecordingVoiceAI implements TextVoiceAIProvider {
 
   off(event: 'event', listener: VoiceAIEventListener): void {
     this.inner.off(event, listener);
+  }
+
+  /** Logs the other party hanging up (the script ran out, or the run hit its limit). */
+  noteCalleeHangsUp(): void {
+    this.record({ call: 'calleeHangsUp' });
   }
 
   private now(): number {
