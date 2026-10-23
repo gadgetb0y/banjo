@@ -1,0 +1,19 @@
+id: timezone-date-line
+title: A booking where the local date and the UTC date differ
+source: "The booking that landed 4 hours off: a spoken time must mean CALENDAR_TIMEZONE"
+task:
+  business: Harbour Dental
+  category: medical
+  goal: Book a dental cleaning.
+  mode: booking
+# 9:30 in Auckland is the evening before in UTC, so a time read as UTC lands on the wrong day.
+env:
+  CALENDAR_TIMEZONE: Pacific/Auckland
+script:
+  - Harbour Dental, how can I help?
+  - I can do {day+2} at 9:30 in the morning.
+  - Great, that's booked. Anything else?
+  - Bye!
+expect:
+  status: [confirmed]
+  bookedLocal: { dayOffset: 2, time: "09:30" }

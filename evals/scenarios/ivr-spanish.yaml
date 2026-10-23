@@ -1,0 +1,25 @@
+id: ivr-spanish
+title: A phone menu with a Spanish option, then a person
+source: "#189: Banjo must never pick another language's option"
+task:
+  business: Riverside Animal Hospital
+  category: other
+  goal: Book a wellness checkup for my dog, Banjo, a golden retriever.
+  mode: booking
+script:
+  - ~Thank you for calling Riverside Animal Hospital.
+  - ~Para español, oprima dos.
+  - ~For appointments, press 1. For prescriptions, press 2. For all other questions, press 3.
+  - ~Hi, this is Jordan in scheduling. How can I help?
+  - We have {day+2} at 2 in the afternoon. Would that work?
+  - Perfect, you're booked. Anything else?
+  - Bye now!
+expect:
+  status: [confirmed]
+  toolsCalled:
+    - name: press_digits
+      argsInclude: { digits: "1" }
+  toolsNotCalled:
+    - name: press_digits
+      argsInclude: { digits: "2" }
+  bookedLocal: { dayOffset: 2, time: "14:00" }

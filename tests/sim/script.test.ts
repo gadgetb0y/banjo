@@ -90,3 +90,18 @@ describe('runScript', () => {
     await expect(done).resolves.toBeUndefined();
   });
 });
+
+describe('renderDates', () => {
+  it('writes {day+N} as the weekday and date N days on, in the time zone', async () => {
+    const { renderDates } = await import('../../src/sim/script.js');
+    // 01:18Z on the 23rd is still Thursday the 22nd in New York, and already Friday the 23rd in Auckland.
+    const now = new Date('2026-10-23T01:18:00.000Z');
+    const steps = parseScriptLines(['I have {day+2} at 10.', '~Closed {day+0}.', '(silence 5)']);
+    expect(renderDates(steps, now, 'America/New_York')).toEqual([
+      { kind: 'line', text: 'I have Saturday, October 24 at 10.' },
+      { kind: 'recording', text: 'Closed Thursday, October 22.' },
+      { kind: 'silence', seconds: 5 },
+    ]);
+    expect(renderDates(parseScriptLines(['{day+2}']), now, 'Pacific/Auckland')[0]).toEqual({ kind: 'line', text: 'Sunday, October 25' });
+  });
+});

@@ -1,4 +1,5 @@
 import { readFileSync } from 'node:fs';
+import { formatInZone } from '../lib/timezone.js';
 import type { TextVoiceAIProvider } from './simCall.js';
 import type { SimTelephonyProvider } from './simTelephony.js';
 
@@ -36,6 +37,20 @@ export function parseScriptLines(lines: string[]): ScriptStep[] {
     if (line.startsWith('~')) return { kind: 'recording', text: line.slice(1).trim() };
     return { kind: 'line', text: line };
   });
+}
+
+const DAY_TOKEN = /\{day\+(\d{1,2})\}/g;
+
+/**
+ * Writes each {day+N} as the weekday and date N days after now's local date in
+ * timeZone ("Saturday, October 24"), so a script names real days whenever it
+ * runs (#188): the date in the line and the date the checks expect agree.
+ */
+export function renderDates(steps: ScriptStep[], now: Date, timeZone: string): ScriptStep[] {
+  const [y, m, d] = formatInZone(now.toISOString(), timeZone).slice(0, 10).split('-').map(Number);
+  const spoken = (days: number) =>
+    new Intl.DateTimeFormat('en-US', { timeZone: 'UTC', weekday: 'long', month: 'long', day: 'numeric' }).format(new Date(Date.UTC(y!, m! - 1, d! + days, 12)));
+  return steps.map((step) => (step.kind === 'silence' ? step : { ...step, text: step.text.replace(DAY_TOKEN, (_, n: string) => spoken(Number(n))) }));
 }
 
 /** A script file's steps, one per line; blank lines and # comments are skipped. */

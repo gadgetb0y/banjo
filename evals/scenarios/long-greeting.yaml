@@ -1,0 +1,18 @@
+id: long-greeting
+title: A salon picks up with a long greeting, then books
+source: "Claudia's grooming calls: the baseline booking"
+task:
+  business: Claudia's Dog Grooming
+  category: salon
+  goal: Book a full grooming appointment for my dog, Banjo, a golden retriever.
+  mode: booking
+script:
+  - Thank you for calling Claudia's Dog Grooming, where every pup leaves happy! This is Dana speaking. How can I help you today?
+  - Sure, we can do that. I have {day+2} at 10 in the morning. Does that work?
+  - Great, you're all set for {day+2} at 10. Anything else?
+  - You too, bye!
+expect:
+  status: [confirmed]
+  toolsCalled:
+    - name: confirm_appointment
+  bookedLocal: { dayOffset: 2, time: "10:00" }

@@ -54,7 +54,7 @@ async function main(): Promise<void> {
   const { config } = await import('../src/config/index.js');
   const { OpenAIRealtimeProvider } = await import('../src/voice/providers/openai.js');
   const { startSimCall } = await import('../src/sim/simCall.js');
-  const { runScript } = await import('../src/sim/script.js');
+  const { renderDates, runScript } = await import('../src/sim/script.js');
   const { RecordingVoiceAI } = await import('../src/evals/recorder.js');
   const { buildRunRecord } = await import('../src/evals/runRecord.js');
   const { runChecks } = await import('../src/evals/checks.js');
@@ -87,7 +87,7 @@ async function main(): Promise<void> {
     hangUp();
   };
   const voice = await call.ready;
-  if (voice) void runScript(scenario.script, voice, call.telephony, print);
+  if (voice) void runScript(renderDates(scenario.script, windowStart, config.CALENDAR_TIMEZONE), voice, call.telephony, print);
   const limit = setTimeout(() => {
     print('[Eval run limit reached: hanging up.]');
     call.telephony.calleeHangsUp();
