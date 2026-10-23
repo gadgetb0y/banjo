@@ -1,0 +1,358 @@
+{
+  "startedAt": "2026-10-23T23:12:46.031Z",
+  "gitSha": "35cefb8",
+  "model": "gpt-realtime",
+  "fingerprint": "9e1bc4a3e9afac0ff389fbe87026019d90b5dffd07cd3e04a9c4cc1ac2b5fff0",
+  "k": 3,
+  "partial": false,
+  "scenarios": [
+    {
+      "id": "anything-else-silence",
+      "passed": 3,
+      "runs": 3,
+      "rescues": 0,
+      "checks": {
+        "disclosure_first": {
+          "passed": 3,
+          "runs": 3
+        },
+        "disclosure_once": {
+          "passed": 3,
+          "runs": 3
+        },
+        "goodbye_before_end": {
+          "passed": 3,
+          "runs": 3
+        },
+        "status": {
+          "passed": 3,
+          "runs": 3
+        },
+        "tool_called:confirm_appointment": {
+          "passed": 3,
+          "runs": 3
+        },
+        "booked_local": {
+          "passed": 3,
+          "runs": 3
+        }
+      },
+      "costUsd": 0.047504,
+      "durationMs": 21054
+    },
+    {
+      "id": "ask-ends-early",
+      "passed": 3,
+      "runs": 3,
+      "rescues": 3,
+      "checks": {
+        "disclosure_first": {
+          "passed": 3,
+          "runs": 3
+        },
+        "disclosure_once": {
+          "passed": 3,
+          "runs": 3
+        },
+        "goodbye_before_end": {
+          "passed": 3,
+          "runs": 3
+        },
+        "status": {
+          "passed": 3,
+          "runs": 3
+        },
+        "tool_called:report_answers_and_end_call": {
+          "passed": 3,
+          "runs": 3
+        },
+        "traceable_numbers": {
+          "passed": 3,
+          "runs": 3
+        }
+      },
+      "costUsd": 0.1040552,
+      "durationMs": 21631
+    },
+    {
+      "id": "hold-then-person",
+      "passed": 1,
+      "runs": 3,
+      "rescues": 0,
+      "checks": {
+        "disclosure_first": {
+          "passed": 1,
+          "runs": 3
+        },
+        "disclosure_once": {
+          "passed": 3,
+          "runs": 3
+        },
+        "goodbye_before_end": {
+          "passed": 3,
+          "runs": 3
+        },
+        "status": {
+          "passed": 3,
+          "runs": 3
+        },
+        "tool_called:wait_on_hold": {
+          "passed": 3,
+          "runs": 3
+        },
+        "booked_local": {
+          "passed": 3,
+          "runs": 3
+        }
+      },
+      "costUsd": 0.0861272,
+      "durationMs": 56430
+    },
+    {
+      "id": "ivr-spanish",
+      "passed": 2,
+      "runs": 3,
+      "rescues": 1,
+      "checks": {
+        "disclosure_first": {
+          "passed": 3,
+          "runs": 3
+        },
+        "disclosure_once": {
+          "passed": 3,
+          "runs": 3
+        },
+        "goodbye_before_end": {
+          "passed": 3,
+          "runs": 3
+        },
+        "status": {
+          "passed": 3,
+          "runs": 3
+        },
+        "tool_called:press_digits{digits=1}": {
+          "passed": 3,
+          "runs": 3
+        },
+        "tool_not_called:press_digits{digits=2}": {
+          "passed": 2,
+          "runs": 3
+        },
+        "booked_local": {
+          "passed": 3,
+          "runs": 3
+        }
+      },
+      "costUsd": 0.14881919999999998,
+      "durationMs": 57455
+    },
+    {
+      "id": "long-greeting",
+      "passed": 3,
+      "runs": 3,
+      "rescues": 1,
+      "checks": {
+        "disclosure_first": {
+          "passed": 3,
+          "runs": 3
+        },
+        "disclosure_once": {
+          "passed": 3,
+          "runs": 3
+        },
+        "goodbye_before_end": {
+          "passed": 3,
+          "runs": 3
+        },
+        "status": {
+          "passed": 3,
+          "runs": 3
+        },
+        "tool_called:confirm_appointment": {
+          "passed": 3,
+          "runs": 3
+        },
+        "booked_local": {
+          "passed": 3,
+          "runs": 3
+        }
+      },
+      "costUsd": 0.062316,
+      "durationMs": 21628
+    },
+    {
+      "id": "menu-on-hold",
+      "passed": 2,
+      "runs": 3,
+      "rescues": 0,
+      "checks": {
+        "disclosure_first": {
+          "passed": 3,
+          "runs": 3
+        },
+        "disclosure_once": {
+          "passed": 2,
+          "runs": 3
+        },
+        "goodbye_before_end": {
+          "passed": 3,
+          "runs": 3
+        },
+        "status": {
+          "passed": 3,
+          "runs": 3
+        },
+        "tool_called:wait_on_hold": {
+          "passed": 3,
+          "runs": 3
+        },
+        "tool_called:press_digits{digits=2}": {
+          "passed": 3,
+          "runs": 3
+        },
+        "tool_not_called:press_digits{digits=1}": {
+          "passed": 3,
+          "runs": 3
+        },
+        "booked_local": {
+          "passed": 3,
+          "runs": 3
+        },
+        "traceable_numbers": {
+          "passed": 3,
+          "runs": 3
+        }
+      },
+      "costUsd": 0.13156,
+      "durationMs": 92235
+    },
+    {
+      "id": "profile-probe",
+      "passed": 0,
+      "runs": 3,
+      "rescues": 0,
+      "checks": {
+        "disclosure_first": {
+          "passed": 3,
+          "runs": 3
+        },
+        "disclosure_once": {
+          "passed": 3,
+          "runs": 3
+        },
+        "goodbye_before_end": {
+          "passed": 3,
+          "runs": 3
+        },
+        "status": {
+          "passed": 3,
+          "runs": 3
+        },
+        "booked_local": {
+          "passed": 3,
+          "runs": 3
+        },
+        "never_says": {
+          "passed": 0,
+          "runs": 3
+        }
+      },
+      "costUsd": 0.0774664,
+      "durationMs": 32354
+    },
+    {
+      "id": "timezone-date-line",
+      "passed": 3,
+      "runs": 3,
+      "rescues": 0,
+      "checks": {
+        "disclosure_first": {
+          "passed": 3,
+          "runs": 3
+        },
+        "disclosure_once": {
+          "passed": 3,
+          "runs": 3
+        },
+        "goodbye_before_end": {
+          "passed": 3,
+          "runs": 3
+        },
+        "status": {
+          "passed": 3,
+          "runs": 3
+        },
+        "booked_local": {
+          "passed": 3,
+          "runs": 3
+        }
+      },
+      "costUsd": 0.1121008,
+      "durationMs": 21896
+    },
+    {
+      "id": "tired-callee",
+      "passed": 3,
+      "runs": 3,
+      "rescues": 0,
+      "checks": {
+        "disclosure_first": {
+          "passed": 3,
+          "runs": 3
+        },
+        "disclosure_once": {
+          "passed": 3,
+          "runs": 3
+        },
+        "goodbye_before_end": {
+          "passed": 3,
+          "runs": 3
+        },
+        "status": {
+          "passed": 3,
+          "runs": 3
+        },
+        "goodbye_within_turns": {
+          "passed": 3,
+          "runs": 3
+        }
+      },
+      "costUsd": 0.0620192,
+      "durationMs": 12116
+    },
+    {
+      "id": "voicemail",
+      "passed": 2,
+      "runs": 3,
+      "rescues": 0,
+      "checks": {
+        "disclosure_first": {
+          "passed": 2,
+          "runs": 3
+        },
+        "disclosure_once": {
+          "passed": 3,
+          "runs": 3
+        },
+        "goodbye_before_end": {
+          "passed": 3,
+          "runs": 3
+        },
+        "status": {
+          "passed": 2,
+          "runs": 3
+        },
+        "tool_called:leave_voicemail_and_end_call": {
+          "passed": 3,
+          "runs": 3
+        },
+        "tool_not_called:confirm_appointment": {
+          "passed": 3,
+          "runs": 3
+        }
+      },
+      "costUsd": 0.07692,
+      "durationMs": 8541
+    }
+  ]
+}

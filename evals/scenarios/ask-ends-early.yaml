@@ -1,5 +1,5 @@
 id: ask-ends-early
-title: An ask call where they hang up after the first answer
+title: An ask call where they confirm the first answer, then have to go
 source: "#158: answers saved one at a time, so an early ending keeps them"
 task:
   business: Claudia's Dog Grooming
@@ -12,9 +12,9 @@ task:
 script:
   - Claudia's, how can I help?
   - We close at 5 on Saturdays.
-  - Sorry, I have to run, a customer just walked in. Bye!
+  - Yes, five. Sorry, I have to run, a customer just walked in. Bye!
 expect:
-  status: [answered, conversation_completed]
+  status: [answered]
   toolsCalled:
-    - name: record_answer
+    - name: report_answers_and_end_call
   traceableNumbers: true
