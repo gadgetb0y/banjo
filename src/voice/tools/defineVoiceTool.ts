@@ -1,5 +1,4 @@
-import type { z } from 'zod';
-import { zodToJsonSchema } from 'zod-to-json-schema';
+import { z } from 'zod';
 import type { CallContext } from '../../session/types.js';
 import type { ToolDefinition } from '../types.js';
 
@@ -102,21 +101,37 @@ export function defineVoiceTool<TInput, TCtx = CallContext>(spec: VoiceTool<TInp
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 export function toToolDefinition(tool: VoiceTool<any, any>): ToolDefinition {
-  // target: 'openApi3' was tried first and is WRONG here — OpenAPI 3.0
-  // schemas represent `.positive()`/exclusive bounds as a boolean flag
-  // (`"exclusiveMinimum": true` alongside `"minimum": 0`), which is valid
-  // OpenAPI but not valid JSON Schema. OpenAI's Realtime function-parameter
-  // validator expects standard JSON Schema (numeric `exclusiveMinimum`) and
-  // rejected the boolean with "True is not of type 'number'" on a live call.
-  // 'jsonSchema7' produces the numeric form; $schema is meta-only and not
-  // meaningful inside a function `parameters` object, so it's stripped.
-  const { $schema: _schema, ...parameters } = zodToJsonSchema(tool.schema, {
-    target: 'jsonSchema7',
-    $refStrategy: 'none',
-  }) as Record<string, unknown>;
+  // An OpenAPI 3.0 target was tried first and is WRONG here: it represents
+  // `.positive()`/exclusive bounds as a boolean flag (`"exclusiveMinimum": true`
+  // alongside `"minimum": 0`), which OpenAI's Realtime function-parameter
+  // validator rejected on a live call ("True is not of type 'number'"). Draft 7
+  // produces the numeric form. $schema is meta-only and not meaningful inside a
+  // function `parameters` object, so it's stripped.
+  // io 'output' keeps `additionalProperties: false` on objects.
+  const { $schema: _schema, ...parameters } = tidySchema(z.toJSONSchema(tool.schema, { target: 'draft-7', io: 'output' })) as Record<string, unknown>;
   return {
     name: tool.name,
     description: tool.description,
     parameters,
   };
+}
+
+/**
+ * Keeps the JSON Schema the model sees exactly as it was before zod 4: no
+ * `.int()` safe-integer bounds zod 4 adds on its own, and each `description`
+ * last, as zod-to-json-schema wrote it. The model reads this as text, and the
+ * eval recordings' fingerprints hash it, so a reordering is a real change.
+ */
+function tidySchema(node: unknown): unknown {
+  if (Array.isArray(node)) return node.map(tidySchema);
+  if (!node || typeof node !== 'object') return node;
+  const out: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(node)) {
+    if (key === 'description') continue;
+    if (key === 'maximum' && value === Number.MAX_SAFE_INTEGER) continue;
+    if (key === 'minimum' && value === Number.MIN_SAFE_INTEGER) continue;
+    out[key] = tidySchema(value);
+  }
+  if ('description' in node) out.description = (node as { description: unknown }).description;
+  return out;
 }

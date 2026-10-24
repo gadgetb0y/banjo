@@ -4,7 +4,7 @@ import { cancelPendingTask, getTask } from '../../tasks/service.js';
 import type { McpRole } from '../role.js';
 
 export const cancelTaskInputSchema = z.object({
-  taskId: z.string().uuid().describe('Id of the task to cancel, as returned by place_call.'),
+  taskId: z.guid().describe('Id of the task to cancel, as returned by place_call.'),
 });
 
 export interface CancelTaskResult {

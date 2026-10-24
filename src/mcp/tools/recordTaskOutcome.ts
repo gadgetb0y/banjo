@@ -39,7 +39,7 @@ export const taskOutcomeSchema = z.discriminatedUnion('kind', [
 ]);
 
 export const recordTaskOutcomeInputSchema = z.object({
-  contactId: z.string().uuid().describe('Id of the contact this outcome pertains to.'),
+  contactId: z.guid().describe('Id of the contact this outcome pertains to.'),
   goalDescription: z.string().min(1).describe('What the task was trying to accomplish, e.g. "Book a haircut."'),
   outcome: taskOutcomeSchema.describe('The result of the booking attempt.'),
   calendarEventId: z

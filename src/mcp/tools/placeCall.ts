@@ -27,7 +27,7 @@ const timeWindowSchema = z.object({
 });
 
 export const placeCallInputSchema = z.object({
-  contactId: z.string().uuid().describe('Id of the contact to call — resolve this first via find_contact.'),
+  contactId: z.guid().describe('Id of the contact to call — resolve this first via find_contact.'),
   taskDescription: z
     .string()
     .min(1)

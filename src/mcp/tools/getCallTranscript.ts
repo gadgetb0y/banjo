@@ -5,7 +5,7 @@ import { getTask } from '../../tasks/service.js';
 import { listTranscriptForTask } from '../../transcripts/service.js';
 
 export const getCallTranscriptInputSchema = z.object({
-  taskId: z.string().uuid().describe('Id of the task whose calls to read, as returned by place_call or list_recent_tasks.'),
+  taskId: z.guid().describe('Id of the task whose calls to read, as returned by place_call or list_recent_tasks.'),
 });
 
 export interface TranscriptLine {
