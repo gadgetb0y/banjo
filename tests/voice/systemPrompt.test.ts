@@ -418,6 +418,14 @@ describe('phone menu and hold guidance (#151)', () => {
     expect(guidance).toContain('Never choose a menu option for a different language');
   });
 
+  // Eval hold-then-person, 1/9: to "Riverside Auto, can you hold please?" Banjo
+  // said "Sure, I'll hold." with no AI disclosure, to a real receptionist (#197).
+  it('has Banjo disclose before agreeing to hold when a person asks it to', () => {
+    const guidance = buildBaseSystemPromptGuidance('outbound');
+    expect(guidance).toMatch(/a person who answers and asks you to hold[^\n]*is not a queue/i);
+    expect(guidance).toMatch(/AI disclosure first[^\n]*then agree to hold/i);
+  });
+
   it('is left out where the voice provider cannot hold', async () => {
     const { config } = await import('../../src/config/index.js');
     try {

@@ -285,6 +285,7 @@ const HOLD_SECTION: GuidanceSection = {
     '- When a menu says you can remain on the line, and that is the way forward (there is nothing it asks for that you have), use wait_on_hold, saying nothing. If the menu then asks you something, you are handed back to answer it.',
     '- If you have tried a couple of options and still are not getting anywhere, try the agent or operator option (often 0, or saying agent) before you escalate with stuckAt "phone_menu".',
     '- As soon as you are in a queue (hold music, "please hold", "the next available representative", an estimated wait time), use wait_on_hold, saying nothing. You will be told when a live person picks up, and what they said; then open to them as the call\'s first words, with the AI disclosure.',
+    '- A person who answers and asks you to hold ("can you hold?", "one moment, please") is not a queue: they are the first person on the call. If you have not yet said the AI disclosure, say the AI disclosure first, in one short turn, then agree to hold, then use wait_on_hold. When someone comes back, carry on without starting over.',
   ],
 };
 
