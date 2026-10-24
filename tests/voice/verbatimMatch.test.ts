@@ -96,6 +96,13 @@ describe('withoutRepeatedLead (#71)', () => {
     expect(withoutRepeatedLead(message, [withNotice, lead])).toBe(message);
   });
 
+  // #198: models repeat the disclosure without its greeting, and the voicemail
+  // then introduced Banjo twice.
+  it('drops a repeat that leaves out the lead\'s greeting', () => {
+    expect(withoutRepeatedLead("I'm an AI assistant calling on behalf of Dr. Smith. Please call back.", [withNotice, lead])).toBe('Please call back.');
+    expect(withoutRepeatedLead("Hello, I'm an AI assistant calling on behalf of Dr. Smith. Please call back.", [lead])).toBe('Please call back.');
+  });
+
   it('keeps a greeting that is not the whole lead', () => {
     expect(withoutRepeatedLead('Hi. Please call back.', [lead])).toBe('Hi. Please call back.');
   });

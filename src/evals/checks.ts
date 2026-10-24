@@ -133,7 +133,7 @@ export function runChecks(record: RunRecord, scenario: Scenario): CheckResult[] 
     const line = record.lines.find((l) => l.role === 'user' && l.text.toLowerCase().includes(userLineIncludes.toLowerCase()));
     const tool = beforeTool && record.toolCalls.find((c) => c.name === beforeTool);
     if (!line) results.push(fail(name, `never reached: the call ended before a line of theirs included "${userLineIncludes}"`));
-    else if (tool && tool.t < line.t) results.push(fail(name, `${beforeTool} came before their line "${line.text}"`));
+    else if (tool && (tool.spokenAt ?? tool.t) < line.t) results.push(fail(name, `${beforeTool} came before their line "${line.text}"`));
     else results.push(pass(name));
   }
   return results;

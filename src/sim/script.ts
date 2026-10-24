@@ -80,6 +80,8 @@ export function runScript(
   let inSilence = false;
   let over = false;
   let timer: NodeJS.Timeout | undefined;
+  /** The step a ~ line's timer is already counting down for: Banjo's events don't restart it. */
+  let recordingTimerFor: number | undefined;
 
   const say = () => {
     const step = steps[next++]! as Extract<ScriptStep, { text: string }>;
@@ -88,8 +90,10 @@ export function runScript(
     voice.sendUserText(step.text);
   };
   const schedule = () => {
-    clearTimeout(timer);
     const step = steps[next];
+    if (step?.kind === 'recording' && recordingTimerFor === next) return;
+    clearTimeout(timer);
+    recordingTimerFor = undefined;
     if (!step) {
       timer = setTimeout(() => {
         print('[End of script.]');
@@ -111,7 +115,9 @@ export function runScript(
       }, t.turnQuietMs);
     } else if (step.kind === 'recording') {
       // A recording plays on regardless of Banjo, on its own clock.
+      recordingTimerFor = next;
       timer = setTimeout(() => {
+        recordingTimerFor = undefined;
         if (over) return;
         say();
         schedule();

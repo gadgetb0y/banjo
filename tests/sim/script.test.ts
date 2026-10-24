@@ -66,6 +66,19 @@ describe('runScript', () => {
     expect(f.sent).toEqual(['Thank you for calling.', 'Press 1 for appointments.']);
   });
 
+  it("keeps a ~ line on its own clock while Banjo is talking (#198)", () => {
+    // Each of Banjo's events used to restart the timer, so a voicemail's
+    // "Beep." kept slipping while Banjo spoke, and never played.
+    const f = fakes();
+    void runScript(parseScriptLines(["~You've reached Claudia's.", '~Leave a message after the tone. Beep.']), f.voice, f.telephony, () => {});
+    vi.advanceTimersByTime(1000);
+    f.banjoSays('Something.');
+    vi.advanceTimersByTime(1000);
+    f.banjoSays('Something more.');
+    vi.advanceTimersByTime(1000);
+    expect(f.sent).toEqual(["You've reached Claudia's.", 'Leave a message after the tone. Beep.']);
+  });
+
   it('a silence step sends nothing for N seconds, then plays the next line', () => {
     const f = fakes();
     void runScript(parseScriptLines(['Anything else?', '(silence 20)', 'Hello?']), f.voice, f.telephony, () => {});

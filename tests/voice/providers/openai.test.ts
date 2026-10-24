@@ -601,6 +601,15 @@ describe('OpenAIRealtimeProvider.sayVerbatim while another response is open', ()
     expect(events.filter((e) => e.type === 'error')).toEqual([]);
   });
 
+  // #198: given the whole conversation, with its own voicemail tool call still
+  // open, the model often said "I've left a voicemail…" instead of the opener.
+  it('asks for the message with no conversation history, so the model sees only the words to say', async () => {
+    const { provider, creates } = await openProvider();
+    provider.sayVerbatim('Hi, please call back.');
+    expect(creates()[0].response.input).toEqual([]);
+    expect(creates()[0].response.conversation).toBeUndefined();
+  });
+
   it("marks only the message's own turn_end, and reports only what that response said", async () => {
     const { provider, server, events, creates } = await openProvider();
     server({ type: 'response.created', response: { id: 'resp-other' } });

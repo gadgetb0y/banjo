@@ -871,6 +871,14 @@ The LiveKit `TelephonyProvider` adapter (`src/telephony/providers/livekit.ts` �
     - **Björk story call** (regression): 5/5 still ended with `end_conversation_call` after their sign-off. The longest turn went from 6–8 sentences to 5–6; the story turn is long by nature.
     - The silence timer isn't exercised by the sim, whose script ends 15s after its last line. It's covered by `CallSession` tests.
 
+34. **[FIXED in the sim, not yet re-verified against a live call]** A voicemail left before the tone (#198). In the scenario evals, Banjo called `leave_voicemail_and_end_call` at the greeting's first line, before "…after the tone", so on a real call the message would play over the greeting and be lost (#71). It also often said a narration of its own ("I've left a voicemail…") in place of the opener, which failed the word-for-word check and ended the call `escalated`. `voicemail`: 0/3.
+    - **Wait for the greeting to end:** `CallSession` holds a voicemail's message until the other side has been quiet for 3.5s since their last speech (speech starting, or a line finalizing), none is in progress, and Banjo's own audio has played out. The wait is capped at 15s. While it waits, the provider is put on hold (`setHold`), so their next line gets no reply of the model's own.
+    - **No history for the forced speech:** the OpenAI adapter's `sayVerbatim` response is sent with `input: []`, so the model sees only the words to say, not its own open tool call. Its output still joins the conversation.
+    - **One introduction:** a message that repeats the opener without its greeting ("I'm an AI assistant calling on behalf of…") has that repeat dropped, like a whole repeat already was.
+    - **Sim:** a `~` line now plays on its own clock: Banjo's events no longer restart its timer, which had kept "Beep." from ever playing.
+
+    **Sim check** (`npm run eval -- --scenario voicemail`, 5 runs): 5/5 `voicemail_left`, the opener then the message, after the beep. The audio path (server VAD, a real beep, the hold toggle and `input: []` with audio output) still needs a live call.
+
 ### Operational, not a code fix
 
 7. IVR navigation reliability — genuinely the least deterministic part of the system; no IVR-specific logic exists to patch. Track the real rate of `escalated` outcomes on IVR-heavy contacts over time; improves only with prompt tuning against real usage, not a bug to find.

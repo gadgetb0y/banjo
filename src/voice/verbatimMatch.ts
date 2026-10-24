@@ -87,6 +87,8 @@ export function verbatimMatches(intended: string, spoken: string): boolean {
   return false;
 }
 
+const GREETING_WORDS = new Set(['hi', 'hello', 'hey']);
+
 /**
  * `message` minus a repeat, at its start, of any whole `leads` — which the
  * callee has just heard. The system speaks the AI disclosure ahead of a
@@ -96,11 +98,16 @@ export function verbatimMatches(intended: string, spoken: string): boolean {
  * is kept as it is, so no fragment of it is ever left behind.
  */
 export function withoutRepeatedLead(message: string, leads: string[]): string {
-  const wanted = leads.map((lead) => normalizeForVerbatimMatch(lead).join(' '));
+  // With or without its greeting word: "I'm an AI assistant…" repeats "Hi, I'm an AI assistant…" (#198).
+  const words = (text: string) => {
+    const w = normalizeForVerbatimMatch(text);
+    return (GREETING_WORDS.has(w[0] ?? '') ? w.slice(1) : w).join(' ');
+  };
+  const wanted = leads.map(words);
   const sentenceEnds = [...message.matchAll(new RegExp(SENTENCE_BREAK.source, 'gu'))].map((m) => m.index + m[0].length);
   let cut = 0;
   for (const end of [...sentenceEnds, message.length]) {
-    if (wanted.includes(normalizeForVerbatimMatch(message.slice(0, end)).join(' '))) cut = end;
+    if (wanted.includes(words(message.slice(0, end)))) cut = end;
   }
   return message.slice(cut).trim();
 }

@@ -184,6 +184,14 @@ describe('expectations', () => {
     expect(check(cut, { reaches: [{ userLineIncludes: 'beep' }] })['reaches:beep']).toMatchObject({ pass: false, reason: expect.stringContaining('never reached') });
   });
 
+  it('reaches with beforeTool counts a voicemail from when its message is spoken, not when the tool was called (#198)', () => {
+    const exp = { reaches: [{ userLineIncludes: 'beep', beforeTool: 'leave_voicemail_and_end_call' as const }] };
+    const waited = log("u:We can't come to the phone.", { tool: 'leave_voicemail_and_end_call' }, 'u:Beep.', { in: { call: 'sayVerbatim', text: "Hi, I'm an AI." } });
+    expect(check(waited, exp)['reaches:beep']!.pass).toBe(true);
+    const spokeEarly = log("u:We can't come to the phone.", { tool: 'leave_voicemail_and_end_call' }, { in: { call: 'sayVerbatim', text: "Hi, I'm an AI." } }, 'u:Beep.');
+    expect(check(spokeEarly, exp)['reaches:beep']!.pass).toBe(false);
+  });
+
   it('reaches with beforeTool fails when the tool came before that line', () => {
     const early = log("u:We can't come to the phone.", { tool: 'leave_voicemail_and_end_call' }, 'u:Beep.');
     const exp = { reaches: [{ userLineIncludes: 'beep', beforeTool: 'leave_voicemail_and_end_call' as const }] };

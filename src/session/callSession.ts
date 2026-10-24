@@ -69,6 +69,15 @@ export const UNANSWERED_QUESTION_CUE =
 const QUIET_AFTER_QUESTION_MS = 12_000;
 export const STILL_THERE_CUE = "They haven't said anything for a while. Ask them once, in a few words, whether they're still there. Say nothing else.";
 
+// A voicemail message waits for the greeting to end (#198): until they've
+// been quiet this long since their last line, and aren't mid-speech, with
+// Banjo's own audio played out. Models call the voicemail tool at the
+// greeting's first line, and a message said over "…after the tone" is lost
+// (#71). 3.5s, since a greeting can pause before its beep, and a beep isn't
+// speech. Capped, so a greeting that never seems to end still gets a message.
+const GREETING_QUIET_MS = 3500;
+const GREETING_WAIT_MAX_MS = 15_000;
+
 // Bounds how long CallSession waits for a tool's verbatimMessage (see
 // VoiceTool's doc comment) to finish being spoken via VoiceAIProvider.sayVerbatim
 // before giving up and proceeding anyway — a missing/late turn_end signal
@@ -320,6 +329,10 @@ export class CallSession<TCtx = CallContext> {
   private recordingNoticeFraction = 1;
   /** Milliseconds of Banjo's audio sent in the current turn. */
   private turnAudioMs = 0;
+  /** When they last spoke: speech starting, or a line of theirs finalizing (#198). */
+  private theirSpeechAt = 0;
+  /** Between their speech starting and that line finalizing. */
+  private theyAreSpeaking = false;
   /** Set while a tool's verbatimMessage is being delivered, from the first sayVerbatim() until its audio has played (#71) — see VerbatimDelivery. */
   private verbatimDelivery: VerbatimDelivery | null = null;
   private readonly pipeline: AudioPipeline;
@@ -497,6 +510,10 @@ export class CallSession<TCtx = CallContext> {
           const quality = classifyTranscript(event.text);
           if (quality === 'empty') break;
           this.recordTranscript(event.role, event.text, quality);
+          if (event.role === 'user') {
+            this.theirSpeechAt = Date.now();
+            this.theyAreSpeaking = false;
+          }
           if (event.role === 'assistant') this.verbatimDelivery?.spoken.push(event.text);
           // openai-live never emits 'interrupted', so someone answering
           // mid-message shows up only as their words (#22). Only there: a
@@ -559,6 +576,8 @@ export class CallSession<TCtx = CallContext> {
         if (event.role === 'user' && !event.answered) this.armSilenceWatchdogIfNeeded();
         break;
       case 'interrupted':
+        this.theirSpeechAt = Date.now();
+        this.theyAreSpeaking = true;
         // They've started talking: no silence to wait out (#179).
         this.clearQuietAfterQuestionTimer();
         // #8: cut off before its turn ended, the recording notice may never
@@ -973,7 +992,16 @@ export class CallSession<TCtx = CallContext> {
         // tool call (reading an entire voicemail message aloud) — re-arm the
         // session-level watchdog with a larger budget before starting it, so
         // a real message doesn't get killed as if it were a stuck handler.
-        this.armToolPendingWatchdog(toolCallId, name, VERBATIM_TOOL_PENDING_BUDGET_MS);
+        this.armToolPendingWatchdog(toolCallId, name, GREETING_WAIT_MAX_MS + VERBATIM_TOOL_PENDING_BUDGET_MS);
+        // Their next line ("…after the tone") would otherwise get a reply of
+        // the model's own while it waits: a narration, or the message itself.
+        const holdReplies = !this.hold && this.voiceAI.setHold !== undefined;
+        if (holdReplies) this.voiceAI.setHold!(true);
+        try {
+          await this.waitForTheirQuiet();
+        } finally {
+          if (holdReplies) this.voiceAI.setHold!(false);
+        }
         verbatimDelivery = await this.deliverVerbatim(tool.verbatimMessage(parsed.data));
         if (!verbatimDelivery.matched) {
           logger.warn({ callId: this.opts.callId, toolCallId, name }, 'Verbatim message delivery did not match the intended text');
@@ -1289,6 +1317,23 @@ export class CallSession<TCtx = CallContext> {
    * for the turn. A barge-in, or audio still unplayed when the wait runs out,
    * means the callee did not hear it all, whatever the transcript says.
    */
+  /**
+   * Waits for the other side to go quiet before a voicemail message (#198):
+   * GREETING_QUIET_MS since their last speech, none in progress, and Banjo's
+   * audio played out. At most GREETING_WAIT_MAX_MS; at once if they never spoke.
+   */
+  private async waitForTheirQuiet(): Promise<void> {
+    const deadline = Date.now() + GREETING_WAIT_MAX_MS;
+    for (;;) {
+      if (this.isEnding()) return;
+      const now = Date.now();
+      const quietAt = Math.max(this.theirSpeechAt + GREETING_QUIET_MS, this.audioPlaybackTracker.estimatedDoneAt());
+      if ((!this.theyAreSpeaking && now >= quietAt) || now >= deadline) return;
+      const wake = this.theyAreSpeaking ? deadline : Math.min(quietAt, deadline);
+      await new Promise((resolve) => setTimeout(resolve, Math.max(wake - now, 50)));
+    }
+  }
+
   private async deliverVerbatim(parts: string[]): Promise<VerbatimDeliveryReport> {
     let stop = () => {};
     const stopped = new Promise<void>((resolve) => (stop = resolve));
@@ -1306,7 +1351,11 @@ export class CallSession<TCtx = CallContext> {
         this.voiceAI.sayVerbatim(part);
         await this.waitForVerbatimTurnEnd(deadline, delivery, stopped);
         const spoken = delivery.spoken.join(' ');
-        reports.push(this.voiceAI.verbatimDeliveryReport?.() ?? { intended: part, spoken, matched: verbatimMatches(part, spoken) });
+        const report = this.voiceAI.verbatimDeliveryReport?.() ?? { intended: part, spoken, matched: verbatimMatches(part, spoken) };
+        reports.push(report);
+        // A part not said as intended ends it (#198): a voicemail whose opener
+        // came out wrong must not go on to its message without the disclosure.
+        if (!report.matched) break;
         delivery.openerPlayedAt ??= this.audioPlaybackTracker.estimatedDoneAt();
       }
       const playedOut = reports.length === parts.length && !delivery.cutOff && (await this.waitForVerbatimPlayback(delivery));
@@ -1440,7 +1489,7 @@ export class CallSession<TCtx = CallContext> {
    */
   private toolBudgetMs(name: string): number {
     const tool = this.toolRegistry.get(name);
-    if (tool?.verbatimMessage) return TURN_END_WAIT_MS + VERBATIM_TOOL_PENDING_BUDGET_MS;
+    if (tool?.verbatimMessage) return TURN_END_WAIT_MS + GREETING_WAIT_MAX_MS + VERBATIM_TOOL_PENDING_BUDGET_MS;
     if (tool?.handlerBudgetMs !== undefined) return (tool.endsCall ? TURN_END_WAIT_MS : 0) + tool.handlerBudgetMs;
     return TOOL_PENDING_WATCHDOG_MS;
   }

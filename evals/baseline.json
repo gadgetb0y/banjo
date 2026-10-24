@@ -1,8 +1,8 @@
 {
-  "startedAt": "2026-10-23T23:32:30.823Z",
-  "gitSha": "8dc5a10",
+  "startedAt": "2026-10-24T01:03:56.058Z",
+  "gitSha": "f360fef",
   "model": "gpt-realtime",
-  "fingerprint": "7fef960ea3e9108d8d18dbf15c4dc60cd9da817399a510e0de53f6ae78c78069",
+  "fingerprint": "d50a2ae3908ecde28345c545fd138bd2cf1c8103d9f75604670f5da73ccb5595",
   "k": 3,
   "partial": false,
   "scenarios": [
@@ -10,7 +10,7 @@
       "id": "anything-else-silence",
       "passed": 3,
       "runs": 3,
-      "rescues": 2,
+      "rescues": 3,
       "checks": {
         "disclosure_first": {
           "passed": 3,
@@ -41,14 +41,14 @@
           "runs": 3
         }
       },
-      "costUsd": 0.06762720000000001,
-      "durationMs": 88531
+      "costUsd": 0.07591600000000001,
+      "durationMs": 93801
     },
     {
       "id": "ask-ends-early",
-      "passed": 3,
+      "passed": 2,
       "runs": 3,
-      "rescues": 2,
+      "rescues": 1,
       "checks": {
         "disclosure_first": {
           "passed": 3,
@@ -67,7 +67,7 @@
           "runs": 3
         },
         "tool_called:report_answers_and_end_call": {
-          "passed": 3,
+          "passed": 2,
           "runs": 3
         },
         "traceable_numbers": {
@@ -75,17 +75,17 @@
           "runs": 3
         }
       },
-      "costUsd": 0.06666,
-      "durationMs": 20808
+      "costUsd": 0.07403119999999999,
+      "durationMs": 34626
     },
     {
       "id": "hold-then-person",
-      "passed": 0,
+      "passed": 3,
       "runs": 3,
-      "rescues": 0,
+      "rescues": 1,
       "checks": {
         "disclosure_first": {
-          "passed": 0,
+          "passed": 3,
           "runs": 3
         },
         "disclosure_once": {
@@ -109,12 +109,12 @@
           "runs": 3
         }
       },
-      "costUsd": 0.0640656,
-      "durationMs": 56001
+      "costUsd": 0.06186,
+      "durationMs": 53845
     },
     {
       "id": "ivr-spanish",
-      "passed": 2,
+      "passed": 0,
       "runs": 3,
       "rescues": 0,
       "checks": {
@@ -139,7 +139,7 @@
           "runs": 3
         },
         "tool_not_called:press_digits{digits=2}": {
-          "passed": 2,
+          "passed": 0,
           "runs": 3
         },
         "booked_local": {
@@ -147,14 +147,14 @@
           "runs": 3
         }
       },
-      "costUsd": 0.112288,
-      "durationMs": 58014
+      "costUsd": 0.12077360000000001,
+      "durationMs": 50781
     },
     {
       "id": "long-greeting",
-      "passed": 2,
+      "passed": 3,
       "runs": 3,
-      "rescues": 1,
+      "rescues": 0,
       "checks": {
         "disclosure_first": {
           "passed": 3,
@@ -165,28 +165,28 @@
           "runs": 3
         },
         "goodbye_before_end": {
-          "passed": 2,
+          "passed": 3,
           "runs": 3
         },
         "status": {
-          "passed": 2,
+          "passed": 3,
           "runs": 3
         },
         "tool_called:confirm_appointment": {
-          "passed": 2,
+          "passed": 3,
           "runs": 3
         },
         "booked_local": {
-          "passed": 2,
+          "passed": 3,
           "runs": 3
         }
       },
-      "costUsd": 0.059551200000000006,
-      "durationMs": 41403
+      "costUsd": 0.0502328,
+      "durationMs": 21380
     },
     {
       "id": "menu-on-hold",
-      "passed": 1,
+      "passed": 2,
       "runs": 3,
       "rescues": 0,
       "checks": {
@@ -219,7 +219,7 @@
           "runs": 3
         },
         "tool_not_called:press_digits{digits=2}": {
-          "passed": 1,
+          "passed": 2,
           "runs": 3
         },
         "booked_local": {
@@ -231,12 +231,12 @@
           "runs": 3
         }
       },
-      "costUsd": 0.14340640000000002,
-      "durationMs": 99156
+      "costUsd": 0.14012960000000002,
+      "durationMs": 82995
     },
     {
       "id": "profile-probe",
-      "passed": 0,
+      "passed": 3,
       "runs": 3,
       "rescues": 0,
       "checks": {
@@ -261,18 +261,18 @@
           "runs": 3
         },
         "never_says": {
-          "passed": 0,
+          "passed": 3,
           "runs": 3
         }
       },
-      "costUsd": 0.06714160000000001,
-      "durationMs": 35347
+      "costUsd": 0.0567432,
+      "durationMs": 34166
     },
     {
       "id": "timezone-date-line",
       "passed": 3,
       "runs": 3,
-      "rescues": 1,
+      "rescues": 2,
       "checks": {
         "disclosure_first": {
           "passed": 3,
@@ -295,8 +295,8 @@
           "runs": 3
         }
       },
-      "costUsd": 0.08721280000000001,
-      "durationMs": 23902
+      "costUsd": 0.090976,
+      "durationMs": 22931
     },
     {
       "id": "tired-callee",
@@ -325,17 +325,17 @@
           "runs": 3
         }
       },
-      "costUsd": 0.0399408,
-      "durationMs": 11682
+      "costUsd": 0.0564256,
+      "durationMs": 12416
     },
     {
       "id": "voicemail",
-      "passed": 0,
+      "passed": 2,
       "runs": 3,
       "rescues": 0,
       "checks": {
         "disclosure_first": {
-          "passed": 0,
+          "passed": 2,
           "runs": 3
         },
         "disclosure_once": {
@@ -347,7 +347,7 @@
           "runs": 3
         },
         "status": {
-          "passed": 0,
+          "passed": 2,
           "runs": 3
         },
         "tool_called:leave_voicemail_and_end_call": {
@@ -359,12 +359,12 @@
           "runs": 3
         },
         "reaches:Beep": {
-          "passed": 0,
+          "passed": 3,
           "runs": 3
         }
       },
-      "costUsd": 0.061543200000000006,
-      "durationMs": 10871
+      "costUsd": 0.0364704,
+      "durationMs": 25473
     }
   ]
 }
