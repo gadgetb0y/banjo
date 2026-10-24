@@ -56,7 +56,7 @@ export type UniversalCheckName = (typeof UNIVERSAL_CHECKS)[number];
 const toolExpectation = z
   .object({
     name: z.enum(KNOWN_TOOL_NAMES),
-    argsInclude: z.record(z.union([z.string(), z.number(), z.boolean()])).optional(),
+    argsInclude: z.record(z.string(), z.union([z.string(), z.number(), z.boolean()])).optional(),
   })
   .strict();
 
@@ -85,8 +85,8 @@ const scenarioSchema = z
         askOwner: z.string().nullable().optional(),
       })
       .strict()
-      .default({}),
-    env: z.record(z.string()).optional(),
+      .prefault({}),
+    env: z.record(z.string(), z.string()).optional(),
     script: z.array(z.string().min(1)).min(1),
     expect: z
       .object({

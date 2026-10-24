@@ -6,7 +6,7 @@ import { getTask } from '../../tasks/service.js';
 import { modeRules } from '../../tasks/modes.js';
 
 export const getTaskStatusInputSchema = z.object({
-  taskId: z.string().uuid().describe('Id of the task to check, as returned by place_call, list_recent_tasks, or record_task_outcome.'),
+  taskId: z.guid().describe('Id of the task to check, as returned by place_call, list_recent_tasks, or record_task_outcome.'),
 });
 
 export type GetTaskStatusResult =

@@ -5,7 +5,7 @@ import { getTask } from '../../tasks/service.js';
 import type { McpRole } from '../role.js';
 
 export const stopCallInputSchema = z.object({
-  taskId: z.string().uuid().describe('Id of the task whose call should be stopped, as returned by place_call.'),
+  taskId: z.guid().describe('Id of the task whose call should be stopped, as returned by place_call.'),
   reason: z
     .string()
     .optional()

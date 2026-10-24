@@ -144,12 +144,29 @@ describe('voice tools: schema + JSON Schema conversion', () => {
     // 'check_my_availability': True is not of type 'number'" — OpenAI's
     // Realtime function-parameter validator expects the numeric JSON Schema
     // form (`"exclusiveMinimum": 0`). toToolDefinition() must keep using a
-    // plain JSON Schema target ('jsonSchema7'), not 'openApi3'.
+    // plain JSON Schema target (draft 7), not OpenAPI 3.0.
     for (const def of [...callToolDefinitions, pressDigitsToolDefinition]) {
       const json = JSON.stringify(def.parameters);
       expect(json, `${def.name}'s schema`).not.toContain('"exclusiveMinimum":true');
       expect(json, `${def.name}'s schema`).not.toContain('"exclusiveMaximum":true');
     }
+  });
+
+  it('keeps the schema shape the model was tuned on, through the zod 4 upgrade', async () => {
+    // zod 4's own converter adds safe-integer bounds to .int(), puts an optional
+    // field's description first, and (reading input) drops additionalProperties.
+    // The model reads the schema as text, and eval fingerprints hash it.
+    const { z } = await import('zod');
+    const { toToolDefinition } = await import('../../src/voice/tools/defineVoiceTool.js');
+    const def = toToolDefinition({
+      name: 't',
+      description: 't',
+      schema: z.object({ n: z.number().int().positive().describe('N'), note: z.string().optional().describe('Note') }),
+      handler: async () => ({}),
+    });
+    expect(JSON.stringify(def.parameters)).toBe(
+      '{"type":"object","properties":{"n":{"type":"integer","exclusiveMinimum":0,"description":"N"},"note":{"type":"string","description":"Note"}},"required":["n"],"additionalProperties":false}',
+    );
   });
 
   it('does not include a $schema meta key in generated tool parameters', () => {

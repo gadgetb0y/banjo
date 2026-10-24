@@ -5,7 +5,7 @@ import type { Contact } from '../../contacts/schema.js';
 import type { McpRole } from '../role.js';
 
 export const updateContactInputSchema = z.object({
-  id: z.string().uuid().describe('Id of the contact to update.'),
+  id: z.guid().describe('Id of the contact to update.'),
   preferredChannel: z
     .enum(preferredChannelEnum.enumValues)
     .optional()
