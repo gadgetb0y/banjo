@@ -131,3 +131,70 @@ jobs:
         env:
           VERSION: ${{ steps.meta.outputs.version }}
         run: docker buildx imagetools inspect "$IMAGE:$VERSION"
+
+  # Only for a release tag: the GitHub Release, then the MCP Registry listing.
+  # The registry checks the image's label against server.json, so this waits
+  # for the image, and it signs in with this run's OIDC token (no secret).
+  release:
+    needs: merge
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      packages: read
+      id-token: write
+    env:
+      TAG: ${{ github.ref_name }}
+      PUBLISHER_VERSION: v1.8.1
+      PUBLISHER_SHA256: a06c9096dcb9727c13555b6be26c7effa707b01f06a4c561ba7a3635443cf2cc
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Check the image and manifests match the tag
+        run: |
+          version="${TAG#v}"
+          for file in package.json server.json .claude-plugin/plugin.json; do
+            found=$(jq -r .version "$file")
+            [ "$found" = "$version" ] || { echo "::error::$file says $found, the tag says $version"; exit 1; }
+          done
+          platforms=$(docker buildx imagetools inspect "$IMAGE:$version" --raw \
+            | jq -r '[.manifests[].platform | select(.os != "unknown") | "\(.os)/\(.architecture)"] | sort | join(" ")')
+          [ "$platforms" = "linux/amd64 linux/arm64" ] || { echo "::error::$IMAGE:$version has '$platforms'"; exit 1; }
+
+      # Safe to re-run: an existing release is left as it is.
+      - name: Create the GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if gh release view "$TAG" > /dev/null 2>&1; then
+            echo "Release $TAG already exists"
+          else
+            gh release create "$TAG" --verify-tag --generate-notes --latest
+          fi
+
+      - name: Install mcp-publisher
+        run: |
+          curl -sSfL -o mcp-publisher.tar.gz \
+            "https://github.com/modelcontextprotocol/registry/releases/download/$PUBLISHER_VERSION/mcp-publisher_linux_amd64.tar.gz"
+          echo "$PUBLISHER_SHA256  mcp-publisher.tar.gz" | sha256sum -c -
+          tar xzf mcp-publisher.tar.gz mcp-publisher
+          rm mcp-publisher.tar.gz
+
+      - name: Publish to the MCP Registry
+        run: |
+          ./mcp-publisher login github-oidc
+          ./mcp-publisher publish
+
+      - name: Check the listing
+        run: |
+          version="${TAG#v}"
+          latest=$(curl -sSf "https://registry.modelcontextprotocol.io/v0/servers?search=io.github.shatch/banjo" \
+            | jq -r '.servers[] | select(.server.name == "io.github.shatch/banjo") | select(._meta."io.modelcontextprotocol.registry/official".isLatest) | .server.version')
+          echo "Registry latest: $latest"
+          [ "$latest" = "$version" ] || { echo "::error::the registry's latest is '$latest', not $version"; exit 1; }

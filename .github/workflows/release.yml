@@ -1,0 +1,122 @@
+name: Release
+
+# Cutting a release in two clicks (docs/RUNBOOKS.md, "Cutting a release"):
+#
+# 1. Run this workflow with a version (X.Y.Z). It bumps every manifest
+#    (scripts/release/bump.ts), pushes release/vX.Y.Z and opens its PR.
+# 2. Merge that PR. This workflow then tags the merge commit vX.Y.Z and starts
+#    publish-image.yml on the tag, which builds the image, creates the GitHub
+#    Release and updates the MCP Registry listing.
+#
+# A push, PR or tag made with GITHUB_TOKEN starts no other workflow, so CI and
+# the image build are started here explicitly with `gh workflow run`.
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version to release, X.Y.Z (no leading v), e.g. 0.1.15'
+        required: true
+  pull_request:
+    types: [closed]
+    branches: [main]
+
+jobs:
+  prepare:
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+      actions: write
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: main
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+
+      # The input goes in through env, never into the script text. bump.ts
+      # accepts only a plain X.Y.Z newer than package.json's version.
+      - name: Bump the manifests
+        env:
+          VERSION: ${{ inputs.version }}
+        run: npx tsx scripts/release/bump.ts "$VERSION"
+
+      - run: npx vitest run tests/releaseManifests.test.ts
+
+      - name: Push release/v${{ inputs.version }}
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git switch -c "release/v$VERSION"
+          git commit -am "chore(release): v$VERSION"
+          git push origin "release/v$VERSION"
+
+      # Opening a PR needs "Allow GitHub Actions to create and approve pull
+      # requests" (Settings > Actions). Without it, the summary links to a
+      # prefilled PR to open by hand.
+      - name: Open the release PR
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ inputs.version }}
+        run: |
+          title="Release v$VERSION"
+          body="Bumps package.json, package-lock.json, server.json and .claude-plugin/plugin.json to $VERSION. Merging tags the merge commit v$VERSION and publishes the image, the GitHub Release and the MCP Registry listing."
+          if url=$(gh pr create --base main --head "release/v$VERSION" --title "$title" --body "$body"); then
+            echo "Release PR: $url" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "Couldn't open the PR from Actions. Open it here: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/compare/main...release/v$VERSION?expand=1&title=Release+v$VERSION" >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      # main requires the "test" check, and a branch pushed with GITHUB_TOKEN
+      # doesn't start CI by itself.
+      - name: Start CI on the release branch
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ inputs.version }}
+        run: gh workflow run ci.yml --ref "release/v$VERSION"
+
+  tag:
+    if: >-
+      github.event_name == 'pull_request' &&
+      github.event.pull_request.merged &&
+      startsWith(github.event.pull_request.head.ref, 'release/v') &&
+      github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      actions: write
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.pull_request.merge_commit_sha }}
+
+      # The tag must name the version the merged manifests carry.
+      - name: Tag the merge commit
+        env:
+          BRANCH: ${{ github.event.pull_request.head.ref }}
+          SHA: ${{ github.event.pull_request.merge_commit_sha }}
+        run: |
+          version="${BRANCH#release/v}"
+          if ! [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::$BRANCH doesn't name a release X.Y.Z"; exit 1
+          fi
+          manifest=$(jq -r .version package.json)
+          if [ "$manifest" != "$version" ]; then
+            echo "::error::package.json says $manifest, the branch says $version"; exit 1
+          fi
+          git tag "v$version" "$SHA"
+          git push origin "v$version"
+          echo "VERSION=$version" >> "$GITHUB_ENV"
+
+      - name: Start the image build and publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh workflow run publish-image.yml --ref "v$VERSION"
