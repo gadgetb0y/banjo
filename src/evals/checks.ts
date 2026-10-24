@@ -24,6 +24,9 @@ const NO_GOODBYE_NEEDED = new Set(['voicemail_left', 'transferred', 'escalated']
 // behalf of" with "AI". Not "I'm Alex's AI assistant" in answer to "who is this?".
 const OPENER = /^(hi|hello|hey|good (morning|afternoon|evening))\b|\bcalling (for|on behalf of)\b/i;
 const isOpener = (line: string) => AI_WORD.test(line) && OPENER.test(line);
+const GREETING = /^(hi|hello|hey|good (morning|afternoon|evening))\b/i;
+// "Sorry, who did you say was calling?": the honest answer names the AI and who it calls for, and isn't a restart.
+const ASKS_WHO = /\bwho('s| is| was| did you say| am i| are you)\b|\byour name\b/i;
 
 const pass = (name: string): CheckResult => ({ name, pass: true });
 const fail = (name: string, reason: string): CheckResult => ({ name, pass: false, reason });
@@ -36,7 +39,11 @@ function universal(record: RunRecord, check: (typeof UNIVERSAL_CHECKS)[number]):
       return result === 'disclosed' ? pass(check) : fail(check, `first line ${result}: ${JSON.stringify(banjo[0]?.text ?? '')}`);
     }
     case 'disclosure_once': {
-      const openers = banjo.filter((l) => isOpener(l.text));
+      const openers = record.lines.filter((l, i) => {
+        if (l.role !== 'assistant' || !isOpener(l.text)) return false;
+        const theirs = record.lines.slice(0, i).findLast((p) => p.role === 'user');
+        return GREETING.test(l.text) || !theirs || !ASKS_WHO.test(theirs.text);
+      });
       const allowed = 1 + record.holdPickups;
       return openers.length <= allowed ? pass(check) : fail(check, `${openers.length} openers, ${allowed} allowed: ${JSON.stringify(openers.at(-1)!.text)}`);
     }

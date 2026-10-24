@@ -11,6 +11,7 @@ describe('evals/scenarios', () => {
     expect(loadScenarios(DIR).map((s) => s.id)).toEqual([
       'anything-else-silence',
       'ask-ends-early',
+      'greets-twice',
       'hold-then-person',
       'ivr-spanish',
       'long-greeting',
