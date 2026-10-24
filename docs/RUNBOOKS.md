@@ -360,7 +360,9 @@ It's set only from places you control, never by an MCP tool. Agents read call tr
 
 A release is a `vX.Y.Z` tag on `main`. The tag builds and publishes the multi-arch image
 (`.github/workflows/publish-image.yml`). The MCP Registry listing and the Claude Code plugin
-then point at that version. `.github/workflows/release.yml` does all of it from two clicks:
+then point at that version. `.github/workflows/release.yml` does all of it from two clicks, and
+only for the repository owner: its jobs are skipped when anyone else starts the workflow or
+merges the release PR, even with write access.
 
 1. **Run the Release workflow** with the version (Actions > Release > Run workflow, or
    `gh workflow run release.yml -f version=X.Y.Z`). It bumps `package.json`,

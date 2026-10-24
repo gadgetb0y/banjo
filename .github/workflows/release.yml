@@ -10,6 +10,10 @@ name: Release
 #
 # A push, PR or tag made with GITHUB_TOKEN starts no other workflow, so CI and
 # the image build are started here explicitly with `gh workflow run`.
+#
+# Only the repository owner cuts a release: both jobs run only when the owner
+# started (or re-ran) them, and the tag job only for a PR the owner merged.
+# Write access alone isn't enough, so a collaborator added later can't release.
 on:
   workflow_dispatch:
     inputs:
@@ -22,7 +26,9 @@ on:
 
 jobs:
   prepare:
-    if: github.event_name == 'workflow_dispatch'
+    if: >-
+      github.event_name == 'workflow_dispatch' &&
+      github.triggering_actor == github.repository_owner
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -87,6 +93,8 @@ jobs:
     if: >-
       github.event_name == 'pull_request' &&
       github.event.pull_request.merged &&
+      github.event.pull_request.merged_by.login == github.repository_owner &&
+      github.triggering_actor == github.repository_owner &&
       startsWith(github.event.pull_request.head.ref, 'release/v') &&
       github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
