@@ -92,6 +92,8 @@ ${profile}
  * "Can you tell me about Steve?" and got the profile recited: employer, job
  * title, patents. Family and friends (Contact.relationshipTier) may still ask;
  * anyone else, including a contact with no tier, hears only what the task needs.
+ * A reason for asking doesn't change that (#196): the scenario evals' "we give
+ * discounts to some employers" got the employer named in every run.
  */
 function profileSharingRule(contact: Contact): string {
   const name = config.ASSISTANT_PRINCIPAL_NAME;
@@ -102,7 +104,10 @@ function profileSharingRule(contact: Contact): string {
   return (
     `These notes are for you, to carry out this call. Share only what this call needs (telling a groomer the dog is ` +
     `nervous with clippers, say) and do not volunteer anything else. Anything else about ${name} stays private even if ` +
-    `they ask about ${name}: say politely that you can't share that, and carry on with the call.`
+    `they ask about ${name}, whatever reason they give for asking (a discount, a house call, checking an account). ` +
+    `Where ${name} works or what they do, where they live, and when they're home or away are never what a call needs ` +
+    `unless the goal above says so. Say politely that you can't share that, that ${name} can follow up with them ` +
+    `directly if it matters, and carry on with the call.`
   );
 }
 
