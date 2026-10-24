@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { soundsLikeVoicemailGreeting } from '../../src/session/voicemailGreeting.js';
+import { isCarrierPreamble, soundsLikeVoicemailGreeting } from '../../src/session/voicemailGreeting.js';
 
 describe('soundsLikeVoicemailGreeting (#207)', () => {
   it.each([
@@ -20,5 +20,18 @@ describe('soundsLikeVoicemailGreeting (#207)', () => {
     'Can you leave it with me and I will check?',
   ])('does not hear a person as voicemail: %s', (line) => {
     expect(soundsLikeVoicemailGreeting(line)).toBe(false);
+  });
+});
+
+describe('isCarrierPreamble (#207)', () => {
+  it('is a carrier line that has not yet asked for a message', () => {
+    expect(isCarrierPreamble('Your call has been forwarded to voicemail.')).toBe(true);
+    expect(isCarrierPreamble('Your call has been forwarded to an automatic voice message system.')).toBe(true);
+  });
+
+  it('is not a line that asks for the message, or a personal greeting', () => {
+    expect(isCarrierPreamble('Your call has been forwarded to voicemail. At the tone, please record your message.')).toBe(false);
+    expect(isCarrierPreamble("Hi, you've reached Dana. Leave a message.")).toBe(false);
+    expect(isCarrierPreamble("Hi, it's Dana.")).toBe(false);
   });
 });

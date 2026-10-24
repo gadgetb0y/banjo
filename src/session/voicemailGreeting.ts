@@ -16,3 +16,15 @@ export function soundsLikeVoicemailGreeting(line: string): boolean {
   if (VOICEMAIL_PROMPT.test(line)) return true;
   return NOT_AVAILABLE.test(line) && TRYING_TO_REACH.test(line);
 }
+
+const FORWARDED = /\b(forwarded to|transferred to|you have reached) (voice ?mail|an automat(ed|ic) voice message system|the voice ?mail)\b/i;
+const ASKS_FOR_MESSAGE = /\b(tone|beep|record|leave (me |us )?(a |your )?(message|name))\b/i;
+
+/**
+ * A carrier's "Your call has been forwarded to voicemail." before it has asked
+ * for a message (#207): more always follows ("…At the tone, please record your
+ * message."), so a pause after it isn't the end of the greeting.
+ */
+export function isCarrierPreamble(line: string): boolean {
+  return FORWARDED.test(line) && !ASKS_FOR_MESSAGE.test(line);
+}

@@ -19,6 +19,7 @@ describe('evals/scenarios', () => {
       'timezone-date-line',
       'tired-callee',
       'voicemail',
+      'voicemail-two-part',
     ]);
   });
 

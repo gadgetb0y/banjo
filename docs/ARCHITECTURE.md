@@ -880,6 +880,12 @@ The LiveKit `TelephonyProvider` adapter (`src/telephony/providers/livekit.ts` �
     **Sim check** (`npm run eval -- --scenario voicemail`, 5 runs): 5/5 `voicemail_left`, the opener then the message, after the beep. The audio path (server VAD, a real beep, the hold toggle and `input: []` with audio output) still needs a live call. The live call on 2026-10-24 (dev-voicemail) passed: after the tone, the opener word for word, then the message once, `voicemail_left`. It found #207 (35 below).
 
 35. **[FIXED, not yet re-verified against a live call]** The opening silence nudge spoke over a two-part carrier greeting (#207). The carrier said "Your call has been forwarded to voicemail.", then, 9s later, "…At the tone, please record your message." The model was rightly waiting, the 7s silence watchdog fired in the gap and cued the opener (#118), and the second part cut it off. Now, before Banjo has said anything, a line of theirs that sounds like a voicemail greeting or carrier prompt (`session/voicemailGreeting.ts`) gets one more watchdog window before the opener is cued, once per line; it doesn't count as the nudge. A miss only means the nudge comes as before.
+    - **Not mid-sentence:** the silence watchdog never nudges while their speech is in progress (a speech start not yet finalized, up to 30s). On the live call the second part had already begun when the nudge fired.
+    - **A longer quiet after a carrier preamble:** if the voicemail tool is called after "forwarded to voicemail" but before the carrier has asked for a message, the quiet wait before the message is 10s, not 3.5s (`isCarrierPreamble`), still within the 15s cap.
+    - **An empty verbatim turn is said once more:** a forced turn that ends with nothing said and none of its audio sent reached nobody, so it's retried, once per message. Seen in the sim as an escalated voicemail.
+    - **Sim:** a `(silence N)` straight after a `~` line is a pause in the recording, on its clock, not waiting for Banjo. Scenario `voicemail-two-part` (reaches with `quietBefore`: nothing of Banjo's before "at the tone").
+
+    **Sim check:** `voicemail-two-part` 4/5 (plus 2/2 recorded), `voicemail` 2/3. Each failure was the same, older flake: the model narrated ("It looks like the voicemail process is already under way…") in place of the forced message, which the word-for-word check caught, ending the call `escalated` with no message.
 
 ### Operational, not a code fix
 

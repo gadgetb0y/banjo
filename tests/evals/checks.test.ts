@@ -199,4 +199,12 @@ describe('expectations', () => {
     const late = log("u:We can't come to the phone.", 'u:Beep.', { tool: 'leave_voicemail_and_end_call' });
     expect(check(late, exp)['reaches:beep']!.pass).toBe(true);
   });
+
+  it('reaches with quietBefore fails if Banjo said anything before that line (#207)', () => {
+    const exp = { reaches: [{ userLineIncludes: 'at the tone', quietBefore: true }] };
+    const spokeInGap = log('u:Your call has been forwarded to voicemail.', "b:Hi, I'm an AI assistant calling on", 'u:At the tone, please record your message.');
+    expect(check(spokeInGap, exp)['reaches:at the tone']).toMatchObject({ pass: false, reason: expect.stringContaining('before') });
+    const waited = log('u:Your call has been forwarded to voicemail.', 'u:At the tone, please record your message.', "b:Hi, I'm an AI assistant.");
+    expect(check(waited, exp)['reaches:at the tone']!.pass).toBe(true);
+  });
 });

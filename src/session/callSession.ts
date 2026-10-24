@@ -13,7 +13,7 @@ import { checkDisclosure, type DisclosureResult } from './disclosure.js';
 import { isCuttingIn, isSigningOff, saidGoodbye } from './goodbye.js';
 import { holdBudgetMs, isRepeatOnHold, menuPromptNote, personPickedUpNote } from './hold.js';
 import { classifyTranscript } from './transcriptQuality.js';
-import { soundsLikeVoicemailGreeting } from './voicemailGreeting.js';
+import { isCarrierPreamble, soundsLikeVoicemailGreeting } from './voicemailGreeting.js';
 
 export type CallSessionState = 'connecting' | 'active' | 'tool-pending' | 'ending' | 'ended' | 'error';
 
@@ -77,6 +77,9 @@ export const STILL_THERE_CUE = "They haven't said anything for a while. Ask them
 // (#71). 3.5s, since a greeting can pause before its beep, and a beep isn't
 // speech. Capped, so a greeting that never seems to end still gets a message.
 const GREETING_QUIET_MS = 3500;
+// After a carrier's "forwarded to voicemail", before it has asked for a
+// message: the rest of its greeting is still to come (#207).
+const GREETING_PREAMBLE_QUIET_MS = 10_000;
 const GREETING_WAIT_MAX_MS = 15_000;
 
 // Bounds how long CallSession waits for a tool's verbatimMessage (see
@@ -124,6 +127,8 @@ const VERBATIM_TOOL_PENDING_BUDGET_MS = SPEAK_VERBATIM_TIMEOUT_MS + VERBATIM_PLA
 // unanswered window after that nudge gives up and fails the call, mirroring
 // toolPendingWatchdog's "don't hang forever" philosophy for a stuck tool.
 const SILENCE_WATCHDOG_MS = 7000;
+// The longest a speech start of theirs holds off the silence nudge (#207).
+const THEIR_SPEECH_MAX_MS = 30_000;
 
 /**
  * The silence nudge's cue when Banjo hasn't spoken yet (#118). One-time and
@@ -334,6 +339,8 @@ export class CallSession<TCtx = CallContext> {
   private recordingNoticeFraction = 1;
   /** Milliseconds of Banjo's audio sent in the current turn. */
   private turnAudioMs = 0;
+  /** Audio chunks of Banjo's sent on the whole call: whether a verbatim turn sent any (#207). */
+  private audioChunksOut = 0;
   /** When they last spoke: speech starting, or a line of theirs finalizing (#198). */
   private theirSpeechAt = 0;
   /** Between their speech starting and that line finalizing. */
@@ -478,6 +485,7 @@ export class CallSession<TCtx = CallContext> {
         this.responseActive = true;
         const outboundChunk = this.pipeline.outbound(event.chunk);
         this.audioPlaybackTracker.recordChunkSent(outboundChunk.data.length);
+        this.audioChunksOut++;
         this.turnAudioMs += outboundChunk.data.length / 8; // 8kHz mu-law: 8 bytes per ms
         this.opts.telephony.sendAudio(this.opts.callId, outboundChunk);
         break;
@@ -691,6 +699,12 @@ export class CallSession<TCtx = CallContext> {
       }
       // Nothing said yet: whatever the nudge makes Banjo say opens the call.
       const openingLine = this.firstAssistantLine === undefined ? this.opts.openingLine : undefined;
+      // #207: never cut in while they're mid-sentence; their line finalizing
+      // ends it. Bounded, in case a speech start never finalizes.
+      if (this.theyAreSpeaking && Date.now() - this.theirSpeechAt < THEIR_SPEECH_MAX_MS) {
+        this.silenceWatchdog = setTimeout(() => this.handleSilenceWatchdogFired(), SILENCE_WATCHDOG_MS);
+        return;
+      }
       // #207: a carrier greeting can come in two parts with a gap longer than
       // this watchdog, and the model is rightly waiting for the tone. Each
       // greeting line gets one more window before the opener is cued; it
@@ -1346,7 +1360,8 @@ export class CallSession<TCtx = CallContext> {
     for (;;) {
       if (this.isEnding()) return;
       const now = Date.now();
-      const quietAt = Math.max(this.theirSpeechAt + GREETING_QUIET_MS, this.audioPlaybackTracker.estimatedDoneAt());
+      const quietMs = isCarrierPreamble(this.lastTheirLine) ? GREETING_PREAMBLE_QUIET_MS : GREETING_QUIET_MS;
+      const quietAt = Math.max(this.theirSpeechAt + quietMs, this.audioPlaybackTracker.estimatedDoneAt());
       if ((!this.theyAreSpeaking && now >= quietAt) || now >= deadline) return;
       const wake = this.theyAreSpeaking ? deadline : Math.min(quietAt, deadline);
       await new Promise((resolve) => setTimeout(resolve, Math.max(wake - now, 50)));
@@ -1361,16 +1376,28 @@ export class CallSession<TCtx = CallContext> {
     try {
       const deadline = Date.now() + SPEAK_VERBATIM_TIMEOUT_MS;
       const reports: VerbatimDeliveryReport[] = [];
-      for (const part of parts) {
+      // One retry in all, for a turn that sent nothing (#207).
+      let retried = false;
+      for (let i = 0; i < parts.length; i++) {
+        const part = parts[i]!;
         // Nothing more is said once the callee may not hear it all anyway:
         // the call is ending, the other side barged in, or an earlier part
         // used up the time, and the hang-up would cut this one off (#71).
         if (delivery.cutOff || this.isEnding() || Date.now() >= deadline) break;
         delivery.spoken = [];
+        const chunksBefore = this.audioChunksOut;
         this.voiceAI.sayVerbatim(part);
         await this.waitForVerbatimTurnEnd(deadline, delivery, stopped);
         const spoken = delivery.spoken.join(' ');
         const report = this.voiceAI.verbatimDeliveryReport?.() ?? { intended: part, spoken, matched: verbatimMatches(part, spoken) };
+        // The turn ended with nothing said and no audio sent: the callee heard
+        // nothing, so saying it again can't say it twice.
+        if (!report.matched && !retried && !report.spoken.trim() && this.audioChunksOut === chunksBefore && !delivery.cutOff) {
+          retried = true;
+          logger.warn({ callId: this.opts.callId }, 'Verbatim turn ended with nothing said — saying it once more');
+          i--;
+          continue;
+        }
         reports.push(report);
         // A part not said as intended ends it (#198): a voicemail whose opener
         // came out wrong must not go on to its message without the disclosure.
