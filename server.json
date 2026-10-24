@@ -8,11 +8,11 @@
     "source": "github"
   },
   "websiteUrl": "https://github.com/shatch/banjo",
-  "version": "0.1.14",
+  "version": "0.1.15",
   "packages": [
     {
       "registryType": "oci",
-      "identifier": "ghcr.io/shatch/banjo:0.1.14",
+      "identifier": "ghcr.io/shatch/banjo:0.1.15",
       "transport": {
         "type": "streamable-http",
         "url": "http://localhost:3000/mcp",
