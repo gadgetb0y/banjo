@@ -1169,7 +1169,10 @@ describe('CallSession: silence watchdog — the model going quiet after a user t
       await session.start();
 
       voiceAIEmitter.emit('event', { type: 'transcript', role: 'user', text: 'Your call has been forwarded to voicemail.', isFinal: true } satisfies VoiceAIEvent);
+      // #207: a greeting line is waited out for one more window first.
       await vi.advanceTimersByTimeAsync(7000); // SILENCE_WATCHDOG_MS
+      expect(fakeVoiceAI.triggerResponse).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(7000);
 
       expect(fakeVoiceAI.triggerResponse).toHaveBeenCalledTimes(1);
       expect(fakeVoiceAI.triggerResponse).toHaveBeenCalledWith(openingLineCue(opening));
@@ -1180,6 +1183,50 @@ describe('CallSession: silence watchdog — the model going quiet after a user t
       await vi.advanceTimersByTimeAsync(7000);
       expect(fakeVoiceAI.triggerResponse).toHaveBeenCalledTimes(1);
       expect(options.onStatusChange).toHaveBeenCalledWith(expect.objectContaining({ kind: 'failed', reason: 'assistant_silence_watchdog' }));
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  // #207: on a live voicemail the carrier's greeting came in two parts, 9s
+  // apart, and the opening nudge fired in the gap, so Banjo began its opener
+  // over "At the tone, please record your message."
+  it('waits out a two-part voicemail greeting before cueing the opening line', async () => {
+    vi.useFakeTimers();
+    try {
+      const telephony = makeFakeTelephony();
+      const opening = "Hi, I'm an AI assistant calling on behalf of Steve.";
+      const session = new CallSession({ ...makeFakeCallSessionOptions(telephony.provider), openingLine: opening });
+      await session.start();
+
+      voiceAIEmitter.emit('event', { type: 'transcript', role: 'user', text: 'Your call has been forwarded to voicemail.', isFinal: true } satisfies VoiceAIEvent);
+      await vi.advanceTimersByTimeAsync(9000);
+      voiceAIEmitter.emit('event', { type: 'transcript', role: 'user', text: "The person you're trying to reach is not available. At the tone, please record your message.", isFinal: true } satisfies VoiceAIEvent);
+      // The second part is waited out too (its window runs from the first deferral).
+      await vi.advanceTimersByTimeAsync(5000);
+      expect(fakeVoiceAI.triggerResponse).not.toHaveBeenCalled();
+
+      // Still nothing from the model once both are waited out: the opener is cued.
+      await vi.advanceTimersByTimeAsync(7000);
+      expect(fakeVoiceAI.triggerResponse).toHaveBeenCalledTimes(1);
+      expect(fakeVoiceAI.triggerResponse).toHaveBeenCalledWith(openingLineCue(opening));
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('still cues the opening line after one window when a person spoke first', async () => {
+    vi.useFakeTimers();
+    try {
+      const telephony = makeFakeTelephony();
+      const opening = "Hi, I'm an AI assistant calling on behalf of Steve.";
+      const session = new CallSession({ ...makeFakeCallSessionOptions(telephony.provider), openingLine: opening });
+      await session.start();
+
+      voiceAIEmitter.emit('event', { type: 'transcript', role: 'user', text: 'Hello?', isFinal: true } satisfies VoiceAIEvent);
+      await vi.advanceTimersByTimeAsync(7000); // SILENCE_WATCHDOG_MS
+
+      expect(fakeVoiceAI.triggerResponse).toHaveBeenCalledWith(openingLineCue(opening));
     } finally {
       vi.useRealTimers();
     }

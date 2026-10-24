@@ -13,6 +13,7 @@ import { checkDisclosure, type DisclosureResult } from './disclosure.js';
 import { isCuttingIn, isSigningOff, saidGoodbye } from './goodbye.js';
 import { holdBudgetMs, isRepeatOnHold, menuPromptNote, personPickedUpNote } from './hold.js';
 import { classifyTranscript } from './transcriptQuality.js';
+import { soundsLikeVoicemailGreeting } from './voicemailGreeting.js';
 
 export type CallSessionState = 'connecting' | 'active' | 'tool-pending' | 'ending' | 'ended' | 'error';
 
@@ -273,6 +274,10 @@ export class CallSession<TCtx = CallContext> {
   /** Who spoke the latest transcribed line, and Banjo's latest line — what the goodbye check (#102) judges. */
   private lastSpeaker: 'user' | 'assistant' | undefined;
   private lastAssistantLine = '';
+  /** Their latest line, and how many they've said: the opening nudge waits out a voicemail greeting's line once (#207). */
+  private lastTheirLine = '';
+  private theirLineCount = 0;
+  private greetingLineWaitedOut = 0;
   /** Their latest line that isn't suspect (#25) — whether they signed off (#144). */
   private lastUserLine = '';
   /**
@@ -513,6 +518,8 @@ export class CallSession<TCtx = CallContext> {
           if (event.role === 'user') {
             this.theirSpeechAt = Date.now();
             this.theyAreSpeaking = false;
+            this.lastTheirLine = event.text;
+            this.theirLineCount++;
           }
           if (event.role === 'assistant') this.verbatimDelivery?.spoken.push(event.text);
           // openai-live never emits 'interrupted', so someone answering
@@ -682,14 +689,26 @@ export class CallSession<TCtx = CallContext> {
         logger.warn({ callId: this.opts.callId }, 'Silence watchdog fired but a response already appears to be in flight — skipping the nudge');
         return;
       }
+      // Nothing said yet: whatever the nudge makes Banjo say opens the call.
+      const openingLine = this.firstAssistantLine === undefined ? this.opts.openingLine : undefined;
+      // #207: a carrier greeting can come in two parts with a gap longer than
+      // this watchdog, and the model is rightly waiting for the tone. Each
+      // greeting line gets one more window before the opener is cued; it
+      // doesn't count as the nudge.
+      if (openingLine !== undefined && this.theirLineCount !== this.greetingLineWaitedOut && soundsLikeVoicemailGreeting(this.lastTheirLine)) {
+        this.greetingLineWaitedOut = this.theirLineCount;
+        logger.info({ callId: this.opts.callId }, 'Silence before Banjo has spoken, after a voicemail greeting line — waiting one more window before nudging');
+        this.silenceWatchdog = setTimeout(() => this.handleSilenceWatchdogFired(), SILENCE_WATCHDOG_MS);
+        return;
+      }
       this.silenceNudgeSent = true;
-      if (this.opts.openingLine !== undefined && this.firstAssistantLine === undefined) {
+      if (openingLine !== undefined) {
         // Nothing said yet, so whatever this nudge makes Banjo say opens the
         // call, and the call must open with the disclosure (#118). A cue, not
         // sayVerbatim(): openai-live holds turn_end for a verbatim message
         // until a delivery report is read, which only tool messages get.
         logger.warn({ callId: this.opts.callId }, 'Voice AI went silent before saying anything — nudging with the opening line');
-        this.triggerVoiceAIResponse(openingLineCue(this.opts.openingLine));
+        this.triggerVoiceAIResponse(openingLineCue(openingLine));
       } else {
         logger.warn({ callId: this.opts.callId }, 'Voice AI went silent after a user turn — nudging with an explicit response trigger');
         this.triggerVoiceAIResponse();
