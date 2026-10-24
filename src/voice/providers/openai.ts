@@ -586,6 +586,11 @@ export class OpenAIRealtimeProvider implements VoiceAIProvider {
         event_id: verbatim.eventId,
         response: {
           instructions: `Say exactly the following, word for word, and nothing else — no preamble, no additions, no acknowledgement: "${verbatim.text}"`,
+          // No conversation history for this response (#198): with it, and its
+          // own voicemail tool call still open, the model often said "I've left
+          // a voicemail…" instead of the opener. The output still joins the
+          // conversation (conversation stays "auto"), so later turns see it.
+          input: [],
           metadata: { banjo_verbatim: verbatim.eventId },
         },
       }),

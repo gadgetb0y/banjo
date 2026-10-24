@@ -11,7 +11,8 @@ import type { TaskStatus } from './scenario.js';
 
 export interface RunRecord {
   lines: { role: 'user' | 'assistant'; text: string; t: number }[];
-  toolCalls: { name: string; args: Record<string, unknown>; result?: unknown; isError?: boolean; t: number }[];
+  /** `spokenAt`: for a tool whose message is said word for word (a voicemail), when that speech began (#198). */
+  toolCalls: { name: string; args: Record<string, unknown>; result?: unknown; isError?: boolean; t: number; spokenAt?: number }[];
   /** How many times a live person picked up after a hold: each allows one more opener. */
   holdPickups: number;
   rescues: Rescue[];
@@ -48,6 +49,10 @@ export function buildRunRecord(
         toolCalls.push(call);
         byId.set(event.call.id, call);
       }
+    } else if (entry.call === 'sayVerbatim') {
+      // Forced speech belongs to the tool call it follows: a voicemail's message, or a fixed goodbye before an ending.
+      const last = toolCalls.at(-1);
+      if (last && last.spokenAt === undefined) last.spokenAt = entry.t;
     } else if (entry.call === 'sendToolResult') {
       const call = byId.get(entry.toolCallId);
       if (call) Object.assign(call, { result: entry.result, ...(entry.isError && { isError: true }) });

@@ -1,5 +1,5 @@
 import { EventEmitter } from 'node:events';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { z } from 'zod';
 import type { CalendarProvider } from '../../src/calendar/types.js';
 import type { CallSessionOptions } from '../../src/session/callSession.js';
@@ -512,6 +512,94 @@ describe('CallSession: audio-aware hang-up wiring', () => {
     const sayVerbatimOrder = vi.mocked(fakeVoiceAI.sayVerbatim).mock.invocationCallOrder[0]!;
     const buildToolContextOrder = vi.mocked(options.buildToolContext).mock.invocationCallOrder[0]!;
     expect(sayVerbatimOrder).toBeLessThan(buildToolContextOrder);
+  });
+
+  describe('a voicemail waits for the greeting to end (#198)', () => {
+    // Eval voicemail, 0/3: Banjo called leave_voicemail_and_end_call after the
+    // greeting's first line, before "...after the tone. Beep." On a real call
+    // that message plays over the greeting and is lost (#71).
+    afterEach(() => vi.useRealTimers());
+
+    async function voicemailSession() {
+      const telephony = makeFakeTelephony();
+      const options = makeFakeCallSessionOptions(telephony.provider);
+      options.tools = [
+        {
+          name: 'leave_voicemail_and_end_call',
+          description: 'test-only voicemail tool',
+          schema: z.object({ message: z.string() }),
+          handler: vi.fn(async () => ({ ok: true })),
+          endsCall: true,
+          verbatimMessage: (input: { message: string }) => [input.message],
+        },
+      ];
+      const session = new CallSession(options);
+      await session.start();
+      return session;
+    }
+    /** Lets the message's turn end and the call finish, so nothing of this session is left on the shared fake provider. */
+    async function finish(done: Promise<unknown>) {
+      voiceAIEmitter.emit('event', { type: 'turn_end' } satisfies VoiceAIEvent);
+      await vi.advanceTimersByTimeAsync(120_000);
+      await done;
+    }
+    const theySay = (text: string) => voiceAIEmitter.emit('event', { type: 'transcript', role: 'user', text, isFinal: true } satisfies VoiceAIEvent);
+
+    it('speaks the message only once they have been quiet for 3.5s since their last line', async () => {
+      vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] });
+      const session = await voicemailSession();
+      theySay("Hi, you've reached Claudia's. We can't come to the phone right now.");
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const done = (session as any).handleToolCall('call-1', 'leave_voicemail_and_end_call', { message: 'Please call Alex back.' });
+      voiceAIEmitter.emit('event', { type: 'turn_end' } satisfies VoiceAIEvent);
+      await vi.advanceTimersByTimeAsync(2000);
+      theySay('Please leave a message after the tone. Beep.');
+      await vi.advanceTimersByTimeAsync(3400);
+      expect(fakeVoiceAI.sayVerbatim).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(200);
+      expect(fakeVoiceAI.sayVerbatim).toHaveBeenCalledWith('Please call Alex back.');
+      await finish(done);
+    });
+
+    // While it waits, their next line ("…Beep.") reached the model, which
+    // replied itself: narrating, or saying the message on its own.
+    it('holds the model\'s replies while it waits, and lets go just before the message', async () => {
+      vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] });
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const voiceAI = fakeVoiceAI as any;
+      const order: string[] = [];
+      voiceAI.setHold = vi.fn((on: boolean) => order.push(`hold:${on}`));
+      vi.mocked(fakeVoiceAI.sayVerbatim).mockImplementation(() => void order.push('say'));
+      try {
+        const session = await voicemailSession();
+        theySay("Hi, you've reached Claudia's.");
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const done = (session as any).handleToolCall('call-1', 'leave_voicemail_and_end_call', { message: 'Please call Alex back.' });
+        voiceAIEmitter.emit('event', { type: 'turn_end' } satisfies VoiceAIEvent);
+        await vi.advanceTimersByTimeAsync(1000);
+        expect(order).toEqual(['hold:true']);
+        await vi.advanceTimersByTimeAsync(3000);
+        expect(order).toEqual(['hold:true', 'hold:false', 'say']);
+        await finish(done);
+      } finally {
+        delete voiceAI.setHold;
+        vi.mocked(fakeVoiceAI.sayVerbatim).mockReset();
+      }
+    });
+
+    it('waits while they are still speaking, but no more than 15s in all', async () => {
+      vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] });
+      const session = await voicemailSession();
+      voiceAIEmitter.emit('event', { type: 'interrupted' } satisfies VoiceAIEvent); // speech started, never finalized
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const done = (session as any).handleToolCall('call-1', 'leave_voicemail_and_end_call', { message: 'Please call Alex back.' });
+      voiceAIEmitter.emit('event', { type: 'turn_end' } satisfies VoiceAIEvent);
+      await vi.advanceTimersByTimeAsync(14_000);
+      expect(fakeVoiceAI.sayVerbatim).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(1500);
+      expect(fakeVoiceAI.sayVerbatim).toHaveBeenCalledWith('Please call Alex back.');
+      await finish(done);
+    });
   });
 
   it("for a tool with verbatimMessage, reads the provider's verbatim delivery report only after the forced speech finishes, and hands it to buildToolContext", async () => {
