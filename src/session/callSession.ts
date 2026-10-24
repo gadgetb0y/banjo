@@ -1351,7 +1351,11 @@ export class CallSession<TCtx = CallContext> {
         this.voiceAI.sayVerbatim(part);
         await this.waitForVerbatimTurnEnd(deadline, delivery, stopped);
         const spoken = delivery.spoken.join(' ');
-        reports.push(this.voiceAI.verbatimDeliveryReport?.() ?? { intended: part, spoken, matched: verbatimMatches(part, spoken) });
+        const report = this.voiceAI.verbatimDeliveryReport?.() ?? { intended: part, spoken, matched: verbatimMatches(part, spoken) };
+        reports.push(report);
+        // A part not said as intended ends it (#198): a voicemail whose opener
+        // came out wrong must not go on to its message without the disclosure.
+        if (!report.matched) break;
         delivery.openerPlayedAt ??= this.audioPlaybackTracker.estimatedDoneAt();
       }
       const playedOut = reports.length === parts.length && !delivery.cutOff && (await this.waitForVerbatimPlayback(delivery));

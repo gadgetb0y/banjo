@@ -587,6 +587,40 @@ describe('CallSession: audio-aware hang-up wiring', () => {
       }
     });
 
+    // Eval voicemail (1 of 8): the opener's turn came back empty and the message
+    // was said anyway, so the voicemail heard it with no AI disclosure.
+    it('says nothing more once a part was not said as intended, so a message never plays without its opener', async () => {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const voiceAI = fakeVoiceAI as any;
+      voiceAI.verbatimDeliveryReport = vi.fn(() => ({ intended: 'opener', spoken: '', matched: false }));
+      try {
+        const telephony = makeFakeTelephony();
+        const options = makeFakeCallSessionOptions(telephony.provider);
+        options.tools = [
+          {
+            name: 'leave_voicemail_and_end_call',
+            description: 'test-only voicemail tool',
+            schema: z.object({ message: z.string() }),
+            handler: vi.fn(async () => ({ ok: true })),
+            endsCall: true,
+            verbatimMessage: (input: { message: string }) => ["Hi, I'm an AI assistant.", input.message],
+          },
+        ];
+        const session = new CallSession(options);
+        await session.start();
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const done = (session as any).handleToolCall('call-1', 'leave_voicemail_and_end_call', { message: 'Please call Alex back.' });
+        voiceAIEmitter.emit('event', { type: 'turn_end' } satisfies VoiceAIEvent); // the endsCall wait
+        await new Promise((resolve) => setTimeout(resolve, 0));
+        voiceAIEmitter.emit('event', { type: 'turn_end' } satisfies VoiceAIEvent); // the opener's turn, said wrong
+        await done;
+        expect(fakeVoiceAI.sayVerbatim).toHaveBeenCalledTimes(1);
+        expect(vi.mocked(options.buildToolContext).mock.calls[0]![1]).toMatchObject({ matched: false });
+      } finally {
+        delete voiceAI.verbatimDeliveryReport;
+      }
+    });
+
     it('waits while they are still speaking, but no more than 15s in all', async () => {
       vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] });
       const session = await voicemailSession();
