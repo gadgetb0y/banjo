@@ -360,31 +360,33 @@ It's set only from places you control, never by an MCP tool. Agents read call tr
 
 A release is a `vX.Y.Z` tag on `main`. The tag builds and publishes the multi-arch image
 (`.github/workflows/publish-image.yml`). The MCP Registry listing and the Claude Code plugin
-then point at that version.
+then point at that version. `.github/workflows/release.yml` does all of it from two clicks:
 
-1. **Bump the version in three files**, in one commit: `package.json` (with
-   `npm version X.Y.Z --no-git-tag-version`, so `package-lock.json` follows), `server.json`
-   (`version` and the image tag in `packages[0].identifier`), and `.claude-plugin/plugin.json`.
-   `tests/releaseManifests.test.ts` fails if they disagree, so CI catches a missed one.
-2. **Tag and push**: `git tag vX.Y.Z && git push origin vX.Y.Z`. Wait for the publish workflow,
-   then check that `ghcr.io/shatch/banjo:X.Y.Z` exists and that its
-   `io.modelcontextprotocol.server.name` label reads `io.github.shatch/banjo`:
-   ```bash
-   docker buildx imagetools inspect ghcr.io/shatch/banjo:X.Y.Z --format '{{json .Image}}' | grep modelcontextprotocol
-   ```
-3. **Publish the GitHub Release** for the tag, with notes.
-4. **Update the MCP Registry listing** from the repo root. The image must already exist: the
-   registry checks its label against `server.json`'s `name`.
-   ```bash
-   brew install mcp-publisher     # once
-   mcp-publisher login github     # every release: authenticates as shatch, which owns io.github.shatch/*
-   mcp-publisher publish
-   ```
-   Log in each release: the registry token it saves expires, and `publish` with an old one fails
-   with `401 ... token is expired`. Then check that the new version is the one marked latest:
-   ```bash
-   curl -s "https://registry.modelcontextprotocol.io/v0/servers?search=io.github.shatch/banjo"
-   ```
-5. **The plugin needs no extra step.** Users who added the marketplace
-   (`/plugin marketplace add shatch/banjo`) get the new `version` from `main` the next time they
-   update.
+1. **Run the Release workflow** with the version (Actions > Release > Run workflow, or
+   `gh workflow run release.yml -f version=X.Y.Z`). It bumps `package.json`,
+   `package-lock.json`, `server.json` and `.claude-plugin/plugin.json`
+   (`scripts/release/bump.ts`), pushes `release/vX.Y.Z`, starts CI on it and opens the PR. If
+   "Allow GitHub Actions to create and approve pull requests" is off (Settings > Actions >
+   General), the run's summary has a link to open the PR yourself.
+2. **Merge the PR** once CI is green. The workflow tags the merge commit `vX.Y.Z` and starts the
+   publish workflow on the tag, which builds the image for amd64 and arm64, checks both are there
+   and that every manifest says `X.Y.Z`, creates the GitHub Release (notes generated, marked
+   Latest), publishes to the MCP Registry (signing in with the run's GitHub OIDC token, no
+   secret), and checks the registry now lists `X.Y.Z` as latest.
+3. **Deploy**: the node runs `BANJO_VERSION=latest`, so
+   `docker compose pull app && docker compose up -d app` in `~/banjo` picks up the new image.
+
+The plugin needs no extra step: users who added the marketplace
+(`/plugin marketplace add shatch/banjo`) get the new `version` from `main` the next time they
+update.
+
+**If a step fails**, re-run the publish workflow on the tag
+(`gh workflow run publish-image.yml --ref vX.Y.Z`): an existing GitHub Release is left as it is.
+By hand, the same steps are: `npx tsx scripts/release/bump.ts X.Y.Z` in a PR
+(`tests/releaseManifests.test.ts` fails if a manifest is missed); tag the merge commit
+`vX.Y.Z` and push the tag; `gh release create vX.Y.Z --generate-notes --latest`; and, from the
+repo root, `mcp-publisher login github` then `mcp-publisher publish`. Log in each time: the saved
+registry token expires (`401 ... token is expired`). Check the listing with:
+```bash
+curl -s "https://registry.modelcontextprotocol.io/v0/servers?search=io.github.shatch/banjo"
+```

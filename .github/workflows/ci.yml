@@ -4,6 +4,9 @@ on:
   push:
     branches: [main]
   pull_request:
+  # Started by release.yml on a release branch: a branch it pushes with
+  # GITHUB_TOKEN doesn't start CI by itself.
+  workflow_dispatch:
 
 concurrency:
   group: ci-${{ github.ref }}
