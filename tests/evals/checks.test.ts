@@ -77,6 +77,13 @@ describe('universal checks', () => {
     expect(check(repeat, {}).disclosure_once!.pass).toBe(false);
   });
 
+  it("disclosure_once doesn't count an answer to who's calling, unless it starts over with a greeting (#156)", () => {
+    const answer = log('u:Hello?', "b:Hi, I'm an AI assistant calling for Alex.", 'u:Sorry, who did you say was calling?', "b:I'm an AI assistant calling on behalf of Alex.", 'b:Bye!');
+    expect(check(answer, {}).disclosure_once!.pass).toBe(true);
+    const restart = log('u:Hello?', "b:Hi, I'm an AI assistant calling for Alex.", "u:Who's this?", "b:Hi, I'm an AI assistant calling for Alex.", 'b:Bye!');
+    expect(check(restart, {}).disclosure_once!.pass).toBe(false);
+  });
+
   it('disclosure_once allows one repeat per hold pickup', () => {
     const hold = log(
       'u:Please hold.',
