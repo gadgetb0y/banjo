@@ -128,12 +128,16 @@ export function runChecks(record: RunRecord, scenario: Scenario): CheckResult[] 
       results.push(next.some((l) => saidGoodbye(l.text)) ? pass('goodbye_within_turns') : fail('goodbye_within_turns', `no goodbye in Banjo's next ${turns} lines`));
     }
   }
-  for (const { userLineIncludes, beforeTool } of e.reaches ?? []) {
+  for (const { userLineIncludes, beforeTool, quietBefore } of e.reaches ?? []) {
     const name = `reaches:${userLineIncludes}`;
     const line = record.lines.find((l) => l.role === 'user' && l.text.toLowerCase().includes(userLineIncludes.toLowerCase()));
     const tool = beforeTool && record.toolCalls.find((c) => c.name === beforeTool);
     if (!line) results.push(fail(name, `never reached: the call ended before a line of theirs included "${userLineIncludes}"`));
     else if (tool && (tool.spokenAt ?? tool.t) < line.t) results.push(fail(name, `${beforeTool} came before their line "${line.text}"`));
+    else if (quietBefore && record.lines.some((l) => l.role === 'assistant' && l.t < line.t)) {
+      const said = record.lines.find((l) => l.role === 'assistant' && l.t < line.t)!;
+      results.push(fail(name, `Banjo said "${said.text}" before their line "${line.text}"`));
+    }
     else results.push(pass(name));
   }
   return results;
